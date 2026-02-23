@@ -57,16 +57,97 @@ claw-pen create --name custom --provider lmstudio --model "" --memory 4096
 
 ## Deployment Modes
 
-| Mode | Host | Containers | Best For |
-|------|------|------------|----------|
-| `windows-wsl` | Windows | WSL2 Linux | Development, Windows machines |
-| `linux-native` | Linux | Native Linux | Production, Linux servers |
-| `all-windows` | Windows | Windows containers | Windows-only environments |
+Claw Pen supports three deployment patterns. Choose based on your setup:
 
-Configure in `.env`:
+### Mode 1: All Windows (WSL2)
+
+Everything runs on Windows except containers.
+
 ```
+Windows
+├── Tauri App (GUI)
+├── Orchestrator (port 3000)
+├── AndOR Bridge (port 3456)
+├── AndOR Hub
+├── OpenClaw Gateway (port 18789)
+├── Model Server (Ollama/LM Studio)
+└── WSL2
+    └── Docker + Agent Containers
+```
+
+Configure:
+```bash
 DEPLOYMENT_MODE=windows-wsl
+RUNTIME_SOCKET=//./pipe/docker_engine
+ANDOR_BRIDGE__URL=http://localhost:3456
 ```
+
+### Mode 2: All Linux
+
+Everything runs on a single Linux machine (VM or bare metal).
+
+```
+Linux
+├── Tauri App (local or remote via Tailscale)
+├── Orchestrator (port 3000)
+├── AndOR Bridge (port 3456)
+├── AndOR Hub
+├── OpenClaw Gateway (port 18789)
+├── Model Server (Ollama/LM Studio)
+└── Docker + Agent Containers
+```
+
+Configure:
+```bash
+DEPLOYMENT_MODE=linux-native
+RUNTIME_SOCKET=/var/run/docker.sock
+ANDOR_BRIDGE__URL=http://localhost:3456
+```
+
+### Mode 3: Split (Windows + Linux VM)
+
+Orchestrator and containers on Linux, GUI and bridge on Windows. Connected via Tailscale.
+
+```
+Linux VM (Tailnet: linux-agent-host)
+├── Orchestrator (port 3000)
+├── Docker + Agent Containers
+├── Model Server (optional)
+└── OpenClaw Gateway (if agents need it)
+
+Windows (Tailnet: windows-desktop)
+├── Tauri App
+├── AndOR Bridge (connects to Linux orchestrator)
+├── AndOR Hub
+└── Model Server (optional, shared with Linux)
+```
+
+Configure on Linux:
+```bash
+DEPLOYMENT_MODE=linux-native
+RUNTIME_SOCKET=/var/run/docker.sock
+```
+
+Configure AndOR Bridge on Windows:
+```bash
+ANDOR_BRIDGE__URL=http://linux-agent-host.tailXXXX.ts.net:3456
+OPENCLAW_GATEWAY_URL=http://linux-agent-host.tailXXXX.ts.net:18789
+```
+
+Configure Orchestrator on Linux to accept remote connections:
+```bash
+ORCHESTRATOR_BIND=0.0.0.0:3000
+```
+
+---
+
+**Quick reference:**
+
+| Mode | Orchestrator | Containers | AndOR Bridge | Best For |
+|------|--------------|------------|--------------|----------|
+| `windows-wsl` | Windows | WSL2 | Windows | Windows dev, simple setup |
+| `linux-native` | Linux | Linux | Linux | Servers, single machine |
+| `split` | Linux VM | Linux VM | Windows | Hybrid, Windows GUI + Linux backend |
 
 ## Architecture
 
@@ -88,18 +169,6 @@ DEPLOYMENT_MODE=windows-wsl
 2. **Setup** → Checks Docker, WSL2, Tailscale; pulls images
 3. **Manage** → Create agents, configure providers, start/stop
 4. **Monitor** → Yew dashboard for on-the-go status (optional)
-
-### Windows + WSL2 Setup
-
-```
-Windows Host
-├── WSL2 Distro (Ubuntu/Debian)
-│   └── Agent Containers (Linux)
-│       └── Each with Tailscale IP
-├── Claw Pen Orchestrator (Windows .exe)
-├── Claw Pen UI (Tauri app)
-└── Ollama (Windows or WSL2)
-```
 
 ## Projects
 
