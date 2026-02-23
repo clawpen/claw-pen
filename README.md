@@ -177,22 +177,6 @@ ORCHESTRATOR_BIND=0.0.0.0:3000
 - `ui/` — Yew web dashboard (monitoring on the go)
 - `tauri-app/` — Desktop app with setup wizard (planned)
 
-## Cross-Compilation (Linux → Windows)
-
-From this Linux VM, compile for your Windows host:
-
-```bash
-# Install mingw-w64 target
-rustup target add x86_64-pc-windows-gnu
-sudo apt install mingw-w64
-
-# Build orchestrator for Windows
-cd orchestrator
-cargo build --release --target x86_64-pc-windows-gnu
-
-# Output: target/x86_64-pc-windows-gnu/release/claw-pen-orchestrator.exe
-```
-
 For the UI, build the WASM and serve via Tauri on Windows.
 
 ## Tech Stack
