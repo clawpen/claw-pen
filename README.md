@@ -71,13 +71,23 @@ DEPLOYMENT_MODE=windows-wsl
 ## Architecture
 
 ```
-[Claw Pen UI (Tailscale)] ──→ [Orchestrator API] ──→ [Container Runtime]
-                                      │
-                        ┌─────────────┼─────────────┐
-                        ↓             ↓             ↓
-                    [Agent 1]     [Agent 2]     [Agent N]
-                   (Tailscale)   (Tailscale)   (Tailscale)
+[Tauri Desktop App] ──→ [Orchestrator API] ──→ [Container Runtime]
+        │                     │
+        │              ┌──────┴──────┐
+        │              ↓             ↓
+   Setup wizard    [Agent 1]     [Agent N]
+   Agent management (Tailscale)   (Tailscale)
+   Settings/config
+        │
+        └── [Yew Web UI] ←── Mobile/browser monitoring
 ```
+
+### User Flow
+
+1. **Install** → Tauri app with setup wizard
+2. **Setup** → Checks Docker, WSL2, Tailscale; pulls images
+3. **Manage** → Create agents, configure providers, start/stop
+4. **Monitor** → Yew dashboard for on-the-go status (optional)
 
 ### Windows + WSL2 Setup
 
@@ -94,8 +104,9 @@ Windows Host
 ## Projects
 
 - `runtime/` — Rust container runtime (WIP by Jer)
-- `orchestrator/` — Rust API layer, config management
-- `ui/` — Yew frontend (Tauri-compatible)
+- `orchestrator/` — Rust API layer, config management, serves Yew UI
+- `ui/` — Yew web dashboard (monitoring on the go)
+- `tauri-app/` — Desktop app with setup wizard (planned)
 
 ## Cross-Compilation (Linux → Windows)
 
@@ -117,16 +128,19 @@ For the UI, build the WASM and serve via Tauri on Windows.
 
 ## Tech Stack
 
-- **Runtime:** Rust (Docker via bollard, swap for custom later)
-- **Orchestrator:** Rust (axum)
-- **UI:** Yew (WebAssembly) + Tauri
+- **Runtime:** Rust (Docker via bollard, custom later)
+- **Orchestrator:** Rust (axum), serves Yew UI
+- **Desktop App:** Tauri (setup wizard, full management)
+- **Web Dashboard:** Yew (WASM, mobile-friendly monitoring)
 - **Networking:** Tailscale mesh
 
 ## Goals
 
+- One-click install via Tauri setup wizard
+- GUI-first: create, configure, manage agents from desktop app
+- Lightweight web dashboard for mobile monitoring
 - Isolated agent containers, each with own Tailscale address
 - Per-container config: LLM provider, cores, RAM, env vars
-- Web dashboard to view/manage all agents
 - Cross-platform (compile on Linux, run on Windows)
 
 ## Local Models
@@ -181,7 +195,8 @@ Cloud providers (OpenAI, Anthropic, etc.) work out of the box — just set API k
 ```
 claw-pen/
 ├── orchestrator/     # REST API + Docker runtime
-├── ui/               # Yew dashboard
+├── ui/               # Yew web dashboard (monitoring)
+├── tauri-app/        # Desktop app with setup wizard (planned)
 ├── runtime/          # Custom container runtime (future)
 ├── images/           # Pre-built OpenClaw container images
 ├── scripts/          # Install scripts
