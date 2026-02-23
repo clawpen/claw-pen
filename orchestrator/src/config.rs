@@ -44,6 +44,7 @@ pub struct ModelServers {
     pub ollama: Option<ModelServerConfig>,
     pub llama_cpp: Option<ModelServerConfig>,
     pub vllm: Option<ModelServerConfig>,
+    pub lm_studio: Option<ModelServerConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -63,6 +64,7 @@ pub fn load() -> anyhow::Result<Config> {
         .set_default("model_servers.ollama", None::<String>)?
         .set_default("model_servers.llama_cpp", None::<String>)?
         .set_default("model_servers.vllm", None::<String>)?
+        .set_default("model_servers.lm_studio", None::<String>)?
         .add_source(config::Environment::default().separator("__"))
         .build()?;
 

@@ -42,6 +42,7 @@ pub enum LlmProvider {
     Ollama,
     LlamaCpp,
     Vllm,
+    LmStudio,
     
     // Custom endpoint
     Custom { endpoint: String },
@@ -62,7 +63,12 @@ pub struct ResourceUsage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateAgentRequest {
     pub name: String,
-    pub config: AgentConfig,
+    /// Template to use as base (e.g., "coding-assistant")
+    #[serde(default)]
+    pub template: Option<String>,
+    /// Override template defaults. If no template, this is the full config.
+    #[serde(default)]
+    pub config: Option<PartialAgentConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,4 +84,25 @@ pub struct PartialAgentConfig {
     pub memory_mb: Option<u32>,
     pub cpu_cores: Option<f32>,
     pub env_vars: Option<std::collections::HashMap<String, String>>,
+}
+
+impl AgentConfig {
+    /// Apply partial overrides to this config
+    pub fn apply(&mut self, partial: &PartialAgentConfig) {
+        if let Some(ref provider) = partial.llm_provider {
+            self.llm_provider = provider.clone();
+        }
+        if let Some(ref model) = partial.llm_model {
+            self.llm_model = Some(model.clone());
+        }
+        if let Some(mem) = partial.memory_mb {
+            self.memory_mb = mem;
+        }
+        if let Some(cores) = partial.cpu_cores {
+            self.cpu_cores = cores;
+        }
+        if let Some(ref env) = partial.env_vars {
+            self.env_vars.extend(env.clone());
+        }
+    }
 }

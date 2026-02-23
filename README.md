@@ -115,7 +115,7 @@ For the UI, build the WASM and serve via Tauri on Windows.
 
 ## Local Models
 
-For agents using local LLMs (Ollama, llama.cpp, vLLM), run a **shared model server** on the host:
+For agents using local LLMs (Ollama, llama.cpp, vLLM, LM Studio), run a **shared model server** on the host:
 
 ```
 [Model Server (GPU)] ← HTTP → [Agent Containers]
@@ -126,6 +126,31 @@ Benefits:
 - One model in memory, shared by multiple agents
 - GPU utilization stays efficient
 - Agents using local models need less RAM allocated
+
+### LM Studio
+
+1. Download and install [LM Studio](https://lmstudio.ai/)
+2. Load a model in LM Studio
+3. Start the local server (default: `http://localhost:1234`)
+4. Create an agent:
+
+```bash
+curl -X POST http://localhost:3000/api/agents \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-local-agent", "template": "lm-studio"}'
+```
+
+Configure in `.env`:
+```
+MODEL_SERVERS__LM_STUDIO__ENDPOINT=http://localhost:1234
+```
+
+### Ollama
+
+```bash
+ollama serve
+ollama pull llama3.2
+```
 
 Configure in `.env`:
 ```

@@ -23,9 +23,53 @@ pub async fn create_agent(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateAgentRequest>,
 ) -> Result<Json<AgentContainer>, (StatusCode, String)> {
+    // Build config from template + overrides
+    let config = if let Some(ref template_name) = req.template {
+        let template = state.templates
+            .get(template_name)
+            .ok_or((StatusCode::BAD_REQUEST, format!("Template '{}' not found", template_name)))?;
+        
+        // Parse provider from template
+        let provider = template.config.llm_provider
+            .as_ref()
+            .map(|s| parse_provider(s))
+            .transpose()
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?
+            .unwrap_or_default();
+        
+        let mut config = AgentConfig {
+            llm_provider: provider,
+            llm_model: template.config.llm_model.clone(),
+            memory_mb: template.config.memory_mb,
+            cpu_cores: template.config.cpu_cores,
+            env_vars: template.env.clone(),
+        };
+        
+        // Apply user overrides
+        if let Some(ref partial) = req.config {
+            config.apply(partial);
+        }
+        
+        config
+    } else {
+        // No template - require full config
+        let partial = req.config.ok_or((
+            StatusCode::BAD_REQUEST,
+            "Either 'template' or 'config' is required".to_string(),
+        ))?;
+        
+        AgentConfig {
+            llm_provider: partial.llm_provider.unwrap_or_default(),
+            llm_model: partial.llm_model,
+            memory_mb: partial.memory_mb.unwrap_or(1024),
+            cpu_cores: partial.cpu_cores.unwrap_or(1.0),
+            env_vars: partial.env_vars.unwrap_or_default(),
+        }
+    };
+    
     // Create container via Docker
     let id = state.runtime
-        .create_container(&req.name, &req.config)
+        .create_container(&req.name, &config)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     
@@ -33,7 +77,7 @@ pub async fn create_agent(
         id: id.clone(),
         name: req.name,
         status: AgentStatus::Stopped,
-        config: req.config,
+        config,
         tailscale_ip: None,
         resource_usage: None,
     };
@@ -42,6 +86,20 @@ pub async fn create_agent(
     containers.push(agent.clone());
     
     Ok(Json(agent))
+}
+
+fn parse_provider(s: &str) -> Result<LlmProvider, String> {
+    match s.to_lowercase().as_str() {
+        "openai" => Ok(LlmProvider::OpenAI),
+        "anthropic" => Ok(LlmProvider::Anthropic),
+        "gemini" => Ok(LlmProvider::Gemini),
+        "groq" => Ok(LlmProvider::Groq),
+        "ollama" => Ok(LlmProvider::Ollama),
+        "llamacpp" | "llama.cpp" => Ok(LlmProvider::LlamaCpp),
+        "vllm" => Ok(LlmProvider::Vllm),
+        "lmstudio" | "lm-studio" => Ok(LlmProvider::LmStudio),
+        _ => Err(format!("Unknown provider: {}", s)),
+    }
 }
 
 pub async fn get_agent(
@@ -171,6 +229,31 @@ pub async fn runtime_status(
             "ollama": state.config.model_servers.ollama.as_ref().map(|s| s.endpoint.clone()),
             "llama_cpp": state.config.model_servers.llama_cpp.as_ref().map(|s| s.endpoint.clone()),
             "vllm": state.config.model_servers.vllm.as_ref().map(|s| s.endpoint.clone()),
+            "lm_studio": state.config.model_servers.lm_studio.as_ref().map(|s| s.endpoint.clone()),
         }
     }))
+}
+
+pub async fn list_templates(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<serde_json::Value>> {
+    let templates: Vec<_> = state.templates
+        .list()
+        .into_iter()
+        .map(|(id, t)| {
+            serde_json::json!({
+                "id": id,
+                "name": t.name,
+                "description": t.description,
+                "defaults": {
+                    "llm_provider": t.config.llm_provider,
+                    "llm_model": t.config.llm_model,
+                    "memory_mb": t.config.memory_mb,
+                    "cpu_cores": t.config.cpu_cores,
+                }
+            })
+        })
+        .collect();
+    
+    Json(templates)
 }

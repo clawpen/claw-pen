@@ -40,11 +40,12 @@ pub enum LlmProvider {
     Ollama,
     LlamaCpp,
     Vllm,
+    LmStudio,
 }
 
 impl LlmProvider {
     pub fn is_local(&self) -> bool {
-        matches!(self, LlmProvider::Ollama | LlmProvider::LlamaCpp | LlmProvider::Vllm)
+        matches!(self, LlmProvider::Ollama | LlmProvider::LlamaCpp | LlmProvider::Vllm | LlmProvider::LmStudio)
     }
     
     pub fn display_name(&self) -> &'static str {
@@ -56,6 +57,7 @@ impl LlmProvider {
             LlmProvider::Ollama => "Ollama (Local)",
             LlmProvider::LlamaCpp => "llama.cpp (Local)",
             LlmProvider::Vllm => "vLLM (Local)",
+            LlmProvider::LmStudio => "LM Studio (Local)",
         }
     }
 }

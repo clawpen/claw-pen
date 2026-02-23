@@ -2,6 +2,7 @@ mod api;
 mod config;
 mod container;
 mod network;
+mod templates;
 mod types;
 
 use axum::{
@@ -18,6 +19,7 @@ pub struct AppState {
     pub config: config::Config,
     pub containers: RwLock<Vec<types::AgentContainer>>,
     pub runtime: RuntimeClient,
+    pub templates: templates::TemplateRegistry,
 }
 
 #[tokio::main]
@@ -29,6 +31,10 @@ async fn main() -> anyhow::Result<()> {
 
     let config = config::load()?;
     tracing::info!("Loaded config: {:?}", config);
+
+    // Load templates
+    let template_registry = templates::TemplateRegistry::load()?;
+    tracing::info!("Loaded {} templates", template_registry.list().len());
 
     // Connect to Docker
     let runtime = RuntimeClient::new().await?;
@@ -42,6 +48,7 @@ async fn main() -> anyhow::Result<()> {
         config,
         containers: RwLock::new(existing),
         runtime,
+        templates: template_registry,
     });
 
     let app = Router::new()
@@ -55,6 +62,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/agents/{id}", delete(api::delete_agent))
         .route("/api/agents/{id}/start", post(api::start_agent))
         .route("/api/agents/{id}/stop", post(api::stop_agent))
+        // Templates
+        .route("/api/templates", get(api::list_templates))
         // Runtime info
         .route("/api/runtime/status", get(api::runtime_status))
         .layer(CorsLayer::new().allow_origin(Any))
