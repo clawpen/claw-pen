@@ -1,8 +1,7 @@
 # Claw Pen Agent Templates
-# Pre-configured agents for common use cases
+# Sensible defaults - override at creation time
 
 templates:
-  # General coding assistant
   coding-assistant:
     name: "Coding Assistant"
     description: "General-purpose coding helper"
@@ -14,7 +13,6 @@ templates:
     env:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
 
-  # Code reviewer
   code-reviewer:
     name: "Code Reviewer"
     description: "Reviews code for quality and security"
@@ -26,18 +24,24 @@ templates:
     env:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
 
-  # Local agent with Ollama
   local-assistant:
     name: "Local Assistant"
-    description: "Runs on local hardware with Ollama"
+    description: "Runs locally with Ollama"
     config:
       llm_provider: ollama
       llm_model: llama3.2
       memory_mb: 2048
       cpu_cores: 2.0
-    env: {}
 
-  # Research assistant
+  lm-studio:
+    name: "LM Studio"
+    description: "Runs locally with LM Studio"
+    config:
+      llm_provider: lmstudio
+      llm_model: ""
+      memory_mb: 2048
+      cpu_cores: 2.0
+
   researcher:
     name: "Research Assistant"
     description: "Web search and summarization"
@@ -49,10 +53,9 @@ templates:
     env:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
 
-  # DevOps helper
   devops:
     name: "DevOps Helper"
-    description: "Infrastructure and deployment assistance"
+    description: "Infrastructure and deployment"
     config:
       llm_provider: openai
       llm_model: gpt-4o
