@@ -1,3 +1,4 @@
+mod andor;
 mod api;
 mod config;
 mod container;
@@ -20,6 +21,7 @@ pub struct AppState {
     pub containers: RwLock<Vec<types::AgentContainer>>,
     pub runtime: RuntimeClient,
     pub templates: templates::TemplateRegistry,
+    pub andor: Option<andor::AndorClient>,
 }
 
 #[tokio::main]
@@ -36,6 +38,12 @@ async fn main() -> anyhow::Result<()> {
     let template_registry = templates::TemplateRegistry::load()?;
     tracing::info!("Loaded {} templates", template_registry.list().len());
 
+    // Initialize AndOR Bridge client if configured
+    let andor_client = config.andor_bridge.as_ref().map(|cfg| {
+        tracing::info!("AndOR Bridge configured at {}", cfg.url);
+        andor::AndorClient::new(cfg.clone())
+    });
+
     // Connect to Docker
     let runtime = RuntimeClient::new().await?;
     tracing::info!("Connected to container runtime");
@@ -49,6 +57,7 @@ async fn main() -> anyhow::Result<()> {
         containers: RwLock::new(existing),
         runtime,
         templates: template_registry,
+        andor: andor_client,
     });
 
     let app = Router::new()

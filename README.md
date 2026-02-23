@@ -143,6 +143,23 @@ For the UI, build the WASM and serve via Tauri on Windows.
 - Per-container config: LLM provider, cores, RAM, env vars
 - Cross-platform (compile on Linux, run on Windows)
 
+## AndOR Bridge Integration
+
+Claw Pen can automatically register agents with [AndOR Hub](https://github.com/your-repo/andor-bridge) for per-agent DM channels.
+
+Configure in `.env`:
+```
+ANDOR_BRIDGE__URL=http://localhost:3456
+ANDOR_BRIDGE__REGISTER_ON_CREATE=true
+```
+
+When enabled:
+- Creating an agent → Registers with AndOR Bridge
+- Deleting an agent → Unregisters from AndOR Bridge
+- Each agent gets its own DM channel via @mention or channel name
+
+All communication stays on your Tailscale network.
+
 ## Local Models
 
 For agents using local LLMs (Ollama, llama.cpp, vLLM, LM Studio), run a **shared model server** on the host:

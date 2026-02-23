@@ -75,12 +75,26 @@ pub async fn create_agent(
     
     let agent = AgentContainer {
         id: id.clone(),
-        name: req.name,
+        name: req.name.clone(),
         status: AgentStatus::Stopped,
         config,
         tailscale_ip: None,
         resource_usage: None,
     };
+
+    // Register with AndOR Bridge if configured
+    if let Some(ref andor) = state.andor {
+        let registration = crate::andor::AgentRegistration {
+            agent_id: id.clone(),
+            display_name: req.name.clone(),
+            triggers: vec![req.name.to_lowercase()],
+            emoji: Some("🤖".to_string()),
+        };
+        
+        if let Err(e) = andor.register_agent(&registration).await {
+            tracing::warn!("Failed to register agent with AndOR Bridge: {}", e);
+        }
+    }
 
     let mut containers = state.containers.write().await;
     containers.push(agent.clone());
@@ -167,6 +181,13 @@ pub async fn delete_agent(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     
+    // Unregister from AndOR Bridge if configured
+    if let Some(ref andor) = state.andor {
+        if let Err(e) = andor.unregister_agent(&id).await {
+            tracing::warn!("Failed to unregister agent from AndOR Bridge: {}", e);
+        }
+    }
+    
     let mut containers = state.containers.write().await;
     containers.retain(|a| a.id != id);
     
@@ -230,7 +251,11 @@ pub async fn runtime_status(
             "llama_cpp": state.config.model_servers.llama_cpp.as_ref().map(|s| s.endpoint.clone()),
             "vllm": state.config.model_servers.vllm.as_ref().map(|s| s.endpoint.clone()),
             "lm_studio": state.config.model_servers.lm_studio.as_ref().map(|s| s.endpoint.clone()),
-        }
+        },
+        "andor_bridge": state.config.andor_bridge.as_ref().map(|c| serde_json::json!({
+            "url": c.url,
+            "register_on_create": c.register_on_create.unwrap_or(true)
+        }))
     }))
 }
 

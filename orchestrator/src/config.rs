@@ -37,6 +37,13 @@ pub struct Config {
     pub runtime_socket: String,
     pub tailscale_auth_key: Option<String>,
     pub model_servers: ModelServers,
+    pub andor_bridge: Option<AndorBridgeConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct AndorBridgeConfig {
+    pub url: String,
+    pub register_on_create: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -65,6 +72,7 @@ pub fn load() -> anyhow::Result<Config> {
         .set_default("model_servers.llama_cpp", None::<String>)?
         .set_default("model_servers.vllm", None::<String>)?
         .set_default("model_servers.lm_studio", None::<String>)?
+        .set_default("andor_bridge", None::<String>)?
         .add_source(config::Environment::default().separator("__"))
         .build()?;
 
