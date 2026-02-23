@@ -2,38 +2,42 @@
 
 > ⚠️ **WORK IN PROGRESS** — Early development. Not ready for production use.
 
-![Status](https://img.shields.io/badge/status-WIP-red) ![Version](https://img.shields.io/badge/version-0.1.0--alpha-orange)
+![Status](https://img.shields.io/badge/status-WIP-red) ![Version](https://img.shields.io/badge/version-0.1.0--alpha-orange) ![CI](https://github.com/AchyErrorJ/claw-pen/actions/workflows/ci.yml/badge.svg)
 
-Container orchestration for OpenClaw agents. Rust runtime + orchestrator + Yew/Tauri UI.
+**Easy OpenClaw agent deployment.** Create, configure, and manage isolated AI agents with one command.
 
 ## Quick Start
 
+### Install
+
 ```bash
-# Clone
-git clone https://github.com/yourname/claw-pen.git
-cd claw-pen
+# Linux/macOS
+curl -fsSL https://raw.githubusercontent.com/AchyErrorJ/claw-pen/main/scripts/install.sh | bash
 
-# Configure
-cp orchestrator/.env.example orchestrator/.env
-# Edit .env with your settings
-
-# Build orchestrator
-cd orchestrator
-cargo build --release
-
-# Run (requires Docker)
-./target/release/claw-pen-orchestrator
-
-# Build UI (requires trunk)
-cd ../ui
-trunk build
+# Or build from source
+git clone https://github.com/AchyErrorJ/claw-pen.git
+cd claw-pen/orchestrator && cargo build --release
 ```
 
-## Requirements
+### Create an Agent
 
-- Docker (for container runtime)
-- Rust 1.75+
-- `trunk` for UI builds: `cargo install trunk`
+```bash
+# From template (easiest)
+claw-pen create --template coding-assistant --name my-coder
+
+# Custom
+claw-pen create --name my-agent --provider openai --model gpt-4o
+```
+
+### Templates
+
+| Template | Provider | Use Case |
+|----------|----------|----------|
+| `coding-assistant` | OpenAI | General coding |
+| `code-reviewer` | Anthropic | PR reviews |
+| `local-assistant` | Ollama | Private, local |
+| `researcher` | OpenAI | Web research |
+| `devops` | OpenAI | Infrastructure |
 
 ## Deployment Modes
 
@@ -130,3 +134,15 @@ MODEL_SERVERS__OLLAMA__DEFAULT_MODEL=llama3.2
 ```
 
 Cloud providers (OpenAI, Anthropic, etc.) work out of the box — just set API keys per-agent.
+
+## Project Structure
+
+```
+claw-pen/
+├── orchestrator/     # REST API + Docker runtime
+├── ui/               # Yew dashboard
+├── runtime/          # Custom container runtime (future)
+├── images/           # Pre-built OpenClaw container images
+├── scripts/          # Install scripts
+└── templates/        # Agent configuration templates
+```
