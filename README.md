@@ -31,8 +31,10 @@ claw-pen create --name my-agent --provider openai --model gpt-4o
 
 ### Templates
 
-| Template | Provider | Use Case |
-|----------|----------|----------|
+Templates are just starting points — override anything at creation:
+
+| Template | Default Provider | Typical Use Case |
+|----------|------------------|------------------|
 | `coding-assistant` | OpenAI | General coding |
 | `code-reviewer` | Anthropic | PR reviews |
 | `local-assistant` | Ollama | Private, local |
@@ -40,14 +42,17 @@ claw-pen create --name my-agent --provider openai --model gpt-4o
 | `researcher` | OpenAI | Web research |
 | `devops` | OpenAI | Infrastructure |
 
-Override any template at creation:
+> 💡 These are suggestions, not requirements. Use any template with any provider/model:
 
 ```bash
-# Use researcher template with a different model
-claw-pen create --template researcher --model gpt-4o-mini
+# Researcher template, but local
+claw-pen create --template researcher --provider ollama --model llama3.2
 
-# Switch to local
-claw-pen create --template coding-assistant --provider ollama --model llama3.2
+# Coding assistant with a smaller model
+claw-pen create --template coding-assistant --model gpt-4o-mini
+
+# Skip templates entirely, bring your own config
+claw-pen create --name custom --provider lmstudio --model "" --memory 4096
 ```
 
 ## Deployment Modes
