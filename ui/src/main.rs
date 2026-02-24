@@ -1,9 +1,9 @@
-mod components;
 mod api;
+mod components;
 mod types;
 
-use yew::prelude::*;
 use components::dashboard::Dashboard;
+use yew::prelude::*;
 
 #[function_component(App)]
 fn app() -> Html {

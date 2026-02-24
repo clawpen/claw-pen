@@ -29,29 +29,26 @@ pub struct AgentConfig {
     pub env_vars: std::collections::HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LlmProvider {
+    #[default]
     // Cloud providers
     OpenAI,
     Anthropic,
     Gemini,
     Groq,
-    
+
     // Local providers (connect to model server)
     Ollama,
     LlamaCpp,
     Vllm,
     LmStudio,
-    
-    // Custom endpoint
-    Custom { endpoint: String },
-}
 
-impl Default for LlmProvider {
-    fn default() -> Self {
-        Self::OpenAI
-    }
+    // Custom endpoint
+    Custom {
+        endpoint: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

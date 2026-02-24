@@ -1,33 +1,23 @@
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum DeploymentMode {
+    #[default]
     WindowsWsl,
     LinuxNative,
     AllWindows,
 }
 
-impl Default for DeploymentMode {
-    fn default() -> Self {
-        Self::WindowsWsl
-    }
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum NetworkBackend {
+    #[default]
     Tailscale,
     Wireguard,
     Zerotier,
     Headscale,
     Local,
-}
-
-impl Default for NetworkBackend {
-    fn default() -> Self {
-        Self::Tailscale
-    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

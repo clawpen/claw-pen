@@ -45,9 +45,12 @@ pub enum LlmProvider {
 
 impl LlmProvider {
     pub fn is_local(&self) -> bool {
-        matches!(self, LlmProvider::Ollama | LlmProvider::LlamaCpp | LlmProvider::Vllm | LlmProvider::LmStudio)
+        matches!(
+            self,
+            LlmProvider::Ollama | LlmProvider::LlamaCpp | LlmProvider::Vllm | LlmProvider::LmStudio
+        )
     }
-    
+
     pub fn display_name(&self) -> &'static str {
         match self {
             LlmProvider::OpenAI => "OpenAI",

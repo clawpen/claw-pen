@@ -1,12 +1,12 @@
-use crate::types::{AgentContainer, AgentStatus};
 use crate::api;
+use crate::types::{AgentContainer, AgentStatus};
 use yew::prelude::*;
 
 #[function_component(Dashboard)]
 pub fn dashboard() -> Html {
     // TODO: Fetch agents from API
     let agents = use_state(Vec::new);
-    
+
     let agents_clone = agents.clone();
     use_effect(move || {
         wasm_bindgen_futures::spawn_local(async move {
@@ -22,7 +22,7 @@ pub fn dashboard() -> Html {
             <div class="toolbar">
                 <button class="btn-primary">{"+ New Agent"}</button>
             </div>
-            
+
             <div class="agents-grid">
                 if agents.is_empty() {
                     <div class="empty-state">
