@@ -35,9 +35,5 @@ reqwest = { version = "0.11", features = ["json"] }
 # Process management
 sysinfo = "0.30"
 
-# Docker (temporary, swap for custom runtime later)
-bollard = "0.16"
-futures-util = "0.3"
-
 [dev-dependencies]
 reqwest = { version = "0.11", features = ["json"] }

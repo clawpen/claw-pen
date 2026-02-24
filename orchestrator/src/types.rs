@@ -20,14 +20,22 @@ pub enum AgentStatus {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentConfig {
+    #[serde(default)]
     pub llm_provider: LlmProvider,
+    #[serde(default)]
     pub llm_model: Option<String>,
+    #[serde(default = "default_memory")]
     pub memory_mb: u32,
+    #[serde(default = "default_cpu")]
     pub cpu_cores: f32,
+    #[serde(default)]
     pub env_vars: std::collections::HashMap<String, String>,
 }
+
+fn default_memory() -> u32 { 1024 }
+fn default_cpu() -> f32 { 1.0 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -38,6 +46,11 @@ pub enum LlmProvider {
     Anthropic,
     Gemini,
     Groq,
+
+    // Moonshot AI / Kimi
+    Kimi,
+    // z.ai
+    Zai,
 
     // Local providers (connect to model server)
     Ollama,
