@@ -200,6 +200,9 @@ impl ContainmentClient {
             _ => {}
         }
 
+        // Note: OAuth providers (Kimi, z.ai) get tokens from OpenClaw gateway
+        // No API keys needed in container env
+
         env
     }
 }

@@ -66,22 +66,21 @@ templates:
 
   kimi:
     name: "Kimi (Moonshot AI)"
-    description: "Long-context Chinese/English assistant"
+    description: "Long-context Chinese/English assistant (OAuth)"
     config:
       llm_provider: kimi
       llm_model: moonshot-v1-128k
       memory_mb: 2048
       cpu_cores: 1.0
-    env:
-      KIMI_API_KEY: ${KIMI_API_KEY}
+    # OAuth-based - tokens managed by OpenClaw gateway
+    # Configure via: openclaw configure or OAuth flow
 
   zai:
     name: "z.ai"
-    description: "z.ai powered assistant"
+    description: "z.ai powered assistant (OAuth)"
     config:
       llm_provider: zai
       llm_model: ""
       memory_mb: 1024
       cpu_cores: 1.0
-    env:
-      ZAI_API_KEY: ${ZAI_API_KEY}
+    # OAuth-based - tokens managed by OpenClaw gateway

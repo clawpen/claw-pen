@@ -41,8 +41,10 @@ Templates are just starting points — override anything at creation:
 | `lm-studio` | LM Studio | Local, easy GUI |
 | `researcher` | OpenAI | Web research |
 | `devops` | OpenAI | Infrastructure |
-| `kimi` | Kimi (Moonshot) | Long-context Chinese/English |
-| `zai` | z.ai | z.ai powered assistant |
+| `kimi` | Kimi (Moonshot) | Long-context Chinese/English (OAuth) |
+| `zai` | z.ai | z.ai powered assistant (OAuth) |
+
+> **OAuth Providers:** Kimi and z.ai use OAuth authentication. Tokens are managed by the OpenClaw Gateway — no API keys needed in container config. Configure once via `openclaw configure`.
 
 > 💡 These are suggestions, not requirements. Use any template with any provider/model:
 
@@ -74,7 +76,7 @@ Windows
 ├── OpenClaw Gateway (port 18789)
 ├── Model Server (Ollama/LM Studio)
 └── WSL2
-    └── Docker + Agent Containers
+    └── Containment Runtime + Agent Containers
 ```
 
 Configure:
@@ -96,7 +98,7 @@ Linux
 ├── AndOR Hub
 ├── OpenClaw Gateway (port 18789)
 ├── Model Server (Ollama/LM Studio)
-└── Docker + Agent Containers
+└── Containment Runtime + Agent Containers
 ```
 
 Configure:
@@ -113,7 +115,7 @@ Orchestrator and containers on Linux, GUI and bridge on Windows. Connected via T
 ```
 Linux VM (Tailnet: linux-agent-host)
 ├── Orchestrator (port 3000)
-├── Docker + Agent Containers
+├── Containment Runtime + Agent Containers
 ├── Model Server (optional)
 └── OpenClaw Gateway (if agents need it)
 
@@ -147,23 +149,25 @@ ORCHESTRATOR_BIND=0.0.0.0:3000
 
 | Mode | Orchestrator | Containers | AndOR Bridge | Best For |
 |------|--------------|------------|--------------|----------|
-| `windows-wsl` | Windows | WSL2 | Windows | Windows dev, simple setup |
-| `linux-native` | Linux | Linux | Linux | Servers, single machine |
-| `split` | Linux VM | Linux VM | Windows | Hybrid, Windows GUI + Linux backend |
+| `windows-wsl` | Windows | WSL2 (Containment) | Windows | Windows dev, simple setup |
+| `linux-native` | Linux | Linux (Containment) | Linux | Servers, single machine |
+| `split` | Linux VM | Linux VM (Containment) | Windows | Hybrid, Windows GUI + Linux backend |
 
 ## Architecture
 
 ```
-[Tauri Desktop App] ──→ [Orchestrator API] ──→ [Container Runtime]
-        │                     │
-        │              ┌──────┴──────┐
-        │              ↓             ↓
-   Setup wizard    [Agent 1]     [Agent N]
-   Agent management (Tailscale)   (Tailscale)
-   Settings/config
-        │
+[Tauri Desktop App] ──→ [Orchestrator API] ──→ [Containment Runtime]
+        │                     │                      │
+        │              ┌──────┴──────┐              │
+        │              ↓             ↓              ↓
+   Setup wizard    [Agent 1]     [Agent N]    Linux namespaces
+   Agent management (Tailscale)   (Tailscale)  cgroups, seccomp
+   Settings/config                          │
+        │                                   └── WSL2 (on Windows)
         └── [Yew Web UI] ←── Mobile/browser monitoring
 ```
+
+**Runtime:** Uses [Containment](https://github.com/containment/container) — a lightweight container runtime optimized for AI agents. No Docker required.
 
 ### User Flow
 
@@ -183,7 +187,7 @@ For the UI, build the WASM and serve via Tauri on Windows.
 
 ## Tech Stack
 
-- **Runtime:** Rust (Docker via bollard, custom later)
+- **Runtime:** Containment (Linux namespaces, cgroups, seccomp)
 - **Orchestrator:** Rust (axum), serves Yew UI
 - **Desktop App:** Tauri (setup wizard, full management)
 - **Web Dashboard:** Yew (WASM, mobile-friendly monitoring)
