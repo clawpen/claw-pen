@@ -2,6 +2,7 @@ mod andor;
 mod api;
 mod config;
 mod container;
+mod containment;
 mod network;
 mod templates;
 mod types;
@@ -10,7 +11,7 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
-use container::RuntimeClient;
+use container::{ContainerRuntime, RuntimeClient};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};

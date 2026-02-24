@@ -41,6 +41,8 @@ Templates are just starting points — override anything at creation:
 | `lm-studio` | LM Studio | Local, easy GUI |
 | `researcher` | OpenAI | Web research |
 | `devops` | OpenAI | Infrastructure |
+| `kimi` | Kimi (Moonshot) | Long-context Chinese/English |
+| `zai` | z.ai | z.ai powered assistant |
 
 > 💡 These are suggestions, not requirements. Use any template with any provider/model:
 
