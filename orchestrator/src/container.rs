@@ -3,15 +3,15 @@
 // Later: Swap for Jer's custom runtime
 
 use anyhow::Result;
-use bollard::Docker;
 use bollard::container::{
-    Config, CreateContainerOptions, StartContainerOptions, StopContainerOptions,
-    ListContainersOptions,
+    Config, CreateContainerOptions, ListContainersOptions, StartContainerOptions,
+    StopContainerOptions,
 };
 use bollard::image::CreateImageOptions;
+use bollard::Docker;
 use futures_util::StreamExt;
 
-use crate::types::{AgentContainer, AgentConfig, AgentStatus, ResourceUsage, LlmProvider};
+use crate::types::{AgentConfig, AgentContainer, AgentStatus, LlmProvider, ResourceUsage};
 
 pub struct RuntimeClient {
     docker: Docker,
@@ -20,11 +20,11 @@ pub struct RuntimeClient {
 impl RuntimeClient {
     pub async fn new() -> Result<Self> {
         let docker = Docker::connect_with_socket_defaults()?;
-        
+
         // Verify connection
         docker.ping().await?;
         tracing::info!("Connected to Docker daemon");
-        
+
         Ok(Self { docker })
     }
 
@@ -40,14 +40,14 @@ impl RuntimeClient {
         };
 
         let containers = self.docker.list_containers(Some(options)).await?;
-        
+
         let mut agents = Vec::new();
         for c in containers {
             if let Some(id) = c.id {
                 if let Some(names) = c.names {
                     if let Some(name) = names.first() {
                         let name = name.trim_start_matches('/').to_string();
-                        
+
                         let status = match c.state {
                             Some(s) => match s.as_str() {
                                 "running" => AgentStatus::Running,
@@ -80,11 +80,12 @@ impl RuntimeClient {
     pub async fn create_container(&self, name: &str, config: &AgentConfig) -> Result<String> {
         // Pull image first (OpenClaw base)
         let image = "node:20-alpine"; // TODO: Replace with OpenClaw agent image
-        
+
         self.pull_image(image).await?;
 
         // Build container config
-        let env_vars: Vec<String> = config.env_vars
+        let env_vars: Vec<String> = config
+            .env_vars
             .iter()
             .map(|(k, v)| format!("{}={}", k, v))
             .collect();
@@ -93,11 +94,23 @@ impl RuntimeClient {
         let llm_env = match &config.llm_provider {
             LlmProvider::OpenAI => vec![
                 "LLM_PROVIDER=openai".to_string(),
-                format!("OPENAI_API_KEY={}", config.env_vars.get("OPENAI_API_KEY").unwrap_or(&"".to_string())),
+                format!(
+                    "OPENAI_API_KEY={}",
+                    config
+                        .env_vars
+                        .get("OPENAI_API_KEY")
+                        .unwrap_or(&"".to_string())
+                ),
             ],
             LlmProvider::Anthropic => vec![
                 "LLM_PROVIDER=anthropic".to_string(),
-                format!("ANTHROPIC_API_KEY={}", config.env_vars.get("ANTHROPIC_API_KEY").unwrap_or(&"".to_string())),
+                format!(
+                    "ANTHROPIC_API_KEY={}",
+                    config
+                        .env_vars
+                        .get("ANTHROPIC_API_KEY")
+                        .unwrap_or(&"".to_string())
+                ),
             ],
             LlmProvider::Ollama => vec![
                 "LLM_PROVIDER=ollama".to_string(),
@@ -114,7 +127,7 @@ impl RuntimeClient {
         let memory_str = config.memory_mb.to_string();
         let cores_str = config.cpu_cores.to_string();
         let name_str = name.to_string();
-        
+
         let mut labels = std::collections::HashMap::new();
         labels.insert("claw-pen.agent", "true");
         labels.insert("claw-pen.name", &name_str);
@@ -144,20 +157,27 @@ impl RuntimeClient {
             platform: None,
         };
 
-        let response = self.docker.create_container(Some(options), container_config).await?;
-        
+        let response = self
+            .docker
+            .create_container(Some(options), container_config)
+            .await?;
+
         tracing::info!("Created container: {} ({})", name, response.id);
         Ok(response.id)
     }
 
     pub async fn start_container(&self, id: &str) -> Result<()> {
-        self.docker.start_container(id, None::<StartContainerOptions<String>>).await?;
+        self.docker
+            .start_container(id, None::<StartContainerOptions<String>>)
+            .await?;
         tracing::info!("Started container: {}", id);
         Ok(())
     }
 
     pub async fn stop_container(&self, id: &str) -> Result<()> {
-        self.docker.stop_container(id, Some(StopContainerOptions { t: 10 })).await?;
+        self.docker
+            .stop_container(id, Some(StopContainerOptions { t: 10 }))
+            .await?;
         tracing::info!("Stopped container: {}", id);
         Ok(())
     }
@@ -180,7 +200,7 @@ impl RuntimeClient {
         };
 
         let mut stream = self.docker.create_image(Some(options), None, None);
-        
+
         while let Some(msg) = stream.next().await {
             match msg {
                 Ok(info) => {
@@ -199,9 +219,11 @@ impl RuntimeClient {
     }
 }
 
-fn parse_labels_to_config(labels: &Option<std::collections::HashMap<String, String>>) -> AgentConfig {
+fn parse_labels_to_config(
+    labels: &Option<std::collections::HashMap<String, String>>,
+) -> AgentConfig {
     let labels = labels.as_ref();
-    
+
     let provider = labels
         .and_then(|l| l.get("claw-pen.llm_provider"))
         .map(|s| match s.as_str() {

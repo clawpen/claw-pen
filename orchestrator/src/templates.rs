@@ -1,6 +1,6 @@
+use anyhow::Result;
 use serde::Deserialize;
 use std::collections::HashMap;
-use anyhow::Result;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Template {
@@ -23,8 +23,12 @@ pub struct TemplateConfig {
     pub cpu_cores: f32,
 }
 
-fn default_memory() -> u32 { 1024 }
-fn default_cpu() -> f32 { 1.0 }
+fn default_memory() -> u32 {
+    1024
+}
+fn default_cpu() -> f32 {
+    1.0
+}
 
 #[derive(Debug, Deserialize)]
 struct TemplatesFile {

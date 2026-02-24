@@ -12,9 +12,7 @@ pub async fn health() -> &'static str {
     "OK"
 }
 
-pub async fn list_agents(
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<AgentContainer>> {
+pub async fn list_agents(State(state): State<Arc<AppState>>) -> Json<Vec<AgentContainer>> {
     let containers = state.containers.read().await;
     Json(containers.clone())
 }
@@ -25,18 +23,21 @@ pub async fn create_agent(
 ) -> Result<Json<AgentContainer>, (StatusCode, String)> {
     // Build config from template + overrides
     let config = if let Some(ref template_name) = req.template {
-        let template = state.templates
-            .get(template_name)
-            .ok_or((StatusCode::BAD_REQUEST, format!("Template '{}' not found", template_name)))?;
-        
+        let template = state.templates.get(template_name).ok_or((
+            StatusCode::BAD_REQUEST,
+            format!("Template '{}' not found", template_name),
+        ))?;
+
         // Parse provider from template
-        let provider = template.config.llm_provider
+        let provider = template
+            .config
+            .llm_provider
             .as_ref()
             .map(|s| parse_provider(s))
             .transpose()
             .map_err(|e| (StatusCode::BAD_REQUEST, e))?
             .unwrap_or_default();
-        
+
         let mut config = AgentConfig {
             llm_provider: provider,
             llm_model: template.config.llm_model.clone(),
@@ -44,12 +45,12 @@ pub async fn create_agent(
             cpu_cores: template.config.cpu_cores,
             env_vars: template.env.clone(),
         };
-        
+
         // Apply user overrides
         if let Some(ref partial) = req.config {
             config.apply(partial);
         }
-        
+
         config
     } else {
         // No template - require full config
@@ -57,7 +58,7 @@ pub async fn create_agent(
             StatusCode::BAD_REQUEST,
             "Either 'template' or 'config' is required".to_string(),
         ))?;
-        
+
         AgentConfig {
             llm_provider: partial.llm_provider.unwrap_or_default(),
             llm_model: partial.llm_model,
@@ -66,13 +67,14 @@ pub async fn create_agent(
             env_vars: partial.env_vars.unwrap_or_default(),
         }
     };
-    
+
     // Create container via Docker
-    let id = state.runtime
+    let id = state
+        .runtime
         .create_container(&req.name, &config)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     let agent = AgentContainer {
         id: id.clone(),
         name: req.name.clone(),
@@ -90,7 +92,7 @@ pub async fn create_agent(
             triggers: vec![req.name.to_lowercase()],
             emoji: Some("🤖".to_string()),
         };
-        
+
         if let Err(e) = andor.register_agent(&registration).await {
             tracing::warn!("Failed to register agent with AndOR Bridge: {}", e);
         }
@@ -98,7 +100,7 @@ pub async fn create_agent(
 
     let mut containers = state.containers.write().await;
     containers.push(agent.clone());
-    
+
     Ok(Json(agent))
 }
 
@@ -121,7 +123,7 @@ pub async fn get_agent(
     Path(id): Path<String>,
 ) -> Result<Json<AgentContainer>, StatusCode> {
     let containers = state.containers.read().await;
-    
+
     containers
         .iter()
         .find(|a| a.id == id)
@@ -135,7 +137,7 @@ pub async fn update_agent(
     Json(req): Json<UpdateAgentRequest>,
 ) -> Result<Json<AgentContainer>, StatusCode> {
     let mut containers = state.containers.write().await;
-    
+
     let agent = containers
         .iter_mut()
         .find(|a| a.id == id)
@@ -144,7 +146,7 @@ pub async fn update_agent(
     if let Some(name) = req.name {
         agent.name = name;
     }
-    
+
     if let Some(config_updates) = req.config {
         if let Some(provider) = config_updates.llm_provider {
             agent.config.llm_provider = provider;
@@ -174,23 +176,24 @@ pub async fn delete_agent(
 ) -> Result<StatusCode, (StatusCode, String)> {
     // Stop if running
     let _ = state.runtime.stop_container(&id).await;
-    
+
     // Delete container
-    state.runtime
+    state
+        .runtime
         .delete_container(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     // Unregister from AndOR Bridge if configured
     if let Some(ref andor) = state.andor {
         if let Err(e) = andor.unregister_agent(&id).await {
             tracing::warn!("Failed to unregister agent from AndOR Bridge: {}", e);
         }
     }
-    
+
     let mut containers = state.containers.write().await;
     containers.retain(|a| a.id != id);
-    
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -198,20 +201,21 @@ pub async fn start_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<AgentContainer>, (StatusCode, String)> {
-    state.runtime
+    state
+        .runtime
         .start_container(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     let mut containers = state.containers.write().await;
-    
+
     let agent = containers
         .iter_mut()
         .find(|a| a.id == id)
         .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
 
     agent.status = AgentStatus::Running;
-    
+
     Ok(Json(agent.clone()))
 }
 
@@ -219,26 +223,25 @@ pub async fn stop_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<AgentContainer>, (StatusCode, String)> {
-    state.runtime
+    state
+        .runtime
         .stop_container(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     let mut containers = state.containers.write().await;
-    
+
     let agent = containers
         .iter_mut()
         .find(|a| a.id == id)
         .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
 
     agent.status = AgentStatus::Stopped;
-    
+
     Ok(Json(agent.clone()))
 }
 
-pub async fn runtime_status(
-    State(state): State<Arc<AppState>>,
-) -> Json<serde_json::Value> {
+pub async fn runtime_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "connected",
         "runtime": "docker",
@@ -259,10 +262,9 @@ pub async fn runtime_status(
     }))
 }
 
-pub async fn list_templates(
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<serde_json::Value>> {
-    let templates: Vec<_> = state.templates
+pub async fn list_templates(State(state): State<Arc<AppState>>) -> Json<Vec<serde_json::Value>> {
+    let templates: Vec<_> = state
+        .templates
         .list()
         .into_iter()
         .map(|(id, t)| {
@@ -279,6 +281,6 @@ pub async fn list_templates(
             })
         })
         .collect();
-    
+
     Json(templates)
 }
