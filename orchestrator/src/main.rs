@@ -4,6 +4,8 @@ mod config;
 mod container;
 mod containment;
 mod network;
+mod secrets;
+mod snapshots;
 mod templates;
 mod types;
 
@@ -11,25 +13,31 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
-use container::{ContainerRuntime, RuntimeClient};
+use container::ContainerRuntime;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+use crate::secrets::SecretsManager;
+use crate::snapshots::SnapshotManager;
 
 pub struct AppState {
     pub config: config::Config,
     pub containers: RwLock<Vec<types::AgentContainer>>,
-    pub runtime: RuntimeClient,
+    pub runtime: container::RuntimeClient,
     pub templates: templates::TemplateRegistry,
     pub andor: Option<andor::AndorClient>,
+    pub secrets: SecretsManager,
+    pub snapshots: SnapshotManager,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new("info"))
-        .with(tracing_subscriber::fmt::layer())
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            std::env::var("RUST_LOG")
+                .unwrap_or_else(|_| "info".to_string())
+        )
         .init();
 
     let config = config::load()?;
@@ -45,13 +53,21 @@ async fn main() -> anyhow::Result<()> {
         andor::AndorClient::new(cfg.clone())
     });
 
-    // Connect to Docker
-    let runtime = RuntimeClient::new().await?;
+    // Connect to runtime
+    let runtime = container::RuntimeClient::new().await?;
     tracing::info!("Connected to container runtime");
 
     // Load existing containers
     let existing = runtime.list_containers().await?;
     tracing::info!("Found {} existing Claw Pen agents", existing.len());
+
+    // Initialize secrets manager
+    let secrets = SecretsManager::new()?;
+    tracing::info!("Secrets manager initialized");
+
+    // Initialize snapshots manager
+    let snapshots = SnapshotManager::new()?;
+    tracing::info!("Snapshots manager initialized");
 
     let state = Arc::new(AppState {
         config,
@@ -59,11 +75,14 @@ async fn main() -> anyhow::Result<()> {
         runtime,
         templates: template_registry,
         andor: andor_client,
+        secrets,
+        snapshots,
     });
 
     let app = Router::new()
         // Health check
         .route("/health", get(api::health))
+        
         // Agent management
         .route("/api/agents", get(api::list_agents))
         .route("/api/agents", post(api::create_agent))
@@ -72,10 +91,47 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/agents/{id}", delete(api::delete_agent))
         .route("/api/agents/{id}/start", post(api::start_agent))
         .route("/api/agents/{id}/stop", post(api::stop_agent))
+        
+        // Batch operations
+        .route("/api/agents/start-all", post(api::start_all))
+        .route("/api/agents/stop-all", post(api::stop_all))
+        
+        // Logs
+        .route("/api/agents/{id}/logs", get(api::get_logs))
+        .route("/api/agents/{id}/logs/stream", get(api::logs_websocket))
+        
+        // Metrics
+        .route("/api/agents/{id}/metrics", get(api::get_metrics))
+        .route("/api/metrics", get(api::get_all_metrics))
+        
+        // Health checks
+        .route("/api/agents/{id}/health", post(api::run_health_check))
+        
         // Templates
         .route("/api/templates", get(api::list_templates))
-        // Runtime info
+        
+        // Projects
+        .route("/api/projects", get(api::list_projects))
+        .route("/api/projects", post(api::create_project))
+        
+        // Secrets
+        .route("/api/agents/{id}/secrets", get(api::list_secrets))
+        .route("/api/agents/{id}/secrets", post(api::set_secret))
+        .route("/api/agents/{id}/secrets/{name}", delete(api::delete_secret))
+        
+        // Snapshots
+        .route("/api/agents/{id}/snapshots", get(api::list_snapshots))
+        .route("/api/agents/{id}/snapshots", post(api::create_snapshot))
+        .route("/api/agents/{id}/snapshots/{snapshot_id}/restore", post(api::restore_snapshot))
+        .route("/api/agents/{id}/snapshots/{snapshot_id}", delete(api::delete_snapshot))
+        
+        // Export/Import
+        .route("/api/agents/{id}/export", get(api::export_agent))
+        .route("/api/agents/import", post(api::import_agent))
+        
+        // Runtime status
         .route("/api/runtime/status", get(api::runtime_status))
+        
         .layer(CorsLayer::new().allow_origin(Any))
         .with_state(state);
 

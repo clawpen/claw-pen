@@ -4,7 +4,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::types::{AgentContainer, AgentConfig, ResourceUsage};
+use crate::types::{AgentContainer, AgentConfig, ResourceUsage, LogEntry};
 use crate::containment::ContainmentClient;
 
 /// Container runtime trait - abstracts over different backends
@@ -27,6 +27,15 @@ pub trait ContainerRuntime: Send + Sync {
 
     /// Get resource usage for a container
     async fn get_stats(&self, id: &str) -> Result<Option<ResourceUsage>>;
+
+    /// Get logs for a container
+    async fn get_logs(&self, id: &str, tail: usize) -> Result<Vec<LogEntry>>;
+
+    /// Stream logs as they arrive
+    async fn stream_logs(&self, id: &str) -> tokio_stream::wrappers::ReceiverStream<LogEntry>;
+
+    /// Run health check
+    async fn health_check(&self, id: &str) -> Result<bool>;
 }
 
 /// Default runtime client - uses Containment
@@ -66,5 +75,17 @@ impl ContainerRuntime for RuntimeClient {
 
     async fn get_stats(&self, id: &str) -> Result<Option<ResourceUsage>> {
         self.inner.get_stats(id).await
+    }
+
+    async fn get_logs(&self, id: &str, tail: usize) -> Result<Vec<LogEntry>> {
+        self.inner.get_logs(id, tail).await
+    }
+
+    async fn stream_logs(&self, id: &str) -> tokio_stream::wrappers::ReceiverStream<LogEntry> {
+        self.inner.stream_logs(id).await
+    }
+
+    async fn health_check(&self, id: &str) -> Result<bool> {
+        self.inner.health_check(id).await
     }
 }
