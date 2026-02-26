@@ -4,6 +4,7 @@ mod config;
 mod container;
 mod containment;
 mod network;
+mod storage;
 mod templates;
 mod types;
 
@@ -49,13 +50,52 @@ async fn main() -> anyhow::Result<()> {
     let runtime = RuntimeClient::new().await?;
     tracing::info!("Connected to container runtime");
 
-    // Load existing containers
-    let existing = runtime.list_containers().await?;
-    tracing::info!("Found {} existing Claw Pen agents", existing.len());
+    // Load persisted agents from storage
+    let stored_agents = storage::load_agents()
+        .unwrap_or_default();
+    tracing::info!("Loaded {} persisted agents", stored_agents.len());
+
+    // Get runtime containers to update status
+    let runtime_containers = runtime.list_containers().await?;
+    let runtime_ids: std::collections::HashSet<String> =
+        runtime_containers.iter().map(|c| c.id.clone()).collect();
+
+    // Merge persisted agents with runtime state
+    let mut merged_agents = Vec::new();
+    for stored in stored_agents {
+        // Check if this agent is actually running in the runtime
+        let status = if runtime_ids.contains(&stored.id) {
+            let runtime_container = runtime_containers.iter()
+                .find(|c| c.id == stored.id);
+            runtime_container
+                .map(|c| c.status.clone())
+                .unwrap_or_else(|| crate::types::AgentStatus::Running)
+        } else {
+            crate::types::AgentStatus::Stopped
+        };
+
+        merged_agents.push(crate::types::AgentContainer {
+            id: stored.id,
+            name: stored.name,
+            status,
+            config: stored.config,
+            tailscale_ip: None,
+            resource_usage: None,
+        });
+    }
+
+    // Add any runtime containers that weren't in storage (shouldn't happen, but handle it)
+    for runtime_container in runtime_containers {
+        if !merged_agents.iter().any(|a| a.id == runtime_container.id) {
+            merged_agents.push(runtime_container);
+        }
+    }
+
+    tracing::info!("Total agents: {}", merged_agents.len());
 
     let state = Arc::new(AppState {
         config,
-        containers: RwLock::new(existing),
+        containers: RwLock::new(merged_agents),
         runtime,
         templates: template_registry,
         andor: andor_client,

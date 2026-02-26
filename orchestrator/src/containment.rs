@@ -2,10 +2,12 @@
 // Communicates with the Containment container runtime
 
 use anyhow::Result;
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::process::Command;
 
 use crate::types::{AgentContainer, AgentConfig, AgentStatus, ResourceUsage, LlmProvider};
+use crate::container::ContainerRuntime;
 
 pub struct ContainmentClient {
     /// Path to containment binary (or wsl command on Windows)
@@ -51,7 +53,7 @@ impl ContainmentClient {
         }
     }
 
-    pub async fn list_containers(&self) -> Result<Vec<AgentContainer>> {
+    async fn list_containers_internal(&self) -> Result<Vec<AgentContainer>> {
         let output = self.build_command()
             .arg("list")
             .output()?;
@@ -90,7 +92,7 @@ impl ContainmentClient {
         Ok(containers)
     }
 
-    pub async fn create_container(&self, name: &str, config: &AgentConfig) -> Result<String> {
+    async fn create_container_internal(&self, name: &str, config: &AgentConfig) -> Result<String> {
         // Build container spec
         let spec = serde_json::json!({
             "name": name,
@@ -122,14 +124,14 @@ impl ContainmentClient {
         Ok(id)
     }
 
-    pub async fn start_container(&self, id: &str) -> Result<()> {
+    async fn start_container_internal(&self, id: &str) -> Result<()> {
         // Containers start automatically on create in containment
         // This could be used to restart a stopped container
         tracing::info!("Container {} is running", id);
         Ok(())
     }
 
-    pub async fn stop_container(&self, id: &str) -> Result<()> {
+    async fn stop_container_internal(&self, id: &str) -> Result<()> {
         let output = self.build_command()
             .args(["stop", id])
             .output()?;
@@ -142,18 +144,23 @@ impl ContainmentClient {
         Ok(())
     }
 
-    pub async fn delete_container(&self, id: &str) -> Result<()> {
+    async fn delete_container_internal(&self, id: &str) -> Result<()> {
         // First stop if running
-        let _ = self.stop_container(id).await;
+        let _ = self.stop_container_internal(id).await;
 
         // TODO: Add rm command to containment runtime
         tracing::info!("Deleted container: {}", id);
         Ok(())
     }
 
-    pub async fn get_stats(&self, _id: &str) -> Result<Option<ResourceUsage>> {
+    async fn get_stats_internal(&self, _id: &str) -> Result<Option<ResourceUsage>> {
         // TODO: Implement stats collection
         Ok(None)
+    }
+
+    async fn container_exists_internal(&self, id: &str) -> Result<bool> {
+        let containers = self.list_containers_internal().await?;
+        Ok(containers.iter().any(|c| &c.id == id))
     }
 
     /// Build environment variables from agent config
@@ -204,6 +211,37 @@ impl ContainmentClient {
         // No API keys needed in container env
 
         env
+    }
+}
+
+#[async_trait]
+impl ContainerRuntime for ContainmentClient {
+    async fn list_containers(&self) -> Result<Vec<AgentContainer>> {
+        self.list_containers_internal().await
+    }
+
+    async fn create_container(&self, name: &str, config: &AgentConfig) -> Result<String> {
+        self.create_container_internal(name, config).await
+    }
+
+    async fn start_container(&self, id: &str) -> Result<()> {
+        self.start_container_internal(id).await
+    }
+
+    async fn stop_container(&self, id: &str) -> Result<()> {
+        self.stop_container_internal(id).await
+    }
+
+    async fn delete_container(&self, id: &str) -> Result<()> {
+        self.delete_container_internal(id).await
+    }
+
+    async fn get_stats(&self, id: &str) -> Result<Option<ResourceUsage>> {
+        self.get_stats_internal(id).await
+    }
+
+    async fn container_exists(&self, id: &str) -> Result<bool> {
+        self.container_exists_internal(id).await
     }
 }
 

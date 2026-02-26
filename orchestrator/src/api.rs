@@ -102,6 +102,11 @@ pub async fn create_agent(
     let mut containers = state.containers.write().await;
     containers.push(agent.clone());
 
+    // Persist to storage
+    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(&agent)) {
+        tracing::warn!("Failed to persist agent: {}", e);
+    }
+
     Ok(Json(agent))
 }
 
@@ -168,6 +173,11 @@ pub async fn update_agent(
 
     // TODO: Update container labels/env in Docker
 
+    // Persist to storage
+    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(&agent)) {
+        tracing::warn!("Failed to persist agent update: {}", e);
+    }
+
     Ok(Json(agent.clone()))
 }
 
@@ -175,15 +185,21 @@ pub async fn delete_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    // Stop if running
+    // First check if agent exists in our list
+    let agent_exists = {
+        let containers = state.containers.read().await;
+        containers.iter().any(|a| a.id == id)
+    };
+
+    if !agent_exists {
+        return Err((StatusCode::NOT_FOUND, "Agent not found".to_string()));
+    }
+
+    // Stop if running (ignore errors if container doesn't exist)
     let _ = state.runtime.stop_container(&id).await;
 
-    // Delete container
-    state
-        .runtime
-        .delete_container(&id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // Delete container (ignore errors if container doesn't exist)
+    let _ = state.runtime.delete_container(&id).await;
 
     // Unregister from AndOR Bridge if configured
     if let Some(ref andor) = state.andor {
@@ -195,6 +211,11 @@ pub async fn delete_agent(
     let mut containers = state.containers.write().await;
     containers.retain(|a| a.id != id);
 
+    // Remove from storage
+    if let Err(e) = crate::storage::remove_agent(&id) {
+        tracing::warn!("Failed to remove agent from storage: {}", e);
+    }
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -202,12 +223,6 @@ pub async fn start_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<AgentContainer>, (StatusCode, String)> {
-    state
-        .runtime
-        .start_container(&id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
     let mut containers = state.containers.write().await;
 
     let agent = containers
@@ -215,7 +230,37 @@ pub async fn start_agent(
         .find(|a| a.id == id)
         .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
 
+    // Check if container exists, if not create it
+    let container_exists = state.runtime.container_exists(&id).await.unwrap_or(false);
+
+    if !container_exists {
+        // Create the container for this stored agent
+        let new_id = state
+            .runtime
+            .create_container(&agent.name, &agent.config)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        // Update the ID in case it changed
+        if new_id != id {
+            // ID mismatch - this shouldn't happen but handle it
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "Container ID mismatch".to_string()));
+        }
+    } else {
+        // Container exists, start it
+        state
+            .runtime
+            .start_container(&id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+
     agent.status = AgentStatus::Running;
+
+    // Persist status change
+    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(&agent)) {
+        tracing::warn!("Failed to persist agent status: {}", e);
+    }
 
     Ok(Json(agent.clone()))
 }
@@ -238,6 +283,11 @@ pub async fn stop_agent(
         .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
 
     agent.status = AgentStatus::Stopped;
+
+    // Persist status change
+    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(&agent)) {
+        tracing::warn!("Failed to persist agent status: {}", e);
+    }
 
     Ok(Json(agent.clone()))
 }
