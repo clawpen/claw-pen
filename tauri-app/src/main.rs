@@ -1,13 +1,13 @@
 // Prevents additional console window on Windows in release builds
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use aes_gcm::Aes256Gcm;
 use aes_gcm::AeadCore;
 use aes_gcm::AeadInPlace;
+use aes_gcm::Aes256Gcm;
 use aes_gcm::KeyInit;
 use aes_gcm::Nonce as AesNonce;
-use base64::Engine;
 use anyhow::Result;
+use base64::Engine;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -59,6 +59,18 @@ pub struct PartialAgentConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateAgentParams {
+    pub name: String,
+    pub template: Option<String>,
+    pub provider: String,
+    pub model: String,
+    pub memory_mb: u32,
+    pub cpu_cores: f32,
+    pub env_vars: HashMap<String, String>,
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Template {
     pub id: String,
     pub name: String,
@@ -104,6 +116,7 @@ pub struct StoredApiKey {
 // ============================================================================
 
 pub struct KeyManager {
+    #[allow(dead_code)]
     key_path: PathBuf,
     master_key: Option<Vec<u8>>,
 }
@@ -123,7 +136,7 @@ impl KeyManager {
             // Generate new key - 32 bytes for AES-256
             let mut key_bytes = [0u8; 32];
             rand::rngs::OsRng.fill_bytes(&mut key_bytes);
-            fs::write(&key_path, &key_bytes)?;
+            fs::write(&key_path, key_bytes)?;
             key_bytes.to_vec()
         };
 
@@ -388,20 +401,22 @@ async fn list_agents() -> Result<Vec<AgentContainer>, String> {
 async fn get_agent(id: String) -> Result<AgentContainer, String> {
     let config = load_config().map_err(|e| e.to_string())?;
     let client = ApiClient::new(config.orchestrator_url);
-    client.get(&format!("/api/agents/{}", id)).await.map_err(|e| e.to_string())
+    client
+        .get(&format!("/api/agents/{}", id))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn create_agent(
-    name: String,
-    template: Option<String>,
-    provider: String,
-    model: String,
-    memory_mb: u32,
-    cpu_cores: f32,
-    env_vars: HashMap<String, String>,
-    api_key: Option<String>,
-) -> Result<AgentContainer, String> {
+async fn create_agent(params: CreateAgentParams) -> Result<AgentContainer, String> {
+    let name = params.name;
+    let template = params.template;
+    let provider = params.provider;
+    let model = params.model;
+    let memory_mb = params.memory_mb;
+    let cpu_cores = params.cpu_cores;
+    let env_vars = params.env_vars;
+    let api_key = params.api_key;
     let config = load_config().map_err(|e| e.to_string())?;
     let client = ApiClient::new(config.orchestrator_url);
 
@@ -497,7 +512,10 @@ async fn stop_agent(id: String) -> Result<AgentContainer, String> {
 async fn list_templates() -> Result<Vec<Template>, String> {
     let config = load_config().map_err(|e| e.to_string())?;
     let client = ApiClient::new(config.orchestrator_url);
-    client.get("/api/templates").await.map_err(|e| e.to_string())
+    client
+        .get("/api/templates")
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

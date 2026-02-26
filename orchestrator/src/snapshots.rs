@@ -14,7 +14,7 @@ impl SnapshotManager {
     pub fn new() -> Result<Self> {
         let base_path = PathBuf::from("/var/lib/claw-pen/snapshots");
         std::fs::create_dir_all(&base_path)?;
-        
+
         Ok(Self { base_path })
     }
 
@@ -37,9 +37,10 @@ impl SnapshotManager {
         for entry in std::fs::read_dir(agent_dir)? {
             let entry = entry?;
             let path = entry.path();
-            
+
             if path.is_dir() {
-                let snapshot_id = path.file_name()
+                let snapshot_id = path
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("unknown")
                     .to_string();
@@ -85,12 +86,15 @@ impl SnapshotManager {
         let metadata = serde_json::json!({
             "id": snapshot_id,
             "agent_id": agent_id,
-            "created_at": &created_at,
+            "created_at": created_at,
         });
         std::fs::write(snapshot_dir.join("metadata.json"), metadata.to_string())?;
 
         // Copy workspace (if exists)
-        let workspace_src = PathBuf::from(format!("/var/lib/openclaw/containers/{}/workspace", agent_id));
+        let workspace_src = PathBuf::from(format!(
+            "/var/lib/openclaw/containers/{}/workspace",
+            agent_id
+        ));
         if workspace_src.exists() {
             let workspace_dst = snapshot_dir.join("workspace");
             self.copy_dir(&workspace_src, &workspace_dst)?;
@@ -109,21 +113,24 @@ impl SnapshotManager {
     }
 
     pub async fn restore_snapshot(&self, agent_id: &str, snapshot_id: &str) -> Result<()> {
-        let snapshot_dir = self.snapshot_path(agent_id, &snapshot_id);
-        
+        let snapshot_dir = self.snapshot_path(agent_id, snapshot_id);
+
         if !snapshot_dir.exists() {
             anyhow::bail!("Snapshot {} not found for agent {}", snapshot_id, agent_id);
         }
 
         let workspace_src = snapshot_dir.join("workspace");
-        let workspace_dst = PathBuf::from(format!("/var/lib/openclaw/containers/{}/workspace", agent_id));
+        let workspace_dst = PathBuf::from(format!(
+            "/var/lib/openclaw/containers/{}/workspace",
+            agent_id
+        ));
 
         if workspace_src.exists() {
             // Remove existing workspace
             if workspace_dst.exists() {
                 std::fs::remove_dir_all(&workspace_dst)?;
             }
-            
+
             // Restore from snapshot
             self.copy_dir(&workspace_src, &workspace_dst)?;
         }
@@ -133,8 +140,8 @@ impl SnapshotManager {
     }
 
     pub async fn delete_snapshot(&self, agent_id: &str, snapshot_id: &str) -> Result<()> {
-        let snapshot_dir = self.snapshot_path(agent_id, &snapshot_id);
-        
+        let snapshot_dir = self.snapshot_path(agent_id, snapshot_id);
+
         if snapshot_dir.exists() {
             std::fs::remove_dir_all(&snapshot_dir)?;
             tracing::info!("Deleted snapshot {} for agent {}", snapshot_id, agent_id);
@@ -144,7 +151,7 @@ impl SnapshotManager {
     }
 
     /// Export agent config as JSON (for backup/migration)
-    pub async fn export_agent(&self, agent_id: &str) -> Result<String> {
+    pub async fn export_agent(&self, _agent_id: &str) -> Result<String> {
         // This would be called with the full agent container from state
         // For now, just return a placeholder
         // The actual export is done in the API handler with full agent data

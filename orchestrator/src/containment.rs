@@ -7,8 +7,10 @@ use std::collections::HashMap;
 use std::process::Command;
 use tokio::sync::mpsc;
 
-use crate::types::{AgentContainer, AgentConfig, AgentStatus, ResourceUsage, LlmProvider, LogEntry, VolumeMount};
 use crate::container::ContainerRuntime;
+use crate::types::{
+    AgentConfig, AgentContainer, AgentStatus, LlmProvider, LogEntry, ResourceUsage, VolumeMount,
+};
 
 pub struct ContainmentClient {
     /// Path to containment binary (or wsl command on Windows)
@@ -56,12 +58,13 @@ impl ContainmentClient {
     }
 
     async fn list_containers_internal(&self) -> Result<Vec<AgentContainer>> {
-        let output = self.build_command()
-            .arg("list")
-            .output()?;
+        let output = self.build_command().arg("list").output()?;
 
         if !output.status.success() {
-            tracing::warn!("Failed to list containers: {}", String::from_utf8_lossy(&output.stderr));
+            tracing::warn!(
+                "Failed to list containers: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
             return Ok(vec![]);
         }
 
@@ -69,7 +72,8 @@ impl ContainmentClient {
         let mut containers = Vec::new();
 
         // Parse output (format: CONTAINER ID\tNAME\tIMAGE\t\tSTATUS)
-        for line in stdout.lines().skip(1) { // Skip header
+        for line in stdout.lines().skip(1) {
+            // Skip header
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() >= 4 {
                 let id = parts[0].to_string();
@@ -118,12 +122,16 @@ impl ContainmentClient {
             "mounts": self.build_mounts(&config.volumes),
         });
 
-        let output = self.build_command()
+        let output = self
+            .build_command()
             .args(["run", "--config", &spec.to_string(), "--id-only"])
             .output()?;
 
         if !output.status.success() {
-            anyhow::bail!("Failed to create container: {}", String::from_utf8_lossy(&output.stderr));
+            anyhow::bail!(
+                "Failed to create container: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
 
         let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -139,12 +147,13 @@ impl ContainmentClient {
     }
 
     async fn stop_container_internal(&self, id: &str) -> Result<()> {
-        let output = self.build_command()
-            .args(["stop", id])
-            .output()?;
+        let output = self.build_command().args(["stop", id]).output()?;
 
         if !output.status.success() {
-            anyhow::bail!("Failed to stop container: {}", String::from_utf8_lossy(&output.stderr));
+            anyhow::bail!(
+                "Failed to stop container: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
 
         tracing::info!("Stopped container: {}", id);
@@ -200,7 +209,7 @@ impl ContainmentClient {
 
     async fn container_exists_internal(&self, id: &str) -> Result<bool> {
         let containers = self.list_containers_internal().await?;
-        Ok(containers.iter().any(|c| &c.id == id))
+        Ok(containers.iter().any(|c| c.id == id))
     }
 
     pub async fn get_logs(&self, id: &str, tail: usize) -> Result<Vec<LogEntry>> {
@@ -241,7 +250,7 @@ impl ContainmentClient {
     pub async fn stream_logs(&self, id: &str) -> tokio_stream::wrappers::ReceiverStream<LogEntry> {
         let (tx, rx) = mpsc::channel(100);
         let log_path = format!("/var/lib/openclaw/containers/{}/logs/container.log", id);
-        let id = id.to_string();
+        let _id_string = id.to_string();
 
         tokio::spawn(async move {
             // Simple tail -f implementation
@@ -281,7 +290,9 @@ impl ContainmentClient {
         // Execute health check command in container
         // For now, just check if container is running
         let containers = self.list_containers_internal().await?;
-        Ok(containers.iter().any(|c| c.id == id && c.status == AgentStatus::Running))
+        Ok(containers
+            .iter()
+            .any(|c| c.id == id && c.status == AgentStatus::Running))
     }
 
     /// Build environment variables from agent config
@@ -299,7 +310,7 @@ impl ContainmentClient {
             LlmProvider::Ollama => "ollama",
             LlmProvider::LlamaCpp => "llamacpp",
             LlmProvider::Vllm => "vllm",
-            LlmProvider::LmStudio => "lmstudio",
+            LlmProvider::Lmstudio => "lmstudio",
             LlmProvider::Custom { endpoint } => {
                 env.insert("LLM_ENDPOINT".to_string(), endpoint.clone());
                 "custom"
@@ -321,7 +332,7 @@ impl ContainmentClient {
                 env.entry("OLLAMA_HOST".to_string())
                     .or_insert_with(|| "http://host.containers.internal:11434".to_string());
             }
-            LlmProvider::LmStudio => {
+            LlmProvider::Lmstudio => {
                 env.entry("LMSTUDIO_HOST".to_string())
                     .or_insert_with(|| "http://host.containers.internal:1234".to_string());
             }
@@ -383,6 +394,18 @@ impl ContainerRuntime for ContainmentClient {
 
     async fn container_exists(&self, id: &str) -> Result<bool> {
         self.container_exists_internal(id).await
+    }
+
+    async fn get_logs(&self, id: &str, tail: usize) -> Result<Vec<LogEntry>> {
+        self.get_logs(id, tail).await
+    }
+
+    async fn stream_logs(&self, id: &str) -> tokio_stream::wrappers::ReceiverStream<LogEntry> {
+        self.stream_logs(id).await
+    }
+
+    async fn health_check(&self, id: &str) -> Result<bool> {
+        self.health_check(id).await
     }
 }
 

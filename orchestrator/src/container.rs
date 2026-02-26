@@ -4,8 +4,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::types::{AgentContainer, AgentConfig, ResourceUsage, LlmProvider, AgentStatus, LogEntry};
 use crate::containment::ContainmentClient;
+use crate::types::{
+    AgentConfig, AgentContainer, AgentStatus, LlmProvider, LogEntry, ResourceUsage,
+};
 
 /// Container runtime trait - abstracts over different backends
 #[async_trait]
@@ -57,7 +59,9 @@ impl RuntimeClient {
         match DockerClient::new().await {
             Ok(docker_client) => {
                 tracing::info!("Using Docker runtime");
-                return Ok(Self { inner: RuntimeClientInner::Docker(docker_client) });
+                return Ok(Self {
+                    inner: RuntimeClientInner::Docker(docker_client),
+                });
             }
             Err(e) => {
                 tracing::info!("Docker not available, trying Containment: {}", e);
@@ -67,7 +71,9 @@ impl RuntimeClient {
         // Fallback to Containment
         let containment_client = ContainmentClient::new()?;
         tracing::info!("Using Containment runtime");
-        Ok(Self { inner: RuntimeClientInner::Containment(containment_client) })
+        Ok(Self {
+            inner: RuntimeClientInner::Containment(containment_client),
+        })
     }
 }
 
@@ -241,7 +247,7 @@ impl DockerClient {
             LlmProvider::Ollama => "openclaw-agent:latest",
             LlmProvider::LlamaCpp => "openclaw-agent:latest",
             LlmProvider::Vllm => "openclaw-agent:latest",
-            LlmProvider::LmStudio => "openclaw-agent:latest",
+            LlmProvider::Lmstudio => "openclaw-agent:latest",
             _ => "openclaw-agent:latest",
         }
     }
@@ -340,7 +346,8 @@ impl ContainerRuntime for DockerClient {
             platform: None,
         });
 
-        let result = self.docker
+        let result = self
+            .docker
             .create_container(options, container_config)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create container: {}", e))?;
@@ -393,21 +400,19 @@ impl ContainerRuntime for DockerClient {
     async fn container_exists(&self, id: &str) -> Result<bool> {
         match self.docker.inspect_container(id, None).await {
             Ok(_) => Ok(true),
-            Err(bollard::errors::Error::DockerResponseServerError { status_code, .. })
-                if status_code == 404 =>
-            {
-                Ok(false)
-            }
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => Ok(false),
             Err(e) => Err(anyhow::anyhow!("Failed to check container: {}", e)),
         }
     }
 
-    async fn get_logs(&self, id: &str, tail: usize) -> Result<Vec<LogEntry>> {
+    async fn get_logs(&self, _id: &str, _tail: usize) -> Result<Vec<LogEntry>> {
         // TODO: Implement Docker logs
         Ok(vec![])
     }
 
-    async fn stream_logs(&self, id: &str) -> tokio_stream::wrappers::ReceiverStream<LogEntry> {
+    async fn stream_logs(&self, _id: &str) -> tokio_stream::wrappers::ReceiverStream<LogEntry> {
         // TODO: Implement Docker log streaming
         let (_tx, rx) = tokio::sync::mpsc::channel(10);
         tokio_stream::wrappers::ReceiverStream::new(rx)

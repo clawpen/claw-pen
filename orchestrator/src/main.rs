@@ -36,10 +36,7 @@ pub struct AppState {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            std::env::var("RUST_LOG")
-                .unwrap_or_else(|_| "info".to_string())
-        )
+        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()))
         .init();
 
     let config = config::load()?;
@@ -60,8 +57,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Connected to container runtime");
 
     // Load persisted agents from storage
-    let stored_agents = storage::load_agents()
-        .unwrap_or_default();
+    let stored_agents = storage::load_agents().unwrap_or_default();
     tracing::info!("Loaded {} persisted agents", stored_agents.len());
 
     // Get runtime containers to update status
@@ -74,8 +70,7 @@ async fn main() -> anyhow::Result<()> {
     for stored in stored_agents {
         // Check if this agent is actually running in the runtime
         let status = if runtime_ids.contains(&stored.id) {
-            let runtime_container = runtime_containers.iter()
-                .find(|c| c.id == stored.id);
+            let runtime_container = runtime_containers.iter().find(|c| c.id == stored.id);
             runtime_container
                 .map(|c| c.status.clone())
                 .unwrap_or_else(|| crate::types::AgentStatus::Running)
@@ -90,6 +85,10 @@ async fn main() -> anyhow::Result<()> {
             config: stored.config,
             tailscale_ip: None,
             resource_usage: None,
+            project: None,
+            tags: vec![],
+            restart_policy: Default::default(),
+            health_status: None,
         });
     }
 
@@ -123,7 +122,6 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         // Health check
         .route("/health", get(api::health))
-        
         // Agent management
         .route("/api/agents", get(api::list_agents))
         .route("/api/agents", post(api::create_agent))
@@ -132,47 +130,45 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/agents/{id}", delete(api::delete_agent))
         .route("/api/agents/{id}/start", post(api::start_agent))
         .route("/api/agents/{id}/stop", post(api::stop_agent))
-        
         // Batch operations
         .route("/api/agents/start-all", post(api::start_all))
         .route("/api/agents/stop-all", post(api::stop_all))
-        
         // Logs
         .route("/api/agents/{id}/logs", get(api::get_logs))
         .route("/api/agents/{id}/logs/stream", get(api::logs_websocket))
-        
         // Metrics
         .route("/api/agents/{id}/metrics", get(api::get_metrics))
         .route("/api/metrics", get(api::get_all_metrics))
-        
         // Health checks
         .route("/api/agents/{id}/health", post(api::run_health_check))
-        
         // Templates
         .route("/api/templates", get(api::list_templates))
-        
         // Projects
         .route("/api/projects", get(api::list_projects))
         .route("/api/projects", post(api::create_project))
-        
         // Secrets
         .route("/api/agents/{id}/secrets", get(api::list_secrets))
         .route("/api/agents/{id}/secrets", post(api::set_secret))
-        .route("/api/agents/{id}/secrets/{name}", delete(api::delete_secret))
-        
+        .route(
+            "/api/agents/{id}/secrets/{name}",
+            delete(api::delete_secret),
+        )
         // Snapshots
         .route("/api/agents/{id}/snapshots", get(api::list_snapshots))
         .route("/api/agents/{id}/snapshots", post(api::create_snapshot))
-        .route("/api/agents/{id}/snapshots/{snapshot_id}/restore", post(api::restore_snapshot))
-        .route("/api/agents/{id}/snapshots/{snapshot_id}", delete(api::delete_snapshot))
-        
+        .route(
+            "/api/agents/{id}/snapshots/{snapshot_id}/restore",
+            post(api::restore_snapshot),
+        )
+        .route(
+            "/api/agents/{id}/snapshots/{snapshot_id}",
+            delete(api::delete_snapshot),
+        )
         // Export/Import
         .route("/api/agents/{id}/export", get(api::export_agent))
         .route("/api/agents/import", post(api::import_agent))
-        
         // Runtime status
         .route("/api/runtime/status", get(api::runtime_status))
-        
         .layer(CorsLayer::new().allow_origin(Any))
         .with_state(state);
 

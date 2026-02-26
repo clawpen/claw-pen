@@ -1,6 +1,5 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -93,6 +92,10 @@ impl From<StoredAgent> for crate::types::AgentContainer {
             config: stored.config,
             tailscale_ip: None,
             resource_usage: None,
+            project: None,
+            tags: vec![],
+            restart_policy: Default::default(),
+            health_status: None,
         }
     }
 }

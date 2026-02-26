@@ -62,8 +62,12 @@ pub struct AgentConfig {
     pub volumes: Vec<VolumeMount>,
 }
 
-fn default_memory() -> u32 { 1024 }
-fn default_cpu() -> f32 { 1.0 }
+fn default_memory() -> u32 {
+    1024
+}
+fn default_cpu() -> f32 {
+    1.0
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -97,12 +101,12 @@ pub enum RestartPolicy {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ResourcePreset {
-    Nano,    // 512MB, 0.5 CPU
-    Micro,   // 1GB, 1 CPU
-    Small,   // 2GB, 2 CPU
-    Medium,  // 4GB, 4 CPU
-    Large,   // 8GB, 8 CPU
-    Xlarge,  // 16GB, 16 CPU
+    Nano,   // 512MB, 0.5 CPU
+    Micro,  // 1GB, 1 CPU
+    Small,  // 2GB, 2 CPU
+    Medium, // 4GB, 4 CPU
+    Large,  // 8GB, 8 CPU
+    Xlarge, // 16GB, 16 CPU
 }
 
 impl ResourcePreset {
@@ -134,9 +138,15 @@ pub struct HealthCheck {
     pub command: Option<Vec<String>>,
 }
 
-fn default_health_interval() -> u32 { 30 }
-fn default_health_timeout() -> u32 { 10 }
-fn default_health_retries() -> u32 { 3 }
+fn default_health_interval() -> u32 {
+    30
+}
+fn default_health_timeout() -> u32 {
+    10
+}
+fn default_health_retries() -> u32 {
+    3
+}
 
 impl Default for HealthCheck {
     fn default() -> Self {

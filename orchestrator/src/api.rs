@@ -1,18 +1,18 @@
+use axum::extract::ws::{WebSocket, WebSocketUpgrade};
 use axum::{
-    extract::{Path, State, Query},
-    http::StatusCode,
-    Json,
     body::Body,
+    extract::{Path, Query, State},
+    http::StatusCode,
     response::Response,
+    Json,
 };
-use axum::extract::ws::{WebSocketUpgrade, WebSocket, Message};
-use std::sync::Arc;
-use std::collections::HashMap;
 use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use crate::types::*;
-use crate::container::ContainerRuntime;
 use crate::andor;
+use crate::container::ContainerRuntime;
+use crate::types::*;
 use crate::AppState;
 
 // === Health ===
@@ -28,8 +28,9 @@ pub async fn list_agents(
     Query(params): Query<HashMap<String, String>>,
 ) -> Json<Vec<AgentContainer>> {
     let containers = state.containers.read().await;
-    
-    let filtered: Vec<_> = containers.iter()
+
+    let filtered: Vec<_> = containers
+        .iter()
         .filter(|c| {
             // Filter by project
             if let Some(project) = params.get("project") {
@@ -63,7 +64,9 @@ pub async fn create_agent(
 ) -> Result<Json<AgentContainer>, (StatusCode, String)> {
     // Build config from template + overrides
     let mut config = if let Some(ref template_name) = req.template {
-        state.templates.get(template_name)
+        state
+            .templates
+            .get(template_name)
             .map(|t| {
                 let mut cfg = AgentConfig::default();
                 if let Some(ref provider) = t.config.llm_provider {
@@ -77,7 +80,12 @@ pub async fn create_agent(
                 cfg.env_vars = t.env.clone();
                 cfg
             })
-            .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("Template '{}' not found", template_name)))?
+            .ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("Template '{}' not found", template_name),
+                )
+            })?
     } else {
         AgentConfig::default()
     };
@@ -88,7 +96,8 @@ pub async fn create_agent(
     }
 
     // Create container
-    let id = state.runtime
+    let id = state
+        .runtime
         .create_container(&req.name, &config)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -108,10 +117,13 @@ pub async fn create_agent(
 
     // Register with AndOR Bridge if configured
     if let Some(ref andor) = state.andor {
-        let should_register = state.config.andor_bridge.as_ref()
+        let should_register = state
+            .config
+            .andor_bridge
+            .as_ref()
             .and_then(|c| c.register_on_create)
             .unwrap_or(false);
-        
+
         if should_register {
             let registration = andor::AgentRegistration {
                 agent_id: agent.id.clone(),
@@ -142,7 +154,8 @@ pub async fn get_agent(
     Path(id): Path<String>,
 ) -> Result<Json<AgentContainer>, (StatusCode, String)> {
     let containers = state.containers.read().await;
-    containers.iter()
+    containers
+        .iter()
         .find(|c| c.id == id)
         .cloned()
         .map(Json)
@@ -155,7 +168,8 @@ pub async fn update_agent(
     Json(req): Json<UpdateAgentRequest>,
 ) -> Result<Json<AgentContainer>, (StatusCode, String)> {
     let mut containers = state.containers.write().await;
-    let agent = containers.iter_mut()
+    let agent = containers
+        .iter_mut()
         .find(|c| c.id == id)
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
 
@@ -173,7 +187,7 @@ pub async fn update_agent(
     }
 
     // Persist to storage
-    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(&agent)) {
+    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
         tracing::warn!("Failed to persist agent update: {}", e);
     }
 
@@ -244,7 +258,10 @@ pub async fn start_agent(
         // Update the ID in case it changed
         if new_id != id {
             // ID mismatch - this shouldn't happen but handle it
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, "Container ID mismatch".to_string()));
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Container ID mismatch".to_string(),
+            ));
         }
     }
 
@@ -258,7 +275,7 @@ pub async fn start_agent(
     agent.status = AgentStatus::Running;
 
     // Persist status change
-    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(&agent)) {
+    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
         tracing::warn!("Failed to persist agent status: {}", e);
     }
 
@@ -269,7 +286,8 @@ pub async fn stop_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<AgentContainer>, (StatusCode, String)> {
-    state.runtime
+    state
+        .runtime
         .stop_container(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -284,7 +302,7 @@ pub async fn stop_agent(
     agent.status = AgentStatus::Stopped;
 
     // Persist status change
-    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(&agent)) {
+    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
         tracing::warn!("Failed to persist agent status: {}", e);
     }
 
@@ -308,10 +326,10 @@ pub async fn start_all(
             }
         }
 
-        if agent.status != AgentStatus::Running {
-            if state.runtime.start_container(&agent.id).await.is_ok() {
-                started.push(agent.id.clone());
-            }
+        if agent.status != AgentStatus::Running
+            && state.runtime.start_container(&agent.id).await.is_ok()
+        {
+            started.push(agent.id.clone());
         }
     }
 
@@ -332,10 +350,10 @@ pub async fn stop_all(
             }
         }
 
-        if agent.status == AgentStatus::Running {
-            if state.runtime.stop_container(&agent.id).await.is_ok() {
-                stopped.push(agent.id.clone());
-            }
+        if agent.status == AgentStatus::Running
+            && state.runtime.stop_container(&agent.id).await.is_ok()
+        {
+            stopped.push(agent.id.clone());
         }
     }
 
@@ -349,11 +367,13 @@ pub async fn get_logs(
     Path(id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<LogEntry>>, (StatusCode, String)> {
-    let tail: usize = params.get("tail")
+    let tail: usize = params
+        .get("tail")
         .and_then(|s| s.parse().ok())
         .unwrap_or(100);
 
-    let logs = state.runtime
+    let logs = state
+        .runtime
         .get_logs(&id, tail)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -369,12 +389,12 @@ pub async fn logs_websocket(
     ws.on_upgrade(move |socket| handle_logs_stream(socket, state, id))
 }
 
-async fn handle_logs_stream(socket: WebSocket, state: Arc<AppState>, id: String) {
+async fn handle_logs_stream(mut socket: WebSocket, state: Arc<AppState>, id: String) {
     use axum::extract::ws::Message;
     use tokio_stream::StreamExt;
 
     let mut stream = state.runtime.stream_logs(&id).await;
-    
+
     while let Some(log) = stream.next().await {
         let msg = serde_json::to_string(&log).unwrap_or_default();
         if socket.send(Message::Text(msg)).await.is_err() {
@@ -389,11 +409,17 @@ pub async fn get_metrics(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<ResourceUsage>, (StatusCode, String)> {
-    let usage = state.runtime
+    let usage = state
+        .runtime
         .get_stats(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found or not running".to_string()))?;
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                "Agent not found or not running".to_string(),
+            )
+        })?;
 
     Ok(Json(usage))
 }
@@ -421,7 +447,8 @@ pub async fn run_health_check(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<HealthStatus>, (StatusCode, String)> {
-    let healthy = state.runtime
+    let healthy = state
+        .runtime
         .health_check(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -429,7 +456,11 @@ pub async fn run_health_check(
     let status = HealthStatus {
         healthy,
         last_check: chrono::Utc::now().to_rfc3339(),
-        message: if healthy { Some("OK".to_string()) } else { Some("Health check failed".to_string()) },
+        message: if healthy {
+            Some("OK".to_string())
+        } else {
+            Some("Health check failed".to_string())
+        },
     };
 
     // Update agent status
@@ -446,15 +477,20 @@ pub async fn run_health_check(
 pub async fn list_templates(
     State(state): State<Arc<AppState>>,
 ) -> Json<Vec<(String, TemplateInfo)>> {
-    let templates: Vec<_> = state.templates.list()
+    let templates: Vec<_> = state
+        .templates
+        .list()
         .into_iter()
         .map(|(name, t)| {
-            (name.clone(), TemplateInfo {
-                name: t.name.clone(),
-                description: t.description.clone(),
-                provider: t.config.llm_provider.clone(),
-                model: t.config.llm_model.clone(),
-            })
+            (
+                name.clone(),
+                TemplateInfo {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    provider: t.config.llm_provider.clone(),
+                    model: t.config.llm_model.clone(),
+                },
+            )
         })
         .collect();
 
@@ -471,15 +507,14 @@ pub struct TemplateInfo {
 
 // === Projects ===
 
-pub async fn list_projects(
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<Project>> {
+pub async fn list_projects(State(state): State<Arc<AppState>>) -> Json<Vec<Project>> {
     let containers = state.containers.read().await;
     let mut projects: HashMap<String, Project> = HashMap::new();
 
     for agent in containers.iter() {
         if let Some(ref project_name) = agent.project {
-            let project = projects.entry(project_name.clone())
+            let project = projects
+                .entry(project_name.clone())
                 .or_insert_with(|| Project {
                     id: project_name.to_lowercase().replace(' ', "-"),
                     name: project_name.clone(),
@@ -495,7 +530,7 @@ pub async fn list_projects(
 }
 
 pub async fn create_project(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Json(req): Json<CreateProjectRequest>,
 ) -> Json<Project> {
     let project = Project {
@@ -515,10 +550,7 @@ pub async fn list_secrets(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Json<Vec<SecretInfo>> {
-    let secrets = state.secrets
-        .list_secrets(&id)
-        .await
-        .unwrap_or_default();
+    let secrets = state.secrets.list_secrets(&id).await.unwrap_or_default();
 
     Json(secrets)
 }
@@ -528,7 +560,8 @@ pub async fn set_secret(
     Path(id): Path<String>,
     Json(req): Json<SetSecretRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    state.secrets
+    state
+        .secrets
         .set_secret(&id, &req.name, &req.value)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -540,7 +573,8 @@ pub async fn delete_secret(
     State(state): State<Arc<AppState>>,
     Path((id, name)): Path<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    state.secrets
+    state
+        .secrets
         .delete_secret(&id, &name)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -554,7 +588,8 @@ pub async fn list_snapshots(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Json<Vec<SnapshotInfo>> {
-    let snapshots = state.snapshots
+    let snapshots = state
+        .snapshots
         .list_snapshots(&id)
         .await
         .unwrap_or_default();
@@ -566,7 +601,8 @@ pub async fn create_snapshot(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<SnapshotInfo>, (StatusCode, String)> {
-    let snapshot = state.snapshots
+    let snapshot = state
+        .snapshots
         .create_snapshot(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -578,7 +614,8 @@ pub async fn restore_snapshot(
     State(state): State<Arc<AppState>>,
     Path((id, snapshot_id)): Path<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    state.snapshots
+    state
+        .snapshots
         .restore_snapshot(&id, &snapshot_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -590,7 +627,8 @@ pub async fn delete_snapshot(
     State(state): State<Arc<AppState>>,
     Path((id, snapshot_id)): Path<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    state.snapshots
+    state
+        .snapshots
         .delete_snapshot(&id, &snapshot_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -604,7 +642,8 @@ pub async fn export_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Response, (StatusCode, String)> {
-    let config = state.snapshots
+    let config = state
+        .snapshots
         .export_agent(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -612,7 +651,10 @@ pub async fn export_agent(
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/json")
-        .header("Content-Disposition", format!("attachment; filename=\"agent-{}.json\"", id))
+        .header(
+            "Content-Disposition",
+            format!("attachment; filename=\"agent-{}.json\"", id),
+        )
         .body(Body::from(config))
         .unwrap())
 }
@@ -622,7 +664,8 @@ pub async fn import_agent(
     Json(agent): Json<AgentContainer>,
 ) -> Result<Json<AgentContainer>, (StatusCode, String)> {
     // Create the container
-    let id = state.runtime
+    let id = state
+        .runtime
         .create_container(&agent.name, &agent.config)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -639,9 +682,7 @@ pub async fn import_agent(
 
 // === Runtime Status ===
 
-pub async fn runtime_status(
-    State(state): State<Arc<AppState>>,
-) -> Json<serde_json::Value> {
+pub async fn runtime_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "runtime": "containment",
         "version": env!("CARGO_PKG_VERSION"),

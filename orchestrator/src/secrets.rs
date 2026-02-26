@@ -1,8 +1,8 @@
 // Secrets management - file-based secure storage
 
 use anyhow::Result;
-use std::path::PathBuf;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use crate::types::SecretInfo;
 
@@ -14,7 +14,7 @@ impl SecretsManager {
     pub fn new() -> Result<Self> {
         let base_path = PathBuf::from("/var/lib/claw-pen/secrets");
         std::fs::create_dir_all(&base_path)?;
-        
+
         Ok(Self { base_path })
     }
 
@@ -33,15 +33,17 @@ impl SecretsManager {
         for entry in std::fs::read_dir(agent_dir)? {
             let entry = entry?;
             let path = entry.path();
-            
+
             if path.is_file() {
                 let metadata = entry.metadata()?;
-                let name = path.file_name()
+                let name = path
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("unknown")
                     .to_string();
 
-                let created_at = metadata.created()
+                let created_at = metadata
+                    .created()
                     .ok()
                     .and_then(|t| {
                         use std::time::UNIX_EPOCH;
@@ -70,7 +72,7 @@ impl SecretsManager {
         std::fs::create_dir_all(&agent_dir)?;
 
         let secret_path = agent_dir.join(name);
-        
+
         // Write with restricted permissions (0600)
         #[cfg(unix)]
         {
@@ -95,7 +97,7 @@ impl SecretsManager {
 
     pub async fn delete_secret(&self, agent_id: &str, name: &str) -> Result<()> {
         let secret_path = self.agent_path(agent_id).join(name);
-        
+
         if secret_path.exists() {
             std::fs::remove_file(&secret_path)?;
             tracing::info!("Deleted secret '{}' for agent {}", name, agent_id);
@@ -106,7 +108,7 @@ impl SecretsManager {
 
     pub async fn get_secret(&self, agent_id: &str, name: &str) -> Result<Option<String>> {
         let secret_path = self.agent_path(agent_id).join(name);
-        
+
         if secret_path.exists() {
             let value = std::fs::read_to_string(&secret_path)?;
             Ok(Some(value))
@@ -140,5 +142,3 @@ impl Default for SecretsManager {
         Self::new().expect("Failed to create SecretsManager")
     }
 }
-
-use std::io::Write;
