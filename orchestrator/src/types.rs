@@ -264,6 +264,14 @@ pub struct SnapshotInfo {
     pub size_bytes: u64,
 }
 
+// === Shared Memory Types (re-exported from shared_memory module) ===
+
+pub use crate::shared_memory::{
+    AgentStatusEntry, Memory, MemorySearchResult, NewMemory, NewTask,
+    SharedMemory, SharedMemoryConfig, SharedMemoryError, Task, TaskStatus,
+    ORG_COMMON, ORG_ALL, ORG_DEFAULT,
+};
+
 impl AgentConfig {
     pub fn apply(&mut self, partial: &PartialAgentConfig) {
         if let Some(ref provider) = partial.llm_provider {
