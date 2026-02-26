@@ -4,7 +4,6 @@ members = [
     "runtime",
     "orchestrator",
     "ui",
-    "tauri-app",
 ]
 
 [workspace.package]

@@ -98,12 +98,9 @@
  * ```
  */
 
-// Allow dead_code for public API items that may not be used internally
-#![allow(dead_code)]
-
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -113,8 +110,8 @@ use thiserror::Error;
 const DEFAULT_EMBEDDING_DIM: usize = 1536;
 
 /// Special org namespace constants
-pub const ORG_COMMON: &str = "common"; // Shared knowledge across orgs
-pub const ORG_ALL: &str = "all"; // Query everything (no org filter)
+pub const ORG_COMMON: &str = "common";  // Shared knowledge across orgs
+pub const ORG_ALL: &str = "all";         // Query everything (no org filter)
 pub const ORG_DEFAULT: &str = "default"; // Default org when none specified
 
 /// Errors specific to shared memory operations
@@ -122,19 +119,19 @@ pub const ORG_DEFAULT: &str = "default"; // Default org when none specified
 pub enum SharedMemoryError {
     #[error("Database error: {0}")]
     Database(#[from] rusqlite::Error),
-
+    
     #[error("Failed to load sqlite-vss extension: {0}")]
     ExtensionLoad(String),
-
+    
     #[error("Invalid embedding dimension: expected {expected}, got {actual}")]
     InvalidEmbeddingDimension { expected: usize, actual: usize },
-
+    
     #[error("Memory not found: {0}")]
     MemoryNotFound(i64),
-
+    
     #[error("Task not found: {0}")]
     TaskNotFound(i64),
-
+    
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 }
@@ -224,7 +221,7 @@ impl std::fmt::Display for TaskStatus {
 
 impl std::str::FromStr for TaskStatus {
     type Err = String;
-
+    
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "pending" => Ok(TaskStatus::Pending),
@@ -302,10 +299,7 @@ impl SharedMemory {
         // Try to load VSS extension
         let vss_enabled = Self::load_vss_extension(&conn, &config.vss_extension_path)
             .map_err(|e| {
-                tracing::warn!(
-                    "sqlite-vss extension not loaded (vector search disabled): {}",
-                    e
-                );
+                tracing::warn!("sqlite-vss extension not loaded (vector search disabled): {}", e);
                 e
             })
             .is_ok();
@@ -322,45 +316,37 @@ impl SharedMemory {
         if shared_memory.vss_enabled {
             tracing::info!("SharedMemory initialized with vector search enabled");
         } else {
-            tracing::warn!(
-                "SharedMemory initialized WITHOUT vector search (sqlite-vss not available)"
-            );
+            tracing::warn!("SharedMemory initialized WITHOUT vector search (sqlite-vss not available)");
         }
 
         Ok(shared_memory)
     }
 
     /// Attempt to load the sqlite-vss extension
-    fn load_vss_extension(_conn: &Connection, extension_path: &Option<PathBuf>) -> Result<()> {
-        let path = extension_path
-            .as_ref()
+    fn load_vss_extension(conn: &Connection, extension_path: &Option<PathBuf>) -> Result<()> {
+        let path = extension_path.as_ref()
             .ok_or_else(|| anyhow::anyhow!("No VSS extension path configured"))?;
 
         // Note: rusqlite's load_extension requires unsafe and the bundled feature
         // may not support extensions. In production, you may need to:
         // 1. Use a system SQLite with extension support
         // 2. Or use the sqlite-vss static binding if available
-
+        
         // This is a placeholder - actual implementation depends on how sqlite-vss
         // is deployed. Some options:
         // - unsafe { conn.load_extension(path, Some("sqlite3_vss_init"))?; }
         // - Use a custom build with sqlite-vss linked statically
-
+        
         tracing::info!("Attempting to load sqlite-vss from {:?}", path);
-
+        
         // For now, we'll work without VSS and do approximate search
         // Real implementation would load the extension here
-        Err(anyhow::anyhow!(
-            "sqlite-vss extension loading not yet implemented - using fallback search"
-        ))
+        Err(anyhow::anyhow!("sqlite-vss extension loading not yet implemented - using fallback search"))
     }
 
     /// Initialize the database schema
     fn initialize_schema(&self) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
 
         // Create memories table
         conn.execute_batch(
@@ -429,27 +415,17 @@ impl SharedMemory {
     // ========================================================================
 
     /// Store a new memory with optional embedding
-    ///
+    /// 
     /// # Arguments
     /// * `org` - Organization namespace (use ORG_DEFAULT if None)
     /// * `memory` - The memory to store
     pub fn store_memory(&self, org: Option<&str>, memory: &NewMemory) -> Result<i64> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        
         let org = org.unwrap_or(memory.org_or_default());
         let now = Utc::now().to_rfc3339();
-        let embedding_blob = memory
-            .embedding
-            .as_ref()
-            .map(|e| Self::embedding_to_blob(e));
-        let metadata_json = memory
-            .metadata
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()?;
+        let embedding_blob = memory.embedding.as_ref().map(|e| Self::embedding_to_blob(e));
+        let metadata_json = memory.metadata.as_ref().map(|m| serde_json::to_string(m)).transpose()?;
 
         conn.execute(
             r#"
@@ -478,28 +454,18 @@ impl SharedMemory {
             }
         }
 
-        tracing::debug!(
-            "Stored memory {} for agent {} in org {}",
-            id,
-            memory.agent_id,
-            org
-        );
+        tracing::debug!("Stored memory {} for agent {} in org {}", id, memory.agent_id, org);
         Ok(id)
     }
 
     /// Search memories by vector similarity
-    ///
+    /// 
     /// # Arguments
     /// * `org` - Organization namespace. Use ORG_ALL to search across all orgs,
-    ///   ORG_COMMON for shared knowledge, or a specific org name.
+    ///           ORG_COMMON for shared knowledge, or a specific org name.
     /// * `query_embedding` - The query vector
     /// * `limit` - Maximum number of results
-    pub fn search_memories(
-        &self,
-        org: &str,
-        query_embedding: &[f32],
-        limit: usize,
-    ) -> Result<Vec<MemorySearchResult>> {
+    pub fn search_memories(&self, org: &str, query_embedding: &[f32], limit: usize) -> Result<Vec<MemorySearchResult>> {
         if self.vss_enabled {
             self.search_memories_vss(org, query_embedding, limit)
         } else {
@@ -508,19 +474,11 @@ impl SharedMemory {
     }
 
     /// Search using sqlite-vss (when available)
-    fn search_memories_vss(
-        &self,
-        org: &str,
-        query_embedding: &[f32],
-        limit: usize,
-    ) -> Result<Vec<MemorySearchResult>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-
+    fn search_memories_vss(&self, org: &str, query_embedding: &[f32], limit: usize) -> Result<Vec<MemorySearchResult>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        
         let query_blob = Self::embedding_to_blob(query_embedding);
-
+        
         let (query, params): (String, Vec<Box<dyn rusqlite::ToSql>>) = if org == ORG_ALL {
             (
                 r#"
@@ -550,49 +508,33 @@ impl SharedMemory {
         let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let mut stmt = conn.prepare(&query)?;
 
-        let results = stmt
-            .query_map(params_refs.as_slice(), |row| {
-                Ok(MemorySearchResult {
-                    memory: Memory {
-                        id: row.get(0)?,
-                        org: row.get(1)?,
-                        agent_id: row.get(2)?,
-                        content: row.get(3)?,
-                        embedding: row
-                            .get::<_, Option<Vec<u8>>>(4)?
-                            .map(|b| Self::blob_to_embedding(&b)),
-                        metadata: row
-                            .get::<_, Option<String>>(5)?
-                            .map(|s| serde_json::from_str(&s))
-                            .transpose()
-                            .unwrap_or(None),
-                        created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
-                            .map(|dt| dt.with_timezone(&Utc))
-                            .unwrap_or_else(|_| Utc::now()),
-                        updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
-                            .map(|dt| dt.with_timezone(&Utc))
-                            .unwrap_or_else(|_| Utc::now()),
-                    },
-                    similarity: 1.0 - row.get::<_, f32>(8)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+        let results = stmt.query_map(params_refs.as_slice(), |row| {
+            Ok(MemorySearchResult {
+                memory: Memory {
+                    id: row.get(0)?,
+                    org: row.get(1)?,
+                    agent_id: row.get(2)?,
+                    content: row.get(3)?,
+                    embedding: row.get::<_, Option<Vec<u8>>>(4)?.map(|b| Self::blob_to_embedding(&b)),
+                    metadata: row.get::<_, Option<String>>(5)?.map(|s| serde_json::from_str(&s)).transpose().unwrap_or(None),
+                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                    updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                },
+                similarity: 1.0 - row.get::<_, f32>(8)?,
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
 
         Ok(results)
     }
 
     /// Fallback search using cosine similarity in memory (when VSS not available)
-    fn search_memories_fallback(
-        &self,
-        org: &str,
-        query_embedding: &[f32],
-        limit: usize,
-    ) -> Result<Vec<MemorySearchResult>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-
+    fn search_memories_fallback(&self, org: &str, query_embedding: &[f32], limit: usize) -> Result<Vec<MemorySearchResult>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        
         // Get memories with embeddings, filtered by org if not ORG_ALL
         let query = if org == ORG_ALL {
             "SELECT id, org, agent_id, content, embedding, metadata, created_at, updated_at FROM memories WHERE embedding IS NOT NULL".to_string()
@@ -613,11 +555,7 @@ impl SharedMemory {
                         agent_id: row.get(2)?,
                         content: row.get(3)?,
                         embedding: Some(embedding.clone()),
-                        metadata: row
-                            .get::<_, Option<String>>(5)?
-                            .map(|s| serde_json::from_str(&s))
-                            .transpose()
-                            .unwrap_or(None),
+                        metadata: row.get::<_, Option<String>>(5)?.map(|s| serde_json::from_str(&s)).transpose().unwrap_or(None),
                         created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
                             .map(|dt| dt.with_timezone(&Utc))
                             .unwrap_or_else(|_| Utc::now()),
@@ -627,8 +565,7 @@ impl SharedMemory {
                     },
                     embedding,
                 ))
-            })?
-            .collect::<Result<Vec<_>, _>>()?
+            })?.collect::<Result<Vec<_>, _>>()?
         } else {
             stmt.query_map(params![org], |row| {
                 let embedding_blob: Vec<u8> = row.get(4)?;
@@ -640,11 +577,7 @@ impl SharedMemory {
                         agent_id: row.get(2)?,
                         content: row.get(3)?,
                         embedding: Some(embedding.clone()),
-                        metadata: row
-                            .get::<_, Option<String>>(5)?
-                            .map(|s| serde_json::from_str(&s))
-                            .transpose()
-                            .unwrap_or(None),
+                        metadata: row.get::<_, Option<String>>(5)?.map(|s| serde_json::from_str(&s)).transpose().unwrap_or(None),
                         created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
                             .map(|dt| dt.with_timezone(&Utc))
                             .unwrap_or_else(|_| Utc::now()),
@@ -654,8 +587,7 @@ impl SharedMemory {
                     },
                     embedding,
                 ))
-            })?
-            .collect::<Result<Vec<_>, _>>()?
+            })?.collect::<Result<Vec<_>, _>>()?
         };
 
         // Calculate similarities
@@ -668,106 +600,70 @@ impl SharedMemory {
             .collect();
 
         // Sort by similarity (descending) and take top N
-        results.sort_by(|a, b| {
-            b.similarity
-                .partial_cmp(&a.similarity)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        results.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(limit);
 
         Ok(results)
     }
 
     /// List all memories (optionally filtered by org and agent_id)
-    ///
+    /// 
     /// # Arguments
     /// * `org` - Optional org filter. Use ORG_ALL or None to list across all orgs.
     /// * `agent_id` - Optional agent filter
     pub fn list_all(&self, org: Option<&str>, agent_id: Option<&str>) -> Result<Vec<Memory>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        
         let (query, params): (String, Vec<Box<dyn rusqlite::ToSql>>) = match (org, agent_id) {
-            (Some(o), Some(a)) if o != ORG_ALL => (
-                "SELECT id, org, agent_id, content, embedding, metadata, created_at, updated_at
-                 FROM memories WHERE org = ?1 AND agent_id = ?2 ORDER BY created_at DESC"
-                    .to_string(),
-                vec![Box::new(o.to_string()), Box::new(a.to_string())],
+            // All orgs (None or ORG_ALL)
+            (None, None) | (Some(ORG_ALL), None) => (
+                "SELECT id, org, agent_id, content, embedding, metadata, created_at, updated_at 
+                 FROM memories ORDER BY created_at DESC".to_string(),
+                vec![]
             ),
-            (Some(o), None) if o != ORG_ALL => (
-                "SELECT id, org, agent_id, content, embedding, metadata, created_at, updated_at
-                 FROM memories WHERE org = ?1 ORDER BY created_at DESC"
-                    .to_string(),
-                vec![Box::new(o.to_string())],
+            (None, Some(a)) | (Some(ORG_ALL), Some(a)) => (
+                "SELECT id, org, agent_id, content, embedding, metadata, created_at, updated_at 
+                 FROM memories WHERE agent_id = ?1 ORDER BY created_at DESC".to_string(),
+                vec![Box::new(a.to_string())]
             ),
-            (Some(_), Some(a)) => {
-                // This is ORG_ALL with agent_id filter
-                (
-                    "SELECT id, org, agent_id, content, embedding, metadata, created_at, updated_at
-                     FROM memories WHERE agent_id = ?1 ORDER BY created_at DESC"
-                        .to_string(),
-                    vec![Box::new(a.to_string())],
-                )
-            }
-            (Some(_), None) => {
-                // This is ORG_ALL without agent_id filter
-                (
-                    "SELECT id, org, agent_id, content, embedding, metadata, created_at, updated_at
-                     FROM memories ORDER BY created_at DESC"
-                        .to_string(),
-                    vec![],
-                )
-            }
-            (None, Some(a)) => (
-                "SELECT id, org, agent_id, content, embedding, metadata, created_at, updated_at
-                 FROM memories WHERE agent_id = ?1 ORDER BY created_at DESC"
-                    .to_string(),
-                vec![Box::new(a.to_string())],
+            // Specific org
+            (Some(o), None) => (
+                "SELECT id, org, agent_id, content, embedding, metadata, created_at, updated_at 
+                 FROM memories WHERE org = ?1 ORDER BY created_at DESC".to_string(),
+                vec![Box::new(o.to_string())]
             ),
-            (None, None) => (
-                "SELECT id, org, agent_id, content, embedding, metadata, created_at, updated_at
-                 FROM memories ORDER BY created_at DESC"
-                    .to_string(),
-                vec![],
+            (Some(o), Some(a)) => (
+                "SELECT id, org, agent_id, content, embedding, metadata, created_at, updated_at 
+                 FROM memories WHERE org = ?1 AND agent_id = ?2 ORDER BY created_at DESC".to_string(),
+                vec![Box::new(o.to_string()), Box::new(a.to_string())]
             ),
         };
 
         let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let mut stmt = conn.prepare(&query)?;
-        let memories = stmt
-            .query_map(params_refs.as_slice(), Self::row_to_memory)?
-            .collect::<Result<Vec<_>, _>>()?;
+        let memories = stmt.query_map(params_refs.as_slice(), Self::row_to_memory)?.collect::<Result<Vec<_>, _>>()?;
 
         Ok(memories)
     }
 
     /// Get a specific memory by ID
     pub fn get_memory(&self, id: i64) -> Result<Option<Memory>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        
         let mut stmt = conn.prepare(
             "SELECT id, org, agent_id, content, embedding, metadata, created_at, updated_at 
-             FROM memories WHERE id = ?1",
+             FROM memories WHERE id = ?1"
         )?;
 
-        stmt.query_row(params![id], Self::row_to_memory)
-            .optional()
+        stmt.query_row(params![id], Self::row_to_memory).optional()
             .map_err(SharedMemoryError::from)
             .map_err(|e| anyhow::anyhow!(e))
     }
 
     /// Delete a memory by ID
     pub fn delete(&self, id: i64) -> Result<bool> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        
         let rows_affected = conn.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
 
         // Also delete from VSS table if enabled
@@ -779,16 +675,13 @@ impl SharedMemory {
     }
 
     /// Delete all memories for an agent within an org
-    ///
+    /// 
     /// # Arguments
     /// * `org` - Organization namespace
     /// * `agent_id` - The agent ID to delete memories for
     pub fn delete_agent_memories(&self, org: &str, agent_id: &str) -> Result<usize> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        
         // Get IDs first for VSS cleanup
         let ids: Vec<i64> = if self.vss_enabled {
             conn.prepare("SELECT id FROM memories WHERE org = ?1 AND agent_id = ?2")?
@@ -798,10 +691,7 @@ impl SharedMemory {
             vec![]
         };
 
-        let rows_affected = conn.execute(
-            "DELETE FROM memories WHERE org = ?1 AND agent_id = ?2",
-            params![org, agent_id],
-        )?;
+        let rows_affected = conn.execute("DELETE FROM memories WHERE org = ?1 AND agent_id = ?2", params![org, agent_id])?;
 
         // Clean up VSS table
         if self.vss_enabled {
@@ -819,16 +709,9 @@ impl SharedMemory {
 
     /// Push a new task to the queue
     pub fn push_task(&self, task: &NewTask) -> Result<i64> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-
-        let payload_json = task
-            .payload
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()?;
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        
+        let payload_json = task.payload.as_ref().map(|p| serde_json::to_string(p)).transpose()?;
 
         conn.execute(
             r#"
@@ -851,13 +734,10 @@ impl SharedMemory {
 
     /// Pop the next available task (optionally for a specific agent)
     pub fn pop_task(&self, for_agent: Option<&str>) -> Result<Option<Task>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        
         // Find highest priority pending task
-        let mut stmt = if let Some(_agent) = for_agent {
+        let mut stmt = if let Some(agent) = for_agent {
             conn.prepare(
                 r#"
                 SELECT id, from_agent, to_agent, task_type, payload, priority, status, created_at, claimed_at, completed_at
@@ -880,8 +760,7 @@ impl SharedMemory {
         };
 
         let task = if for_agent.is_some() {
-            stmt.query_row(params![for_agent], Self::row_to_task)
-                .optional()?
+            stmt.query_row(params![for_agent], Self::row_to_task).optional()?
         } else {
             stmt.query_row([], Self::row_to_task).optional()?
         };
@@ -897,7 +776,7 @@ impl SharedMemory {
             let mut claimed_task = task;
             claimed_task.status = TaskStatus::Claimed;
             claimed_task.claimed_at = Some(Utc::now());
-
+            
             Ok(Some(claimed_task))
         } else {
             Ok(None)
@@ -906,11 +785,8 @@ impl SharedMemory {
 
     /// List tasks (optionally filtered by status and/or agent)
     pub fn list_tasks(&self, status: Option<TaskStatus>, agent: Option<&str>) -> Result<Vec<Task>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        
         let mut query = "SELECT id, from_agent, to_agent, task_type, payload, priority, status, created_at, claimed_at, completed_at FROM tasks WHERE 1=1".to_string();
         let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![];
 
@@ -920,35 +796,26 @@ impl SharedMemory {
         }
 
         if let Some(a) = agent {
-            query.push_str(&format!(
-                " AND (to_agent IS NULL OR to_agent = ?{})",
-                params_vec.len() + 1
-            ));
+            query.push_str(&format!(" AND (to_agent IS NULL OR to_agent = ?{})", params_vec.len() + 1));
             params_vec.push(Box::new(a.to_string()));
         }
 
         query.push_str(" ORDER BY priority DESC, created_at ASC");
 
-        let params_refs: Vec<&dyn rusqlite::ToSql> =
-            params_vec.iter().map(|p| p.as_ref()).collect();
-
+        let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        
         let mut stmt = conn.prepare(&query)?;
-        let tasks = stmt
-            .query_map(params_refs.as_slice(), Self::row_to_task)?
-            .collect::<Result<Vec<_>, _>>()?;
+        let tasks = stmt.query_map(params_refs.as_slice(), Self::row_to_task)?.collect::<Result<Vec<_>, _>>()?;
 
         Ok(tasks)
     }
 
     /// Update task status
     pub fn update_task_status(&self, task_id: i64, status: TaskStatus) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        
         let now = Utc::now().to_rfc3339();
-
+        
         match status {
             TaskStatus::InProgress => {
                 conn.execute(
@@ -978,17 +845,9 @@ impl SharedMemory {
     // ========================================================================
 
     /// Update agent status
-    pub fn update_status(
-        &self,
-        agent_id: &str,
-        status: &str,
-        metadata: Option<serde_json::Value>,
-    ) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-
+    pub fn update_status(&self, agent_id: &str, status: &str, metadata: Option<serde_json::Value>) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        
         let metadata_json = metadata.map(|m| serde_json::to_string(&m)).transpose()?;
         let now = Utc::now().to_rfc3339();
 
@@ -1010,42 +869,33 @@ impl SharedMemory {
 
     /// Get all agent statuses
     pub fn get_all_statuses(&self) -> Result<Vec<AgentStatusEntry>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        
         let mut stmt = conn.prepare(
             "SELECT agent_id, status, last_heartbeat, metadata FROM agent_statuses ORDER BY last_heartbeat DESC"
         )?;
 
-        let statuses = stmt
-            .query_map([], |row| {
-                Ok(AgentStatusEntry {
-                    agent_id: row.get(0)?,
-                    status: row.get(1)?,
-                    last_heartbeat: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
-                        .map(|dt| dt.with_timezone(&Utc))
-                        .unwrap_or_else(|_| Utc::now()),
-                    metadata: row
-                        .get::<_, Option<String>>(3)?
-                        .map(|s| serde_json::from_str(&s))
-                        .transpose()
-                        .unwrap_or(None),
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+        let statuses = stmt.query_map([], |row| {
+            Ok(AgentStatusEntry {
+                agent_id: row.get(0)?,
+                status: row.get(1)?,
+                last_heartbeat: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+                metadata: row.get::<_, Option<String>>(3)?
+                    .map(|s| serde_json::from_str(&s))
+                    .transpose()
+                    .unwrap_or(None),
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
 
         Ok(statuses)
     }
 
     /// Get status for a specific agent
     pub fn get_status(&self, agent_id: &str) -> Result<Option<AgentStatusEntry>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        
         let mut stmt = conn.prepare(
             "SELECT agent_id, status, last_heartbeat, metadata FROM agent_statuses WHERE agent_id = ?1"
         )?;
@@ -1057,24 +907,18 @@ impl SharedMemory {
                 last_heartbeat: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
                     .map(|dt| dt.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now()),
-                metadata: row
-                    .get::<_, Option<String>>(3)?
+                metadata: row.get::<_, Option<String>>(3)?
                     .map(|s| serde_json::from_str(&s))
                     .transpose()
                     .unwrap_or(None),
             })
-        })
-        .optional()
-        .map_err(|e| anyhow::anyhow!(e))
+        }).optional().map_err(|e| anyhow::anyhow!(e))
     }
 
     /// Remove stale agent statuses (not updated for a while)
     pub fn cleanup_stale_statuses(&self, max_age_seconds: i64) -> Result<usize> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        
         let rows_affected = conn.execute(
             "DELETE FROM agent_statuses WHERE datetime(last_heartbeat) < datetime('now', ?1 || ' seconds')",
             params![format!("-{}", max_age_seconds)],
@@ -1136,11 +980,8 @@ impl SharedMemory {
             org: row.get(1)?,
             agent_id: row.get(2)?,
             content: row.get(3)?,
-            embedding: row
-                .get::<_, Option<Vec<u8>>>(4)?
-                .map(|b| Self::blob_to_embedding(&b)),
-            metadata: row
-                .get::<_, Option<String>>(5)?
+            embedding: row.get::<_, Option<Vec<u8>>>(4)?.map(|b| Self::blob_to_embedding(&b)),
+            metadata: row.get::<_, Option<String>>(5)?
                 .map(|s| serde_json::from_str(&s))
                 .transpose()
                 .unwrap_or(None),
@@ -1160,29 +1001,23 @@ impl SharedMemory {
             from_agent: row.get(1)?,
             to_agent: row.get(2)?,
             task_type: row.get(3)?,
-            payload: row
-                .get::<_, Option<String>>(4)?
+            payload: row.get::<_, Option<String>>(4)?
                 .map(|s| serde_json::from_str(&s))
                 .transpose()
                 .unwrap_or(None),
             priority: row.get(5)?,
-            status: row
-                .get::<_, String>(6)?
-                .parse()
-                .unwrap_or(TaskStatus::Pending),
+            status: row.get::<_, String>(6)?.parse().unwrap_or(TaskStatus::Pending),
             created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
-            claimed_at: row.get::<_, Option<String>>(8)?.map(|s| {
-                DateTime::parse_from_rfc3339(&s)
+            claimed_at: row.get::<_, Option<String>>(8)?
+                .map(|s| DateTime::parse_from_rfc3339(&s)
                     .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now())
-            }),
-            completed_at: row.get::<_, Option<String>>(9)?.map(|s| {
-                DateTime::parse_from_rfc3339(&s)
+                    .unwrap_or_else(|_| Utc::now())),
+            completed_at: row.get::<_, Option<String>>(9)?
+                .map(|s| DateTime::parse_from_rfc3339(&s)
                     .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now())
-            }),
+                    .unwrap_or_else(|_| Utc::now())),
         })
     }
 }
@@ -1201,7 +1036,7 @@ mod tests {
     fn create_test_memory() -> SharedMemory {
         let dir = tempdir().expect("Failed to create temp dir");
         let db_path = dir.path().join("test.db");
-
+        
         // Keep temp dir alive by leaking it (for test simplicity)
         std::mem::forget(dir);
 
@@ -1209,14 +1044,13 @@ mod tests {
             database_path: db_path,
             vss_extension_path: None,
             embedding_dim: 4, // Small for testing
-        })
-        .expect("Failed to create test memory")
+        }).expect("Failed to create test memory")
     }
 
     #[test]
     fn test_store_and_retrieve_memory() {
         let mem = create_test_memory();
-
+        
         let new_mem = NewMemory {
             org: Some("test-org".to_string()),
             agent_id: "agent-1".to_string(),
@@ -1225,14 +1059,12 @@ mod tests {
             metadata: Some(serde_json::json!({"key": "value"})),
         };
 
-        let id = mem
-            .store_memory(None, &new_mem)
-            .expect("Failed to store memory");
+        let id = mem.store_memory(None, &new_mem).expect("Failed to store memory");
         assert!(id > 0);
 
         let retrieved = mem.get_memory(id).expect("Failed to get memory");
         assert!(retrieved.is_some());
-
+        
         let retrieved = retrieved.unwrap();
         assert_eq!(retrieved.org, "test-org");
         assert_eq!(retrieved.agent_id, "agent-1");
@@ -1243,7 +1075,7 @@ mod tests {
     #[test]
     fn test_store_memory_default_org() {
         let mem = create_test_memory();
-
+        
         let new_mem = NewMemory {
             org: None,
             agent_id: "agent-1".to_string(),
@@ -1252,9 +1084,7 @@ mod tests {
             metadata: None,
         };
 
-        let id = mem
-            .store_memory(None, &new_mem)
-            .expect("Failed to store memory");
+        let id = mem.store_memory(None, &new_mem).expect("Failed to store memory");
         let retrieved = mem.get_memory(id).expect("Failed to get memory").unwrap();
         assert_eq!(retrieved.org, ORG_DEFAULT);
     }
@@ -1262,90 +1092,68 @@ mod tests {
     #[test]
     fn test_search_memories_fallback() {
         let mem = create_test_memory();
-
+        
         // Store some memories with different embeddings
-        mem.store_memory(
-            None,
-            &NewMemory {
-                org: Some("org-1".to_string()),
-                agent_id: "agent-1".to_string(),
-                content: "First memory".to_string(),
-                embedding: Some(vec![1.0, 0.0, 0.0, 0.0]),
-                metadata: None,
-            },
-        )
-        .unwrap();
+        mem.store_memory(None, &NewMemory {
+            org: Some("org-1".to_string()),
+            agent_id: "agent-1".to_string(),
+            content: "First memory".to_string(),
+            embedding: Some(vec![1.0, 0.0, 0.0, 0.0]),
+            metadata: None,
+        }).unwrap();
 
-        mem.store_memory(
-            None,
-            &NewMemory {
-                org: Some("org-1".to_string()),
-                agent_id: "agent-2".to_string(),
-                content: "Second memory".to_string(),
-                embedding: Some(vec![0.0, 1.0, 0.0, 0.0]),
-                metadata: None,
-            },
-        )
-        .unwrap();
+        mem.store_memory(None, &NewMemory {
+            org: Some("org-1".to_string()),
+            agent_id: "agent-2".to_string(),
+            content: "Second memory".to_string(),
+            embedding: Some(vec![0.0, 1.0, 0.0, 0.0]),
+            metadata: None,
+        }).unwrap();
 
-        mem.store_memory(
-            None,
-            &NewMemory {
-                org: Some("org-2".to_string()),
-                agent_id: "agent-3".to_string(),
-                content: "Third memory (different org)".to_string(),
-                embedding: Some(vec![1.0, 0.0, 0.0, 0.0]),
-                metadata: None,
-            },
-        )
-        .unwrap();
+        mem.store_memory(None, &NewMemory {
+            org: Some("org-2".to_string()),
+            agent_id: "agent-3".to_string(),
+            content: "Third memory (different org)".to_string(),
+            embedding: Some(vec![1.0, 0.0, 0.0, 0.0]),
+            metadata: None,
+        }).unwrap();
 
         // Search with a query similar to first memory, scoped to org-1
-        let results = mem
-            .search_memories("org-1", &[0.9, 0.1, 0.0, 0.0], 10)
-            .expect("Search failed");
-
+        let results = mem.search_memories("org-1", &[0.9, 0.1, 0.0, 0.0], 10).expect("Search failed");
+        
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].memory.content, "First memory");
         assert!(results[0].similarity > results[1].similarity);
 
         // Search across all orgs
-        let all_results = mem
-            .search_memories(ORG_ALL, &[0.9, 0.1, 0.0, 0.0], 10)
-            .expect("Search failed");
+        let all_results = mem.search_memories(ORG_ALL, &[0.9, 0.1, 0.0, 0.0], 10).expect("Search failed");
         assert_eq!(all_results.len(), 3);
 
         // Search common org (should be empty)
-        let common_results = mem
-            .search_memories(ORG_COMMON, &[0.9, 0.1, 0.0, 0.0], 10)
-            .expect("Search failed");
+        let common_results = mem.search_memories(ORG_COMMON, &[0.9, 0.1, 0.0, 0.0], 10).expect("Search failed");
         assert_eq!(common_results.len(), 0);
     }
 
     #[test]
     fn test_task_queue() {
         let mem = create_test_memory();
-
+        
         // Push tasks
-        let task1_id = mem
-            .push_task(&NewTask {
-                from_agent: "agent-1".to_string(),
-                to_agent: Some("agent-2".to_string()),
-                task_type: "process".to_string(),
-                payload: Some(serde_json::json!({"data": "test"})),
-                priority: 1,
-            })
-            .unwrap();
+        let task1_id = mem.push_task(&NewTask {
+            from_agent: "agent-1".to_string(),
+            to_agent: Some("agent-2".to_string()),
+            task_type: "process".to_string(),
+            payload: Some(serde_json::json!({"data": "test"})),
+            priority: 1,
+        }).unwrap();
 
-        let task2_id = mem
-            .push_task(&NewTask {
-                from_agent: "agent-1".to_string(),
-                to_agent: None,
-                task_type: "broadcast".to_string(),
-                payload: None,
-                priority: 5, // Higher priority
-            })
-            .unwrap();
+        let task2_id = mem.push_task(&NewTask {
+            from_agent: "agent-1".to_string(),
+            to_agent: None,
+            task_type: "broadcast".to_string(),
+            payload: None,
+            priority: 5, // Higher priority
+        }).unwrap();
 
         // Pop should get higher priority task first
         let popped = mem.pop_task(None).unwrap().unwrap();
@@ -1360,9 +1168,8 @@ mod tests {
     #[test]
     fn test_agent_status() {
         let mem = create_test_memory();
-
-        mem.update_status("agent-1", "running", Some(serde_json::json!({"cpu": 50})))
-            .unwrap();
+        
+        mem.update_status("agent-1", "running", Some(serde_json::json!({"cpu": 50}))).unwrap();
         mem.update_status("agent-2", "idle", None).unwrap();
 
         let statuses = mem.get_all_statuses().unwrap();
@@ -1376,19 +1183,14 @@ mod tests {
     #[test]
     fn test_delete_memory() {
         let mem = create_test_memory();
-
-        let id = mem
-            .store_memory(
-                None,
-                &NewMemory {
-                    org: None,
-                    agent_id: "agent-1".to_string(),
-                    content: "To be deleted".to_string(),
-                    embedding: None,
-                    metadata: None,
-                },
-            )
-            .unwrap();
+        
+        let id = mem.store_memory(None, &NewMemory {
+            org: None,
+            agent_id: "agent-1".to_string(),
+            content: "To be deleted".to_string(),
+            embedding: None,
+            metadata: None,
+        }).unwrap();
 
         assert!(mem.delete(id).unwrap());
         assert!(!mem.delete(id).unwrap()); // Already deleted
@@ -1398,44 +1200,32 @@ mod tests {
     #[test]
     fn test_delete_agent_memories() {
         let mem = create_test_memory();
-
+        
         // Store memories for agent-1 in org-1
-        mem.store_memory(
-            None,
-            &NewMemory {
-                org: Some("org-1".to_string()),
-                agent_id: "agent-1".to_string(),
-                content: "Memory 1".to_string(),
-                embedding: None,
-                metadata: None,
-            },
-        )
-        .unwrap();
+        mem.store_memory(None, &NewMemory {
+            org: Some("org-1".to_string()),
+            agent_id: "agent-1".to_string(),
+            content: "Memory 1".to_string(),
+            embedding: None,
+            metadata: None,
+        }).unwrap();
 
-        mem.store_memory(
-            None,
-            &NewMemory {
-                org: Some("org-1".to_string()),
-                agent_id: "agent-1".to_string(),
-                content: "Memory 2".to_string(),
-                embedding: None,
-                metadata: None,
-            },
-        )
-        .unwrap();
+        mem.store_memory(None, &NewMemory {
+            org: Some("org-1".to_string()),
+            agent_id: "agent-1".to_string(),
+            content: "Memory 2".to_string(),
+            embedding: None,
+            metadata: None,
+        }).unwrap();
 
         // Store memory for agent-1 in org-2
-        mem.store_memory(
-            None,
-            &NewMemory {
-                org: Some("org-2".to_string()),
-                agent_id: "agent-1".to_string(),
-                content: "Memory 3".to_string(),
-                embedding: None,
-                metadata: None,
-            },
-        )
-        .unwrap();
+        mem.store_memory(None, &NewMemory {
+            org: Some("org-2".to_string()),
+            agent_id: "agent-1".to_string(),
+            content: "Memory 3".to_string(),
+            embedding: None,
+            metadata: None,
+        }).unwrap();
 
         // Delete agent-1 memories in org-1
         let deleted = mem.delete_agent_memories("org-1", "agent-1").unwrap();
@@ -1453,42 +1243,30 @@ mod tests {
     #[test]
     fn test_list_all_with_org_filter() {
         let mem = create_test_memory();
+        
+        mem.store_memory(None, &NewMemory {
+            org: Some("org-a".to_string()),
+            agent_id: "agent-1".to_string(),
+            content: "Memory A1".to_string(),
+            embedding: None,
+            metadata: None,
+        }).unwrap();
 
-        mem.store_memory(
-            None,
-            &NewMemory {
-                org: Some("org-a".to_string()),
-                agent_id: "agent-1".to_string(),
-                content: "Memory A1".to_string(),
-                embedding: None,
-                metadata: None,
-            },
-        )
-        .unwrap();
+        mem.store_memory(None, &NewMemory {
+            org: Some("org-a".to_string()),
+            agent_id: "agent-2".to_string(),
+            content: "Memory A2".to_string(),
+            embedding: None,
+            metadata: None,
+        }).unwrap();
 
-        mem.store_memory(
-            None,
-            &NewMemory {
-                org: Some("org-a".to_string()),
-                agent_id: "agent-2".to_string(),
-                content: "Memory A2".to_string(),
-                embedding: None,
-                metadata: None,
-            },
-        )
-        .unwrap();
-
-        mem.store_memory(
-            None,
-            &NewMemory {
-                org: Some("org-b".to_string()),
-                agent_id: "agent-1".to_string(),
-                content: "Memory B1".to_string(),
-                embedding: None,
-                metadata: None,
-            },
-        )
-        .unwrap();
+        mem.store_memory(None, &NewMemory {
+            org: Some("org-b".to_string()),
+            agent_id: "agent-1".to_string(),
+            content: "Memory B1".to_string(),
+            embedding: None,
+            metadata: None,
+        }).unwrap();
 
         // List all in org-a
         let org_a = mem.list_all(Some("org-a"), None).unwrap();

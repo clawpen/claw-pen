@@ -193,35 +193,6 @@ For the UI, build the WASM and serve via Tauri on Windows.
 - **Web Dashboard:** Yew (WASM, mobile-friendly monitoring)
 - **Networking:** Tailscale mesh
 
-## Networking
-
-Claw Pen uses a mesh network so agents can communicate securely across machines.
-
-### Tailscale (Default)
-
-[Tailscale](https://tailscale.com) is the default option — free for personal use, up to 100 devices.
-
-Each agent container gets its own Tailscale identity, enabling:
-- Secure agent-to-agent communication
-- Remote access to your agents from anywhere
-- No port forwarding or VPN configuration
-
-```
-[Agent 1] ←→ [Agent 2] ←→ [Agent 3]
-    ↑            ↑            ↑
-    └────────────┴────────────┘
-           Tailscale mesh
-```
-
-### Headscale (Self-Hosted)
-
-For full control, [Headscale](https://github.com/juanfont/headscale) is an open-source Tailscale control server you can self-host. Use it when you want:
-- No external dependencies
-- Custom network policies
-- Integration with existing infrastructure
-
-Agents connect the same way — just point them at your Headscale instance instead of Tailscale's public coordination server.
-
 ## Goals
 
 - One-click install via Tauri setup wizard
