@@ -5,8 +5,9 @@ edition.workspace = true
 
 [dependencies]
 # Web framework
-axum = "0.7"
+axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "fs"] }
 
@@ -31,6 +32,7 @@ thiserror = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 async-trait = "0.1"
 reqwest = { version = "0.11", features = ["json"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 # Process management
 sysinfo = "0.30"
