@@ -41,5 +41,9 @@ bollard = "0.16"
 # Process management
 sysinfo = "0.30"
 
+# Shared memory / SQLite
+rusqlite = { version = "0.31", features = ["bundled"] }
+
 [dev-dependencies]
+tempfile = "3"
 reqwest = { version = "0.11", features = ["json"] }

@@ -5,6 +5,7 @@ mod container;
 mod containment;
 mod network;
 mod secrets;
+mod shared_memory;
 mod snapshots;
 mod storage;
 mod templates;
