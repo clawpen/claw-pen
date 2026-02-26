@@ -98,6 +98,9 @@
  * ```
  */
 
+// Allow dead_code for public API items that may not be used internally
+#![allow(dead_code)]
+
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -328,7 +331,7 @@ impl SharedMemory {
     }
 
     /// Attempt to load the sqlite-vss extension
-    fn load_vss_extension(conn: &Connection, extension_path: &Option<PathBuf>) -> Result<()> {
+    fn load_vss_extension(_conn: &Connection, extension_path: &Option<PathBuf>) -> Result<()> {
         let path = extension_path
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No VSS extension path configured"))?;
@@ -445,7 +448,7 @@ impl SharedMemory {
         let metadata_json = memory
             .metadata
             .as_ref()
-            .map(|m| serde_json::to_string(m))
+            .map(serde_json::to_string)
             .transpose()?;
 
         conn.execute(
@@ -488,7 +491,7 @@ impl SharedMemory {
     ///
     /// # Arguments
     /// * `org` - Organization namespace. Use ORG_ALL to search across all orgs,
-    ///           ORG_COMMON for shared knowledge, or a specific org name.
+    ///   ORG_COMMON for shared knowledge, or a specific org name.
     /// * `query_embedding` - The query vector
     /// * `limit` - Maximum number of results
     pub fn search_memories(
@@ -824,7 +827,7 @@ impl SharedMemory {
         let payload_json = task
             .payload
             .as_ref()
-            .map(|p| serde_json::to_string(p))
+            .map(serde_json::to_string)
             .transpose()?;
 
         conn.execute(
@@ -854,7 +857,7 @@ impl SharedMemory {
             .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
 
         // Find highest priority pending task
-        let mut stmt = if let Some(agent) = for_agent {
+        let mut stmt = if let Some(_agent) = for_agent {
             conn.prepare(
                 r#"
                 SELECT id, from_agent, to_agent, task_type, payload, priority, status, created_at, claimed_at, completed_at

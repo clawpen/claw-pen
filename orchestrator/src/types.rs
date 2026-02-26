@@ -276,6 +276,7 @@ pub struct SnapshotInfo {
 
 // === Shared Memory Types (re-exported from shared_memory module) ===
 
+#[allow(unused_imports)]
 pub use crate::shared_memory::{
     AgentStatusEntry, Memory, MemorySearchResult, NewMemory, NewTask, SharedMemory,
     SharedMemoryConfig, SharedMemoryError, Task, TaskStatus, ORG_ALL, ORG_COMMON, ORG_DEFAULT,
