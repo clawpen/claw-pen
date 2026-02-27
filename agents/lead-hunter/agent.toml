@@ -6,18 +6,36 @@ version = "1.0.0"
 [search]
 # Northern Ontario cities for And or Design
 locations = ["Sudbury", "North Bay", "Timmins", "Sault Ste Marie"]
-# Keywords to find people looking for permit/design services
+# Keywords to find people SEEKING permit/design services (not offering them)
+# These target potential clients, not competitors
 keywords = [
-    "permit drawings",
-    "BCIN",
-    "building permit",
-    "architectural drawings",
-    "draftsman",
-    "need contractor",
-    "looking for architect",
-    "deck permit",
-    "garage plans",
-    "basement apartment",
+    # Direct "I need" phrases
+    "looking for contractor",
+    "need architect",
+    "need permit drawings",
+    "need building permit help",
+    "seeking draftsman",
+    "hiring contractor",
+    
+    # "Wanted" style queries (common on classifieds)
+    "wanted BCIN",
+    "renovation quote wanted",
+    "deck plans needed",
+    "basement plans wanted",
+    "garage plans needed",
+    
+    # Project-specific needs
+    "need deck permit",
+    "need garage plans",
+    "need basement apartment plans",
+    "looking for BCIN designer",
+    "seeking permit designer",
+    
+    # Quote/request phrases
+    "need quotes for renovation",
+    "looking for architectural drawings",
+    "need building plans drawn",
+    "seeking permit application help",
 ]
 max_results_per_query = 20
 
@@ -40,6 +58,20 @@ dedup_retention_days = 30
 [logging]
 level = "INFO"
 file = "lead-hunter.log"
+
+[search.kijiji]
+# Kijiji-specific settings to find leads, not competitors
+# Search in Jobs/Gigs instead of Services to find people seeking help
+category = "jobs"  # or "gigs-services" for gig postings
+# Avoid "services" category which contains contractors advertising
+exclude_categories = ["services"]
+# Kijiji location IDs for Northern Ontario cities
+location_ids = [
+    "1700218",  # Sudbury
+    "1700231",  # North Bay
+    "1700226",  # Timmins
+    "1700223",  # Sault Ste Marie
+]
 
 [rss]
 # RSS feed URLs for lead sources (e.g., Google Alerts)
