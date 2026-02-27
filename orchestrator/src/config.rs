@@ -26,6 +26,14 @@ pub struct Config {
     pub network_backend: NetworkBackend,
     pub runtime_socket: String,
     pub tailscale_auth_key: Option<String>,
+    /// Headscale server URL (e.g., https://mesh.yourcompany.com)
+    /// Used when network_backend = "headscale"
+    pub headscale_url: Option<String>,
+    /// Headscale pre-authentication key for joining nodes
+    /// Used when network_backend = "headscale"
+    pub headscale_auth_key: Option<String>,
+    /// Headscale namespace (defaults to "claw-pen" if not specified)
+    pub headscale_namespace: Option<String>,
     pub model_servers: ModelServers,
     pub andor_bridge: Option<AndorBridgeConfig>,
 }
@@ -58,6 +66,9 @@ pub fn load() -> anyhow::Result<Config> {
         .set_default("network_backend", "tailscale")?
         .set_default("runtime_socket", "/var/run/claw-pen.sock")?
         .set_default("tailscale_auth_key", None::<String>)?
+        .set_default("headscale_url", None::<String>)?
+        .set_default("headscale_auth_key", None::<String>)?
+        .set_default("headscale_namespace", None::<String>)?
         .set_default("model_servers.ollama", None::<String>)?
         .set_default("model_servers.llama_cpp", None::<String>)?
         .set_default("model_servers.vllm", None::<String>)?

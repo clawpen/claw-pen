@@ -321,3 +321,178 @@ impl AgentConfig {
         }
     }
 }
+
+// === Team/Router Agent Types ===
+
+/// A team of agents with a single router entry point
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Team {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub version: String,
+    pub router: RouterConfig,
+    pub agents: HashMap<String, TeamAgent>,
+    pub routing: HashMap<String, RoutingRule>,
+    pub clarification: ClarificationConfig,
+    pub responses: ResponseTemplates,
+    pub created_at: String,
+    pub status: TeamStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TeamStatus {
+    Active,
+    Inactive,
+    Starting,
+    Error,
+}
+
+/// Router agent configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouterConfig {
+    pub name: String,
+    /// Classification mode: keyword, llm, or hybrid
+    #[serde(default = "default_router_mode")]
+    pub mode: RouterMode,
+    /// Minimum confidence to route without clarification
+    #[serde(default = "default_confidence_threshold")]
+    pub confidence_threshold: f32,
+    /// Ask for clarification if confidence is low
+    #[serde(default = "default_true")]
+    pub clarify_on_low_confidence: bool,
+}
+
+fn default_router_mode() -> RouterMode {
+    RouterMode::Hybrid
+}
+
+fn default_confidence_threshold() -> f32 {
+    0.7
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum RouterMode {
+    Keyword,
+    Llm,
+    Hybrid,
+}
+
+/// A specialist agent in a team
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamAgent {
+    /// The agent ID to route to
+    pub agent: String,
+    /// Description of what this agent handles
+    pub description: String,
+}
+
+/// Routing rules for a specific intent
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutingRule {
+    /// Keywords that trigger this route
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    /// Example messages for this intent
+    #[serde(default)]
+    pub examples: Vec<String>,
+}
+
+/// Clarification prompts when intent is unclear
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClarificationConfig {
+    #[serde(default = "default_clarification_prompts")]
+    pub prompts: Vec<String>,
+    #[serde(default = "default_options_format")]
+    pub options_format: String,
+}
+
+fn default_clarification_prompts() -> Vec<String> {
+    vec![
+        "I'm not sure what you need. Are you asking about:".to_string(),
+        "Could you clarify? This could be:".to_string(),
+    ]
+}
+
+fn default_options_format() -> String {
+    "• {intent}: {description}".to_string()
+}
+
+impl Default for ClarificationConfig {
+    fn default() -> Self {
+        Self {
+            prompts: default_clarification_prompts(),
+            options_format: default_options_format(),
+        }
+    }
+}
+
+/// Response templates for the router
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponseTemplates {
+    #[serde(default = "default_routing_ack")]
+    pub routing_ack: String,
+    #[serde(default = "default_clarification_needed")]
+    pub clarification_needed: String,
+    #[serde(default)]
+    pub agent_response_prefix: Option<String>,
+}
+
+fn default_routing_ack() -> String {
+    "Let me pass this to {agent_name}...".to_string()
+}
+
+fn default_clarification_needed() -> String {
+    "I need a bit more info to help you best.".to_string()
+}
+
+impl Default for ResponseTemplates {
+    fn default() -> Self {
+        Self {
+            routing_ack: default_routing_ack(),
+            clarification_needed: default_clarification_needed(),
+            agent_response_prefix: None,
+        }
+    }
+}
+
+/// Request to create a new team
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateTeamRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub router_name: Option<String>,
+    pub agents: HashMap<String, TeamAgent>,
+    pub routing: HashMap<String, RoutingRule>,
+}
+
+/// Result of classifying a message
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassificationResult {
+    /// The detected intent (agent key)
+    pub intent: String,
+    /// Confidence score (0.0-1.0)
+    pub confidence: f32,
+    /// Matched keywords (if any)
+    pub matched_keywords: Vec<String>,
+    /// Whether clarification is needed
+    pub needs_clarification: bool,
+}
+
+/// A message being routed through a team
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutedMessage {
+    pub team_id: String,
+    pub conversation_id: String,
+    pub user_message: String,
+    pub classification: Option<ClassificationResult>,
+    pub target_agent: Option<String>,
+    pub agent_response: Option<String>,
+    pub timestamp: String,
+}

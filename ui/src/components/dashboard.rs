@@ -2,6 +2,7 @@ use crate::api;
 use crate::types::{AgentContainer, AgentStatus};
 use crate::components::chat::ChatPanel;
 use yew::prelude::*;
+use yew::events::MouseEvent;
 
 #[function_component(Dashboard)]
 pub fn dashboard() -> Html {
@@ -21,7 +22,7 @@ pub fn dashboard() -> Html {
 
     let on_close_chat = {
         let chat_agent = chat_agent.clone();
-        Callback::from(move |_| {
+        Callback::from(move |()| {
             chat_agent.set(None);
         })
     };
@@ -42,7 +43,7 @@ pub fn dashboard() -> Html {
                         let open_chat = {
                             let chat_agent = chat_agent.clone();
                             let agent = agent.clone();
-                            Callback::from(move |_| {
+                            Callback::from(move |()| {
                                 chat_agent.set(Some(agent.clone()));
                             })
                         };
@@ -83,7 +84,12 @@ fn agent_card(props: &AgentCardProps) -> Html {
     };
 
     let can_chat = props.agent.status == AgentStatus::Running;
-    let on_chat = props.on_chat.clone();
+    let on_chat_click = {
+        let on_chat = props.on_chat.clone();
+        Callback::from(move |_e: MouseEvent| {
+            on_chat.emit(());
+        })
+    };
 
     html! {
         <div class="agent-card">
@@ -115,7 +121,7 @@ fn agent_card(props: &AgentCardProps) -> Html {
             </div>
             <div class="agent-actions">
                 if can_chat {
-                    <button class="btn-chat" onclick={on_chat}>{"Chat"}</button>
+                    <button class="btn-chat" onclick={on_chat_click}>{"Chat"}</button>
                 }
                 if props.agent.status == AgentStatus::Running {
                     <button class="btn-stop">{"Stop"}</button>

@@ -4,6 +4,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
+use crate::config::NetworkBackend;
 use crate::containment::ContainmentClient;
 use crate::types::{
     AgentConfig, AgentContainer, AgentStatus, LlmProvider, LogEntry, ResourceUsage,
@@ -46,6 +47,10 @@ pub trait ContainerRuntime: Send + Sync {
 /// Runtime client that uses either Containment or Docker based on availability
 pub struct RuntimeClient {
     inner: RuntimeClientInner,
+    network_backend: NetworkBackend,
+    headscale_url: Option<String>,
+    headscale_auth_key: Option<String>,
+    headscale_namespace: Option<String>,
 }
 
 enum RuntimeClientInner {
@@ -61,6 +66,10 @@ impl RuntimeClient {
                 tracing::info!("Using Docker runtime");
                 return Ok(Self {
                     inner: RuntimeClientInner::Docker(docker_client),
+                    network_backend: NetworkBackend::default(),
+                    headscale_url: None,
+                    headscale_auth_key: None,
+                    headscale_namespace: None,
                 });
             }
             Err(e) => {
@@ -73,7 +82,39 @@ impl RuntimeClient {
         tracing::info!("Using Containment runtime");
         Ok(Self {
             inner: RuntimeClientInner::Containment(containment_client),
+            network_backend: NetworkBackend::default(),
+            headscale_url: None,
+            headscale_auth_key: None,
+            headscale_namespace: None,
         })
+    }
+
+    /// Configure the network backend (called after loading config)
+    pub fn with_network_config(
+        mut self,
+        network_backend: NetworkBackend,
+        headscale_url: Option<String>,
+        headscale_auth_key: Option<String>,
+        headscale_namespace: Option<String>,
+    ) -> Self {
+        self.network_backend = network_backend.clone();
+        self.headscale_url = headscale_url.clone();
+        self.headscale_auth_key = headscale_auth_key.clone();
+        self.headscale_namespace = headscale_namespace.clone();
+        
+        // If using Docker, update the inner client with network config
+        if let RuntimeClientInner::Docker(ref docker) = self.inner {
+            let new_docker = DockerClient::with_network_backend(
+                docker.docker.clone(),
+                network_backend,
+                headscale_url,
+                headscale_auth_key,
+                headscale_namespace,
+            );
+            self.inner = RuntimeClientInner::Docker(new_docker);
+        }
+        
+        self
     }
 }
 
@@ -160,6 +201,10 @@ use std::collections::HashMap;
 /// Docker runtime client - uses Docker daemon via named pipe or socket
 pub struct DockerClient {
     docker: bollard::Docker,
+    network_backend: NetworkBackend,
+    headscale_url: Option<String>,
+    headscale_auth_key: Option<String>,
+    headscale_namespace: Option<String>,
 }
 
 impl DockerClient {
@@ -186,7 +231,30 @@ impl DockerClient {
         };
 
         tracing::info!("Connected to Docker runtime");
-        Ok(Self { docker })
+        Ok(Self { 
+            docker,
+            network_backend: NetworkBackend::default(),
+            headscale_url: None,
+            headscale_auth_key: None,
+            headscale_namespace: None,
+        })
+    }
+
+    /// Create a DockerClient with network backend configuration
+    pub fn with_network_backend(
+        docker: bollard::Docker,
+        network_backend: NetworkBackend,
+        headscale_url: Option<String>,
+        headscale_auth_key: Option<String>,
+        headscale_namespace: Option<String>,
+    ) -> Self {
+        Self {
+            docker,
+            network_backend,
+            headscale_url,
+            headscale_auth_key,
+            headscale_namespace,
+        }
     }
 
     /// Generate environment variables from config
@@ -247,6 +315,33 @@ impl DockerClient {
             }
         }
 
+        env
+    }
+
+    /// Generate environment variables for Headscale network backend
+    /// These are passed to containers so they can join the Headscale mesh
+    fn build_headscale_env_vars(&self) -> Vec<String> {
+        let mut env = Vec::new();
+        
+        if matches!(self.network_backend, NetworkBackend::Headscale) {
+            if let Some(ref url) = self.headscale_url {
+                // Headscale server URL - containers use this with --login-server
+                env.push(format!("HEADSCALE_URL={}", url));
+            }
+            if let Some(ref key) = self.headscale_auth_key {
+                // Pre-auth key for automatic registration
+                env.push(format!("HEADSCALE_AUTH_KEY={}", key));
+            }
+            // Namespace defaults to "claw-pen" in the container if not set
+            if let Some(ref ns) = self.headscale_namespace {
+                env.push(format!("HEADSCALE_NAMESPACE={}", ns));
+            } else {
+                env.push("HEADSCALE_NAMESPACE=claw-pen".to_string());
+            }
+            // Flag to indicate Headscale mode (container entrypoint can check this)
+            env.push("TAILSCALE_LOGIN_SERVER=${HEADSCALE_URL}".to_string());
+        }
+        
         env
     }
 
@@ -339,7 +434,12 @@ impl ContainerRuntime for DockerClient {
 
     async fn create_container(&self, name: &str, config: &AgentConfig) -> Result<String> {
         let image = Self::get_image_for_provider(&config.llm_provider);
-        let env = Self::build_env_vars(config);
+        let mut env = Self::build_env_vars(config);
+        
+        // Add Headscale environment variables if using Headscale backend
+        let headscale_env = self.build_headscale_env_vars();
+        env.extend(headscale_env);
+        
         let labels = Self::build_labels(name, &config.llm_provider);
 
         // Container configuration

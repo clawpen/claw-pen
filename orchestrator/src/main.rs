@@ -8,6 +8,7 @@ mod secrets;
 mod shared_memory;
 mod snapshots;
 mod storage;
+mod teams;
 mod templates;
 mod types;
 
@@ -31,6 +32,7 @@ pub struct AppState {
     pub andor: Option<andor::AndorClient>,
     pub secrets: SecretsManager,
     pub snapshots: SnapshotManager,
+    pub teams: teams::TeamRegistry,
 }
 
 #[tokio::main]
@@ -109,6 +111,11 @@ async fn main() -> anyhow::Result<()> {
     let snapshots = SnapshotManager::new()?;
     tracing::info!("Snapshots manager initialized");
 
+    // Initialize teams registry
+    let teams = teams::TeamRegistry::new("./teams");
+    let teams_count = teams.load_all().await?;
+    tracing::info!("Loaded {} teams", teams_count);
+
     let state = Arc::new(AppState {
         config,
         containers: RwLock::new(merged_agents),
@@ -117,6 +124,7 @@ async fn main() -> anyhow::Result<()> {
         andor: andor_client,
         secrets,
         snapshots,
+        teams,
     });
 
     let app = Router::new()
@@ -151,6 +159,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/templates", get(api::list_templates))
         // Projects
         .route("/api/projects", get(api::list_projects).post(api::create_project))
+        // Teams
+        .route("/api/teams", get(api::list_teams))
+        .route("/api/teams/:id", get(api::get_team))
+        .route("/api/teams/:id/chat", get(api::team_chat_websocket))
+        .route("/api/teams/:id/classify", post(api::classify_message))
         // Import
         .route("/api/agents/import", post(api::import_agent))
         // Runtime status

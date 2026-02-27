@@ -786,3 +786,175 @@ async fn handle_chat_stream(socket: WebSocket, _state: Arc<AppState>, _agent_id:
         }
     }
 }
+
+// === Teams ===
+
+pub async fn list_teams(State(state): State<Arc<AppState>>) -> Json<Vec<crate::types::Team>> {
+    Json(state.teams.list().await)
+}
+
+pub async fn get_team(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::types::Team>, (StatusCode, String)> {
+    state
+        .teams
+        .get(&id)
+        .await
+        .map(Json)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Team not found".to_string()))
+}
+
+/// Classify a message to determine which agent should handle it
+pub async fn classify_message(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<ClassifyRequest>,
+) -> Result<Json<ClassificationResult>, (StatusCode, String)> {
+    let team = state
+        .teams
+        .get(&id)
+        .await
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Team not found".to_string()))?;
+
+    let router = crate::teams::Router::new(team);
+    let result = router.classify(&req.message);
+
+    Ok(Json(result))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ClassifyRequest {
+    pub message: String,
+}
+
+/// WebSocket endpoint for team chat with routing
+pub async fn team_chat_websocket(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, (StatusCode, String)> {
+    // Check if team exists
+    let team = state
+        .teams
+        .get(&id)
+        .await
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Team not found".to_string()))?;
+
+    let team_id = team.id.clone();
+    let team_name = team.name.clone();
+
+    Ok(ws.on_upgrade(move |socket| {
+        handle_team_chat_stream(socket, state, team_id, team_name)
+    }))
+}
+
+async fn handle_team_chat_stream(
+    socket: WebSocket,
+    state: Arc<AppState>,
+    team_id: String,
+    team_name: String,
+) {
+    use axum::extract::ws::Message;
+    use futures_util::{SinkExt, StreamExt};
+
+    let (mut tx, mut rx) = socket.split();
+
+    // Send welcome message
+    let welcome = serde_json::json!({
+        "role": "system",
+        "content": format!("Connected to {} team. I'll route your message to the right specialist.", team_name),
+        "timestamp": chrono::Utc::now().timestamp()
+    });
+
+    if tx.send(Message::Text(welcome.to_string())).await.is_err() {
+        return;
+    }
+
+    // Handle incoming messages
+    while let Some(msg_result) = rx.next().await {
+        match msg_result {
+            Ok(Message::Text(text)) => {
+                if let Ok(msg_data) = serde_json::from_str::<serde_json::Value>(&text) {
+                    let user_content = msg_data
+                        .get("content")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or(&text);
+
+                    // Get team and classify message
+                    let response = if let Some(team) = state.teams.get(&team_id).await {
+                        let router = crate::teams::Router::new(team.clone());
+                        let classification = router.classify(user_content);
+
+                        if classification.needs_clarification {
+                            // Ask for clarification
+                            let clarification = router.generate_clarification();
+                            serde_json::json!({
+                                "role": "assistant",
+                                "content": clarification,
+                                "classification": classification,
+                                "timestamp": chrono::Utc::now().timestamp()
+                            })
+                        } else if let Some(agent) = router.get_target_agent(&classification) {
+                            // Route to agent
+                            let ack = router.get_routing_ack(&agent.description);
+
+                            // Send routing acknowledgment
+                            let ack_msg = serde_json::json!({
+                                "role": "assistant",
+                                "content": ack,
+                                "classification": classification.clone(),
+                                "routing_to": agent.agent,
+                                "timestamp": chrono::Utc::now().timestamp()
+                            });
+
+                            if tx.send(Message::Text(ack_msg.to_string())).await.is_err() {
+                                break;
+                            }
+
+                            // TODO: Forward message to actual agent and get response
+                            // For now, return a placeholder
+                            let agent_response = format!(
+                                "[{}] I received your message: \"{}\"\n\n(Forwarding to {} container...)",
+                                agent.description, user_content, agent.agent
+                            );
+
+                            serde_json::json!({
+                                "role": "assistant",
+                                "content": agent_response,
+                                "from_agent": agent.agent,
+                                "classification": classification,
+                                "timestamp": chrono::Utc::now().timestamp()
+                            })
+                        } else {
+                            // No matching agent found
+                            serde_json::json!({
+                                "role": "assistant",
+                                "content": "I couldn't determine which specialist to route your message to. Please try rephrasing.",
+                                "classification": classification,
+                                "timestamp": chrono::Utc::now().timestamp()
+                            })
+                        }
+                    } else {
+                        serde_json::json!({
+                            "role": "assistant",
+                            "content": "Team configuration not found.",
+                            "timestamp": chrono::Utc::now().timestamp()
+                        })
+                    };
+
+                    if tx.send(Message::Text(response.to_string())).await.is_err() {
+                        break;
+                    }
+                }
+            }
+            Ok(Message::Close(_)) => {
+                break;
+            }
+            Err(_) => {
+                break;
+            }
+            _ => {}
+        }
+    }
+}

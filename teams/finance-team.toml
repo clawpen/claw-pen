@@ -1,0 +1,76 @@
+# Finance Team Configuration
+# A team of specialist agents with a single router entry point
+
+[team]
+name = "Finance AI Team"
+description = "Receipts, invoicing, payables, and financial reporting"
+version = "1.0.0"
+
+# Router agent settings
+[router]
+# Name of the router agent (will be created if doesn't exist)
+name = "finance-router"
+# How to classify messages: "keyword" | "llm" | "hybrid"
+mode = "hybrid"
+# Confidence threshold for routing (0.0-1.0)
+confidence_threshold = 0.7
+# If confidence is below threshold, ask for clarification
+clarify_on_low_confidence = true
+
+# Specialist agents that handle specific intents
+[agents]
+# receipts = { agent = "finn", description = "Handles expense receipts, purchases, and spending records" }
+# receivables = { agent = "rae", description = "Handles invoices sent to clients, money owed to you" }
+# payables = { agent = "pax", description = "Handles bills to pay, money you owe vendors" }
+# reporter = { agent = "rex", description = "Handles financial reports, queries, and summaries" }
+
+# Routing keywords - simple keyword matching for fast routing
+[routing.receipts]
+keywords = ["receipt", "expense", "bought", "purchased", "spent", "cost", "payment made"]
+examples = [
+    "I bought office supplies",
+    "Here's a receipt from Staples",
+    "Paid for lunch with client",
+]
+
+[routing.receivables]
+keywords = ["invoice", "bill client", "owed", "receivable", "money coming in", "client payment"]
+examples = [
+    "Create an invoice for the Johnson project",
+    "Client owes me $500",
+    "Bill the client for consulting hours",
+]
+
+[routing.payables]
+keywords = ["pay", "bill", "due", "payable", "owe", "vendor", "supplier"]
+examples = [
+    "Need to pay the electric bill",
+    "We owe $200 to the supplier",
+    "Bill is due next week",
+]
+
+[routing.reporter]
+keywords = ["report", "summary", "total", "how much", "spending", "income", "profit", "status"]
+examples = [
+    "How much did we spend this month?",
+    "Show me a summary of expenses",
+    "What's our total income?",
+    "Generate a financial report",
+]
+
+# Clarification prompts when intent is unclear
+[clarification]
+prompts = [
+    "I'm not sure what you need. Are you asking about:",
+    "Could you clarify? This could be:",
+]
+options_format = "• {intent}: {description}"
+
+# Response templates
+[responses]
+# When routing to an agent
+routing_ack = "Let me pass this to {agent_name}..."
+# When asking for clarification
+clarification_needed = "I need a bit more info to help you best."
+# When agent responds
+agent_response_prefix = "[{agent_name}] "

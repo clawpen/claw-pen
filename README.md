@@ -181,7 +181,8 @@ ORCHESTRATOR_BIND=0.0.0.0:3000
 - `runtime/` — Rust container runtime (WIP by Jer)
 - `orchestrator/` — Rust API layer, config management, serves Yew UI
 - `ui/` — Yew web dashboard (monitoring on the go)
-- `tauri-app/` — Desktop app with setup wizard (planned)
+- `tauri-app/` — Desktop app with setup wizard (builds, in testing)
+- `agents/` — Pre-configured agent examples (Finance AI Team, etc.)
 
 For the UI, build the WASM and serve via Tauri on Windows.
 
@@ -191,7 +192,7 @@ For the UI, build the WASM and serve via Tauri on Windows.
 - **Orchestrator:** Rust (axum), serves Yew UI
 - **Desktop App:** Tauri (setup wizard, full management)
 - **Web Dashboard:** Yew (WASM, mobile-friendly monitoring)
-- **Networking:** Tailscale mesh
+- **Networking:** Tailscale mesh or Headscale (self-hosted)
 
 ## Goals
 
@@ -218,6 +219,53 @@ When enabled:
 - Each agent gets its own DM channel via @mention or channel name
 
 All communication stays on your Tailscale network.
+
+## Teams & Router Agents
+
+Claw Pen supports **teams** — groups of specialist agents with a single router entry point. The router classifies incoming messages and routes them to the appropriate specialist.
+
+### Example: Finance AI Team
+
+```
+agents/finance/
+├── finn/      # Receipts & expenses
+├── rae/       # Invoicing & receivables
+├── pax/       # Bills & payables
+└── reporter/  # Financial summaries
+```
+
+One email/channel → routed to the right specialist automatically.
+
+### Quick Example
+
+```toml
+# teams/finance-team.toml
+[team]
+name = "Finance AI Team"
+
+[agents]
+receipts = { agent = "finn", description = "Handles expense receipts" }
+payables = { agent = "pax", description = "Handles bills to pay" }
+
+[routing.receipts]
+keywords = ["receipt", "expense", "bought", "purchased"]
+
+[routing.payables]
+keywords = ["pay", "bill", "owe", "vendor"]
+```
+
+Connect to the team:
+
+```bash
+# WebSocket endpoint for routed chat
+ws://localhost:3000/api/teams/finance-team/chat
+```
+
+Messages are automatically routed:
+- "I bought office supplies" → `finn` (receipts)
+- "Need to pay the electric bill" → `pax` (payables)
+
+See [docs/TEAMS.md](docs/TEAMS.md) for full documentation.
 
 ## Local Models
 
@@ -272,9 +320,32 @@ Cloud providers (OpenAI, Anthropic, etc.) work out of the box — just set API k
 claw-pen/
 ├── orchestrator/     # REST API + Docker runtime
 ├── ui/               # Yew web dashboard (monitoring)
-├── tauri-app/        # Desktop app with setup wizard (planned)
+├── tauri-app/        # Desktop app with setup wizard
 ├── runtime/          # Custom container runtime (future)
+├── agents/           # Pre-configured agent examples
+├── teams/            # Team configurations with router agents
 ├── images/           # Pre-built OpenClaw container images
 ├── scripts/          # Install scripts
 └── templates/        # Agent configuration templates
+```
+
+## Networking Options
+
+Claw Pen supports two mesh networking backends:
+
+| Backend | Description |
+|---------|-------------|
+| **Tailscale** | Managed mesh (default) |
+| **Headscale** | Self-hosted Tailscale control plane |
+
+Configure via environment:
+
+```bash
+# Tailscale (default)
+NETWORK_BACKEND=tailscale
+
+# Headscale
+NETWORK_BACKEND=headscale
+HEADSCALE_URL=https://mesh.yourcompany.com
+HEADSCALE_AUTH_KEY=<pre-auth-key>
 ```
