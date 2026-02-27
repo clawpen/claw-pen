@@ -4,3 +4,10 @@
 *.wasm
 node_modules/
 dist/
+
+# Agent logs and runtime data
+agents/*/logs/
+agents/*/memory/
+agents/*/notifications/
+*.log
+*.json.bak

@@ -210,9 +210,19 @@ impl DockerClient {
                     env.push(format!("GEMINI_API_KEY={}", key));
                 }
             }
-            LlmProvider::Groq => {
-                if let Some(key) = config.env_vars.get("GROQ_API_KEY") {
-                    env.push(format!("GROQ_API_KEY={}", key));
+            LlmProvider::Kimi => {
+                if let Some(key) = config.env_vars.get("KIMI_API_KEY") {
+                    env.push(format!("KIMI_API_KEY={}", key));
+                }
+            }
+            LlmProvider::Zai => {
+                if let Some(key) = config.env_vars.get("ZAI_API_KEY") {
+                    env.push(format!("ZAI_API_KEY={}", key));
+                }
+            }
+            LlmProvider::Huggingface => {
+                if let Some(key) = config.env_vars.get("HF_TOKEN") {
+                    env.push(format!("HF_TOKEN={}", key));
                 }
             }
             LlmProvider::Ollama => {
@@ -228,7 +238,9 @@ impl DockerClient {
             if !key.starts_with("OPENAI_API_KEY")
                 && !key.starts_with("ANTHROPIC_API_KEY")
                 && !key.starts_with("GEMINI_API_KEY")
-                && !key.starts_with("GROQ_API_KEY")
+                && !key.starts_with("KIMI_API_KEY")
+                && !key.starts_with("ZAI_API_KEY")
+                && !key.starts_with("HF_TOKEN")
                 && !key.starts_with("OLLAMA_ENDPOINT")
             {
                 env.push(format!("{}={}", key, value));
@@ -243,7 +255,9 @@ impl DockerClient {
             LlmProvider::OpenAI => "openclaw-agent:latest",
             LlmProvider::Anthropic => "openclaw-agent:latest",
             LlmProvider::Gemini => "openclaw-agent:latest",
-            LlmProvider::Groq => "openclaw-agent:latest",
+            LlmProvider::Kimi => "openclaw-agent:latest",
+            LlmProvider::Zai => "openclaw-agent:latest",
+            LlmProvider::Huggingface => "openclaw-agent:latest",
             LlmProvider::Ollama => "openclaw-agent:latest",
             LlmProvider::LlamaCpp => "openclaw-agent:latest",
             LlmProvider::Vllm => "openclaw-agent:latest",

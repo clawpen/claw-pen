@@ -539,6 +539,7 @@ dependencies = [
  "config",
  "dirs 5.0.1",
  "dotenvy",
+ "futures-util",
  "reqwest 0.11.27",
  "rusqlite",
  "serde",

@@ -700,13 +700,89 @@ fn parse_provider(s: &str) -> LlmProvider {
         "openai" => LlmProvider::OpenAI,
         "anthropic" => LlmProvider::Anthropic,
         "gemini" => LlmProvider::Gemini,
-        "groq" => LlmProvider::Groq,
         "kimi" => LlmProvider::Kimi,
         "zai" => LlmProvider::Zai,
+        "huggingface" => LlmProvider::Huggingface,
         "ollama" => LlmProvider::Ollama,
         "llamacpp" => LlmProvider::LlamaCpp,
         "vllm" => LlmProvider::Vllm,
         "lmstudio" => LlmProvider::Lmstudio,
         _ => LlmProvider::OpenAI,
+    }
+}
+
+// === Chat WebSocket ===
+
+pub async fn chat_websocket(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, (StatusCode, String)> {
+    // Check if agent exists and is running
+    let containers = state.containers.read().await;
+    let agent = containers
+        .iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
+
+    if agent.status != AgentStatus::Running {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Agent is not running".to_string(),
+        ));
+    }
+
+    let agent_id = agent.id.clone();
+    drop(containers);
+
+    Ok(ws.on_upgrade(move |socket| handle_chat_stream(socket, state, agent_id)))
+}
+
+async fn handle_chat_stream(socket: WebSocket, _state: Arc<AppState>, _agent_id: String) {
+    use axum::extract::ws::Message;
+    use futures_util::{SinkExt, StreamExt};
+
+    let (mut tx, mut rx) = socket.split();
+
+    // Send welcome message
+    let welcome = serde_json::json!({
+        "role": "system",
+        "content": "Connected to agent. Send a message to start chatting.",
+        "timestamp": chrono::Utc::now().timestamp()
+    });
+
+    if tx.send(Message::Text(welcome.to_string())).await.is_err() {
+        return;
+    }
+
+    // Handle incoming messages
+    while let Some(msg_result) = rx.next().await {
+        match msg_result {
+            Ok(Message::Text(text)) => {
+                // Parse the incoming message
+                if let Ok(msg_data) = serde_json::from_str::<serde_json::Value>(&text) {
+                    let user_content = msg_data.get("content").and_then(|c| c.as_str()).unwrap_or(&text);
+
+                    // TODO: Forward to actual agent container via its own WebSocket/API
+                    // For now, echo back with a placeholder response
+                    let response = serde_json::json!({
+                        "role": "assistant",
+                        "content": format!("Echo: {}", user_content),
+                        "timestamp": chrono::Utc::now().timestamp()
+                    });
+
+                    if tx.send(Message::Text(response.to_string())).await.is_err() {
+                        break;
+                    }
+                }
+            }
+            Ok(Message::Close(_)) => {
+                break;
+            }
+            Err(_) => {
+                break;
+            }
+            _ => {}
+        }
     }
 }

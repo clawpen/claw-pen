@@ -25,6 +25,18 @@
             --border: #0f3460;
         }
 
+        /* Force dark theme on all form elements */
+        select, input, textarea {
+            background-color: #1a1a2e !important;
+            color: #f0f0f0 !important;
+            border-color: #0f3460 !important;
+        }
+
+        select option, select optgroup {
+            background-color: #1a1a2e !important;
+            color: #f0f0f0 !important;
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: var(--bg-primary);
@@ -150,6 +162,19 @@
             background: var(--bg-secondary);
             color: var(--text-primary);
             font-size: 1rem;
+        }
+
+        /* Fix dropdown options visibility */
+        .form-group select option {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            padding: 0.5rem;
+        }
+
+        .form-group select option:hover,
+        .form-group select option:checked {
+            background: var(--bg-tertiary);
+            color: var(--accent);
         }
 
         .form-group input:focus,
@@ -725,7 +750,9 @@
                             <option value="openai">OpenAI</option>
                             <option value="anthropic">Anthropic</option>
                             <option value="gemini">Google Gemini</option>
-                            <option value="groq">Groq</option>
+                            <option value="kimi">Kimi (Moonshot)</option>
+                            <option value="zai">Zhipu AI (GLM)</option>
+                            <option value="huggingface">Hugging Face</option>
                             <option value="ollama">Ollama (Local)</option>
                             <option value="lmstudio">LM Studio (Local)</option>
                         </select>
@@ -798,7 +825,9 @@
             openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
             anthropic: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
             gemini: ['gemini-2.0-flash-exp', 'gemini-1.5-pro', 'gemini-1.5-flash'],
-            groq: ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768', 'gemma2-9b-it'],
+            kimi: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'],
+            zai: ['glm-4-plus', 'glm-4-air', 'glm-4-flash'],
+            huggingface: ['meta-llama/Llama-3.2-3B-Instruct', 'mistralai/Mistral-7B-Instruct-v0.3', 'Qwen/Qwen2.5-7B-Instruct'],
             ollama: ['llama3.2', 'mistral', 'codellama'],
             lmstudio: ['', '']  // User typically specifies local model
         };

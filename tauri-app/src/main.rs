@@ -415,7 +415,7 @@ async fn create_agent(params: CreateAgentParams) -> Result<AgentContainer, Strin
     let model = params.model;
     let memory_mb = params.memory_mb;
     let cpu_cores = params.cpu_cores;
-    let env_vars = params.env_vars;
+    let mut env_vars = params.env_vars;
     let api_key = params.api_key;
     let config = load_config().map_err(|e| e.to_string())?;
     let client = ApiClient::new(config.orchestrator_url);
@@ -431,13 +431,14 @@ async fn create_agent(params: CreateAgentParams) -> Result<AgentContainer, Strin
                 .map_err(|e| e.to_string())?;
 
             // Add API key to env vars
-            let mut env_vars_with_key = env_vars.clone();
             match provider.to_lowercase().as_str() {
-                "openai" => env_vars_with_key.insert("OPENAI_API_KEY".to_string(), key),
-                "anthropic" => env_vars_with_key.insert("ANTHROPIC_API_KEY".to_string(), key),
-                "gemini" => env_vars_with_key.insert("GEMINI_API_KEY".to_string(), key),
-                "groq" => env_vars_with_key.insert("GROQ_API_KEY".to_string(), key),
-                _ => env_vars_with_key.insert("API_KEY".to_string(), key),
+                "openai" => env_vars.insert("OPENAI_API_KEY".to_string(), key),
+                "anthropic" => env_vars.insert("ANTHROPIC_API_KEY".to_string(), key),
+                "gemini" => env_vars.insert("GEMINI_API_KEY".to_string(), key),
+                "kimi" => env_vars.insert("KIMI_API_KEY".to_string(), key),
+                "zai" => env_vars.insert("ZAI_API_KEY".to_string(), key),
+                "huggingface" => env_vars.insert("HF_TOKEN".to_string(), key),
+                _ => env_vars.insert("API_KEY".to_string(), key),
             };
         }
     }

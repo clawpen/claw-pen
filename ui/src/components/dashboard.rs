@@ -1,11 +1,13 @@
 use crate::api;
 use crate::types::{AgentContainer, AgentStatus};
+use crate::components::chat::ChatPanel;
 use yew::prelude::*;
 
 #[function_component(Dashboard)]
 pub fn dashboard() -> Html {
     // TODO: Fetch agents from API
     let agents = use_state(Vec::new);
+    let chat_agent = use_state(|| None::<AgentContainer>);
 
     let agents_clone = agents.clone();
     use_effect(move || {
@@ -16,6 +18,13 @@ pub fn dashboard() -> Html {
         });
         || ()
     });
+
+    let on_close_chat = {
+        let chat_agent = chat_agent.clone();
+        Callback::from(move |_| {
+            chat_agent.set(None);
+        })
+    };
 
     html! {
         <div class="dashboard">
@@ -30,10 +39,21 @@ pub fn dashboard() -> Html {
                     </div>
                 } else {
                     {for agents.iter().map(|agent| {
-                        html! { <AgentCard agent={agent.clone()} /> }
+                        let open_chat = {
+                            let chat_agent = chat_agent.clone();
+                            let agent = agent.clone();
+                            Callback::from(move |_| {
+                                chat_agent.set(Some(agent.clone()));
+                            })
+                        };
+                        html! { <AgentCard agent={agent.clone()} on_chat={open_chat} /> }
                     })}
                 }
             </div>
+
+            if let Some(agent) = (*chat_agent).clone() {
+                <ChatPanel agent={agent} on_close={on_close_chat} />
+            }
         </div>
     }
 }
@@ -41,6 +61,7 @@ pub fn dashboard() -> Html {
 #[derive(Properties, PartialEq)]
 pub struct AgentCardProps {
     pub agent: AgentContainer,
+    pub on_chat: Callback<()>,
 }
 
 #[function_component(AgentCard)]
@@ -60,6 +81,9 @@ fn agent_card(props: &AgentCardProps) -> Html {
         AgentStatus::Stopping => "Stopping...",
         AgentStatus::Error => "Error",
     };
+
+    let can_chat = props.agent.status == AgentStatus::Running;
+    let on_chat = props.on_chat.clone();
 
     html! {
         <div class="agent-card">
@@ -90,6 +114,9 @@ fn agent_card(props: &AgentCardProps) -> Html {
                 }
             </div>
             <div class="agent-actions">
+                if can_chat {
+                    <button class="btn-chat" onclick={on_chat}>{"Chat"}</button>
+                }
                 if props.agent.status == AgentStatus::Running {
                     <button class="btn-stop">{"Stop"}</button>
                 } else if props.agent.status == AgentStatus::Stopped {

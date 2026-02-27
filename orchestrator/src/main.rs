@@ -122,54 +122,39 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         // Health check
         .route("/health", get(api::health))
-        // Agent management
-        .route("/api/agents", get(api::list_agents))
-        .route("/api/agents", post(api::create_agent))
-        .route("/api/agents/{id}", get(api::get_agent))
-        .route("/api/agents/{id}", put(api::update_agent))
-        .route("/api/agents/{id}", delete(api::delete_agent))
-        .route("/api/agents/{id}/start", post(api::start_agent))
-        .route("/api/agents/{id}/stop", post(api::stop_agent))
+        // Agent management - more specific routes MUST come before :id routes
+        .route("/api/agents/:id/start", post(api::start_agent))
+        .route("/api/agents/:id/stop", post(api::stop_agent))
+        .route("/api/agents/:id/logs", get(api::get_logs))
+        .route("/api/agents/:id/logs/stream", get(api::logs_websocket))
+        .route("/api/agents/:id/chat", get(api::chat_websocket))
+        .route("/api/agents/:id/metrics", get(api::get_metrics))
+        .route("/api/agents/:id/health", post(api::run_health_check))
+        .route("/api/agents/:id/secrets", get(api::list_secrets).post(api::set_secret))
+        .route("/api/agents/:id/secrets/:name", delete(api::delete_secret))
+        .route("/api/agents/:id/snapshots", get(api::list_snapshots).post(api::create_snapshot))
+        .route("/api/agents/:id/snapshots/:snapshot_id/restore", post(api::restore_snapshot))
+        .route("/api/agents/:id/snapshots/:snapshot_id", delete(api::delete_snapshot))
+        .route("/api/agents/:id/export", get(api::export_agent))
+        // Generic :id routes come after all specific routes
+        .route(
+            "/api/agents/:id",
+            get(api::get_agent).put(api::update_agent).delete(api::delete_agent),
+        )
+        .route("/api/agents", get(api::list_agents).post(api::create_agent))
         // Batch operations
         .route("/api/agents/start-all", post(api::start_all))
         .route("/api/agents/stop-all", post(api::stop_all))
-        // Logs
-        .route("/api/agents/{id}/logs", get(api::get_logs))
-        .route("/api/agents/{id}/logs/stream", get(api::logs_websocket))
-        // Metrics
-        .route("/api/agents/{id}/metrics", get(api::get_metrics))
+        // Global metrics
         .route("/api/metrics", get(api::get_all_metrics))
-        // Health checks
-        .route("/api/agents/{id}/health", post(api::run_health_check))
         // Templates
         .route("/api/templates", get(api::list_templates))
         // Projects
-        .route("/api/projects", get(api::list_projects))
-        .route("/api/projects", post(api::create_project))
-        // Secrets
-        .route("/api/agents/{id}/secrets", get(api::list_secrets))
-        .route("/api/agents/{id}/secrets", post(api::set_secret))
-        .route(
-            "/api/agents/{id}/secrets/{name}",
-            delete(api::delete_secret),
-        )
-        // Snapshots
-        .route("/api/agents/{id}/snapshots", get(api::list_snapshots))
-        .route("/api/agents/{id}/snapshots", post(api::create_snapshot))
-        .route(
-            "/api/agents/{id}/snapshots/{snapshot_id}/restore",
-            post(api::restore_snapshot),
-        )
-        .route(
-            "/api/agents/{id}/snapshots/{snapshot_id}",
-            delete(api::delete_snapshot),
-        )
-        // Export/Import
-        .route("/api/agents/{id}/export", get(api::export_agent))
+        .route("/api/projects", get(api::list_projects).post(api::create_project))
+        // Import
         .route("/api/agents/import", post(api::import_agent))
         // Runtime status
         .route("/api/runtime/status", get(api::runtime_status))
-        .layer(CorsLayer::new().allow_origin(Any))
         .with_state(state);
 
     let addr = format!("{}:{}", "0.0.0.0", 3000);
