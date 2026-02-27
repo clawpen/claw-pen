@@ -3,7 +3,6 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::io::Write;
 
 use crate::types::SecretInfo;
 
@@ -77,6 +76,7 @@ impl SecretsManager {
         // Write with restricted permissions (0600)
         #[cfg(unix)]
         {
+            use std::io::Write;
             use std::os::unix::fs::OpenOptionsExt;
             std::fs::OpenOptions::new()
                 .write(true)
