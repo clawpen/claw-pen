@@ -13,3 +13,8 @@ agents/*/notifications/
 *.json.bak
 images/openclaw-agent/openclaw-bundle.tar.gz
 data/
+
+# Secrets and sensitive files
+docs/SECRETS.md
+orchestrator/src/secrets.rs
+
