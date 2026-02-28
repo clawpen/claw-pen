@@ -2,7 +2,7 @@
 
 > ⚠️ **WORK IN PROGRESS** — Early development. Not ready for production use.
 
-![Status](https://img.shields.io/badge/status-WIP-red) ![Version](https://img.shields.io/badge/version-0.1.0--alpha-orange) ![CI](https://github.com/AchyErrorJ/claw-pen/actions/workflows/ci.yml/badge.svg)
+![Status](https://img.shields.io/badge/status-WIP-red) ![Version](https://img.shields.io/badge/version-1.0.0--alpha-orange) ![CI](https://github.com/AchyErrorJ/claw-pen/actions/workflows/ci.yml/badge.svg)
 
 **Easy OpenClaw agent deployment.** Create, configure, and manage isolated AI agents with one command.
 
