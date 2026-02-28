@@ -16,5 +16,4 @@ data/
 
 # Secrets and sensitive files
 docs/SECRETS.md
-orchestrator/src/secrets.rs
 
