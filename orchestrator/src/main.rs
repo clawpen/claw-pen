@@ -20,6 +20,7 @@ use axum::{
 use container::ContainerRuntime;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tower_http::cors::CorsLayer;
 
 use crate::secrets::SecretsManager;
 use crate::snapshots::SnapshotManager;

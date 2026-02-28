@@ -561,13 +561,13 @@ fn get_system_memory() -> (u64, u64) {
             if line.starts_with("MemTotal:") {
                 total = line.split(':')
                     .nth(1)
-                    .and_then(|s| s.trim().split_whitespace().next())
+                    .and_then(|s| s.split_whitespace().next())
                     .and_then(|s| s.parse::<u64>().ok())
                     .unwrap_or(0);
             } else if line.starts_with("MemAvailable:") {
                 available = line.split(':')
                     .nth(1)
-                    .and_then(|s| s.trim().split_whitespace().next())
+                    .and_then(|s| s.split_whitespace().next())
                     .and_then(|s| s.parse::<u64>().ok())
                     .unwrap_or(0);
             }
@@ -708,8 +708,8 @@ pub async fn list_api_keys(
     State(state): State<Arc<AppState>>,
 ) -> Json<Vec<ApiKeyInfo>> {
     let keys = state.api_keys.read().await;
-    let providers = vec!["zai", "anthropic", "openai", "kimi", "google", "kimi-code", "access", "huggingface"];
-    
+    let providers = ["zai", "anthropic", "openai", "kimi", "google", "kimi-code", "access", "huggingface"];
+
     Json(providers.iter().map(|p| ApiKeyInfo {
         provider: p.to_string(),
         has_key: keys.contains_key(*p),
