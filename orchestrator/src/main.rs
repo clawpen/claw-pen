@@ -5,7 +5,7 @@ mod config;
 mod container;
 mod containment;
 mod network;
-mod secrets;
+mod secret_manager;
 mod shared_memory;
 mod snapshots;
 mod storage;
@@ -22,7 +22,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 
-use crate::secrets::SecretsManager;
+use crate::secret_manager::SecretsManager;
 use crate::snapshots::SnapshotManager;
 
 pub struct AppState {
