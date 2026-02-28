@@ -280,7 +280,10 @@ pub async fn start_agent(
                 LlmProvider::Huggingface => "HF_TOKEN",
                 _ => "API_KEY",
             };
-            agent.config.env_vars.insert(key_var.to_string(), key.clone());
+            agent
+                .config
+                .env_vars
+                .insert(key_var.to_string(), key.clone());
         }
         let new_id = state
             .runtime
@@ -505,7 +508,6 @@ pub async fn run_health_check(
     Ok(Json(status))
 }
 
-
 // === System Stats ===
 
 #[derive(Debug, serde::Serialize)]
@@ -520,24 +522,25 @@ pub struct SystemStats {
     pub agent_memory_mb: u64,
 }
 
-pub async fn get_system_stats(
-    State(state): State<Arc<AppState>>,
-) -> Json<SystemStats> {
+pub async fn get_system_stats(State(state): State<Arc<AppState>>) -> Json<SystemStats> {
     let containers = state.containers.read().await;
-    
-    let running: Vec<_> = containers.iter().filter(|a| a.status == AgentStatus::Running).collect();
+
+    let running: Vec<_> = containers
+        .iter()
+        .filter(|a| a.status == AgentStatus::Running)
+        .collect();
     let agent_memory: u64 = running.iter().map(|a| a.config.memory_mb as u64).sum();
-    
+
     // Get actual system memory from /proc/meminfo
     let (total_mem, available_mem) = get_system_memory();
     let used_mem = total_mem.saturating_sub(available_mem);
-    
+
     // Get CPU cores
     let cpu_cores = num_cpus::get() as f32;
-    
+
     // Get CPU usage (simplified - just count running containers)
     let cpu_usage = (running.len() as f32 / cpu_cores.max(1.0)) * 100.0;
-    
+
     Json(SystemStats {
         total_memory_mb: total_mem / 1024,
         used_memory_mb: used_mem / 1024,
@@ -552,27 +555,29 @@ pub async fn get_system_stats(
 
 fn get_system_memory() -> (u64, u64) {
     use std::fs;
-    
+
     if let Ok(content) = fs::read_to_string("/proc/meminfo") {
         let mut total = 0u64;
         let mut available = 0u64;
-        
+
         for line in content.lines() {
             if line.starts_with("MemTotal:") {
-                total = line.split(':')
+                total = line
+                    .split(':')
                     .nth(1)
                     .and_then(|s| s.split_whitespace().next())
                     .and_then(|s| s.parse::<u64>().ok())
                     .unwrap_or(0);
             } else if line.starts_with("MemAvailable:") {
-                available = line.split(':')
+                available = line
+                    .split(':')
                     .nth(1)
                     .and_then(|s| s.split_whitespace().next())
                     .and_then(|s| s.parse::<u64>().ok())
                     .unwrap_or(0);
             }
         }
-        
+
         (total, available)
     } else {
         (8192 * 1024, 4096 * 1024) // Fallback: 8GB total, 4GB available
@@ -689,7 +694,6 @@ pub async fn delete_secret(
     Ok(StatusCode::NO_CONTENT)
 }
 
-
 // === API Keys ===
 
 #[derive(Debug, serde::Deserialize)]
@@ -704,16 +708,28 @@ pub struct ApiKeyInfo {
     pub has_key: bool,
 }
 
-pub async fn list_api_keys(
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<ApiKeyInfo>> {
+pub async fn list_api_keys(State(state): State<Arc<AppState>>) -> Json<Vec<ApiKeyInfo>> {
     let keys = state.api_keys.read().await;
-    let providers = ["zai", "anthropic", "openai", "kimi", "google", "kimi-code", "access", "huggingface"];
+    let providers = [
+        "zai",
+        "anthropic",
+        "openai",
+        "kimi",
+        "google",
+        "kimi-code",
+        "access",
+        "huggingface",
+    ];
 
-    Json(providers.iter().map(|p| ApiKeyInfo {
-        provider: p.to_string(),
-        has_key: keys.contains_key(*p),
-    }).collect())
+    Json(
+        providers
+            .iter()
+            .map(|p| ApiKeyInfo {
+                provider: p.to_string(),
+                has_key: keys.contains_key(*p),
+            })
+            .collect(),
+    )
 }
 
 pub async fn set_api_key(
@@ -722,13 +738,13 @@ pub async fn set_api_key(
 ) -> Result<StatusCode, (StatusCode, String)> {
     let mut keys = state.api_keys.write().await;
     keys.insert(req.provider.clone(), req.key);
-    
+
     // Persist to disk
     let keys_path = state.data_dir.join("api_keys.json");
     if let Ok(json) = serde_json::to_string_pretty(&*keys) {
         let _ = std::fs::write(&keys_path, json);
     }
-    
+
     Ok(StatusCode::CREATED)
 }
 
@@ -738,13 +754,13 @@ pub async fn delete_api_key(
 ) -> Result<StatusCode, (StatusCode, String)> {
     let mut keys = state.api_keys.write().await;
     keys.remove(&provider);
-    
+
     // Persist to disk
     let keys_path = state.data_dir.join("api_keys.json");
     if let Ok(json) = serde_json::to_string_pretty(&*keys) {
         let _ = std::fs::write(&keys_path, json);
     }
-    
+
     Ok(StatusCode::NO_CONTENT)
 }
 

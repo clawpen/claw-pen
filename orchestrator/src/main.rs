@@ -38,7 +38,6 @@ pub struct AppState {
     pub data_dir: std::path::PathBuf,
 }
 
-
 fn load_api_keys(data_dir: &std::path::Path) -> HashMap<String, String> {
     let keys_path = data_dir.join("api_keys.json");
     if keys_path.exists() {

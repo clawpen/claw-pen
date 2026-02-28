@@ -55,41 +55,51 @@ struct DeviceKeys {
 
 fn load_or_create_device_keys() -> Result<DeviceKeys> {
     let path = get_device_keys_path();
-    
+
     if path.exists() {
         let data = fs::read_to_string(&path)?;
         let keys: serde_json::Value = serde_json::from_str(&data)?;
-        
-        let private_key_b64 = keys["privateKey"].as_str().ok_or_else(|| anyhow::anyhow!("Missing privateKey"))?;
+
+        let private_key_b64 = keys["privateKey"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing privateKey"))?;
         let private_key_bytes = BASE64.decode(private_key_b64)?;
-        let bytes: [u8; 32] = private_key_bytes.try_into().map_err(|_| anyhow::anyhow!("Invalid key length"))?;
+        let bytes: [u8; 32] = private_key_bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Invalid key length"))?;
         let signing_key = SigningKey::from_bytes(&bytes);
-        
+
         let device_id = keys["deviceId"].as_str().unwrap_or("unknown").to_string();
-        
-        return Ok(DeviceKeys { signing_key, device_id });
+
+        return Ok(DeviceKeys {
+            signing_key,
+            device_id,
+        });
     }
-    
+
     let mut rng = OsRng;
     let signing_key = SigningKey::generate(&mut rng);
     let verifying_key = signing_key.verifying_key();
-    
+
     let mut hasher = Sha256::new();
     hasher.update(verifying_key.to_bytes());
     let device_id = hex::encode(hasher.finalize());
-    
+
     let keys_json = serde_json::json!({
         "privateKey": BASE64.encode(signing_key.to_bytes()),
         "publicKey": BASE64.encode(verifying_key.to_bytes()),
         "deviceId": device_id
     });
-    
+
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::write(&path, serde_json::to_string_pretty(&keys_json)?)?;
-    
-    Ok(DeviceKeys { signing_key, device_id })
+
+    Ok(DeviceKeys {
+        signing_key,
+        device_id,
+    })
 }
 
 #[tauri::command]
@@ -102,23 +112,20 @@ fn build_connect_request(req_id: &str, nonce: &str, device_keys: &DeviceKeys) ->
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    
+
     let scopes = "operator.admin,operator.approvals,operator.pairing";
-    
+
     let message = format!(
         "v2|{}|openclaw-control-ui|webchat|operator|{}|{}||{}",
-        device_keys.device_id,
-        scopes,
-        signed_at,
-        nonce
+        device_keys.device_id, scopes, signed_at, nonce
     );
-    
+
     eprintln!("[Device] Signing message: {}", &message);
-    
+
     let signature = device_keys.signing_key.sign(message.as_bytes());
     let signature_b64 = BASE64.encode(signature.to_bytes());
     let public_key_b64 = BASE64.encode(device_keys.signing_key.verifying_key().to_bytes());
-    
+
     serde_json::json!({
         "type": "req",
         "id": req_id,
@@ -144,7 +151,8 @@ fn build_connect_request(req_id: &str, nonce: &str, device_keys: &DeviceKeys) ->
             "caps": [],
             "commands": []
         }
-    }).to_string()
+    })
+    .to_string()
 }
 
 #[tauri::command]
@@ -154,22 +162,23 @@ async fn connect_websocket(
     url: String,
 ) -> Result<(), String> {
     let app_handle = app.clone();
-    
-    let device_keys = load_or_create_device_keys().map_err(|e| format!("Failed to load device keys: {}", e))?;
+
+    let device_keys =
+        load_or_create_device_keys().map_err(|e| format!("Failed to load device keys: {}", e))?;
     eprintln!("[Device] ID: {}", device_keys.device_id);
-    
+
     let (tx, mut rx) = channel::<String>(100);
     *state.ws_sender.lock().await = Some(tx);
-    
+
     eprintln!("[WS] Connecting to: {}", url);
-    
+
     let signing_key_bytes = device_keys.signing_key.to_bytes();
     let device_id = device_keys.device_id.clone();
 
     tokio::spawn(async move {
         loop {
             eprintln!("[WS] Attempting connection to {}", url);
-            
+
             let request = Request::builder()
                 .uri(&url)
                 .header("Host", "127.0.0.1:18790")
@@ -180,19 +189,22 @@ async fn connect_websocket(
                 .header("Origin", "http://127.0.0.1:18790")
                 .body(())
                 .unwrap();
-            
+
             match connect_async_with_config(request, None, false).await {
                 Ok((ws_stream, _)) => {
                     eprintln!("[WS] Connected successfully");
                     let _ = app_handle.emit("ws-connected", true);
-                    
+
                     let (mut write, mut read) = ws_stream.split();
                     let mut authenticated = false;
                     let mut connect_sent = false;
-                    
+
                     let signing_key = SigningKey::from_bytes(&signing_key_bytes);
-                    let dk = DeviceKeys { signing_key, device_id: device_id.clone() };
-                    
+                    let dk = DeviceKeys {
+                        signing_key,
+                        device_id: device_id.clone(),
+                    };
+
                     loop {
                         tokio::select! {
                             msg = read.next() => {
@@ -200,11 +212,11 @@ async fn connect_websocket(
                                     Some(Ok(m)) => {
                                         if m.is_text() {
                                             let text = m.to_string();
-                                            
+
                                             if !connect_sent && text.contains("\"event\":\"connect.challenge\"") {
                                                 let nonce = extract_nonce(&text).unwrap_or("");
                                                 eprintln!("[WS] Got challenge, nonce: {}", nonce);
-                                                
+
                                                 let id = REQUEST_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
                                                 let response = build_connect_request(
                                                     &format!("cp-{}", id),
@@ -253,7 +265,7 @@ async fn connect_websocket(
                             }
                         }
                     }
-                    
+
                     let _ = app_handle.emit("ws-connected", false);
                 }
                 Err(e) => {
@@ -261,7 +273,7 @@ async fn connect_websocket(
                     let _ = app_handle.emit("ws-connected", false);
                 }
             }
-            
+
             eprintln!("[WS] Reconnecting in 3s...");
             tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
         }
@@ -274,7 +286,7 @@ fn extract_nonce(json: &str) -> Option<&str> {
     if let Some(start) = json.find("\"nonce\":\"") {
         let start = start + 9;
         if let Some(end) = json[start..].find("\"") {
-            return Some(&json[start..start+end]);
+            return Some(&json[start..start + end]);
         }
     }
     None
@@ -282,7 +294,8 @@ fn extract_nonce(json: &str) -> Option<&str> {
 
 fn uuid() -> String {
     let mut rng = rand::thread_rng();
-    format!("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
         rng.gen::<u32>(),
         rng.gen::<u16>(),
         rng.gen::<u16>(),
@@ -292,12 +305,9 @@ fn uuid() -> String {
 }
 
 #[tauri::command]
-async fn send_chat_message(
-    state: State<'_, AppState>,
-    text: String,
-) -> Result<(), String> {
+async fn send_chat_message(state: State<'_, AppState>, text: String) -> Result<(), String> {
     let sender = state.ws_sender.lock().await;
-    
+
     if let Some(tx) = sender.as_ref() {
         let id = REQUEST_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
         let idempotency_key = uuid();
@@ -311,9 +321,12 @@ async fn send_chat_message(
                 "deliver": false,
                 "idempotencyKey": idempotency_key
             }
-        }).to_string();
-        
-        tx.send(msg).await.map_err(|e: tokio::sync::mpsc::error::SendError<String>| e.to_string())?;
+        })
+        .to_string();
+
+        tx.send(msg)
+            .await
+            .map_err(|e: tokio::sync::mpsc::error::SendError<String>| e.to_string())?;
         Ok(())
     } else {
         Err("WebSocket not connected".to_string())
