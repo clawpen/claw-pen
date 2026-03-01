@@ -1,3 +1,25 @@
+//! API handlers for Claw Pen Orchestrator
+//!
+//! # Authentication
+//!
+//! All endpoints except `/health`, `/auth/login`, `/auth/register`, and `/auth/status`
+//! require JWT authentication via the `Authorization: Bearer <token>` header.
+//!
+//! WebSocket endpoints accept the JWT token via the `?token=<jwt>` query parameter.
+//!
+//! ## Getting a Token
+//!
+//! 1. First, set an admin password using the CLI: `claw-pen-orchestrator --set-password`
+//!    OR enable registration with `ENABLE_REGISTRATION=true` and call POST /auth/register
+//!
+//! 2. Authenticate: `POST /auth/login` with `{"password": "your-password"}`
+//!
+//! 3. Use the returned `access_token` in subsequent requests:
+//!    `Authorization: Bearer <access_token>`
+//!
+//! 4. Refresh tokens with `POST /auth/refresh` when the access token expires
+
+use crate::validation;
 use axum::extract::ws::{WebSocket, WebSocketUpgrade};
 use axum::{
     body::Body,
@@ -7,6 +29,11 @@ use axum::{
     Json,
 };
 use serde::Serialize;
+
+// Helper to sanitize error messages before returning to clients
+fn sanitize_error(e: &str) -> String {
+    validation::sanitize_error_message(e)
+}
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -62,6 +89,92 @@ pub async fn create_agent(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateAgentRequest>,
 ) -> Result<Json<AgentContainer>, (StatusCode, String)> {
+    // === Input Validation ===
+    
+    // Validate agent name (container name)
+    if let Err(e) = validation::validate_container_name(&req.name) {
+        return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
+    }
+    
+    // Validate project name if provided
+    if let Some(ref project) = req.project {
+        if let Err(e) = validation::validate_project_name(project) {
+            return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
+        }
+    }
+    
+    // Validate tags if provided
+    for tag in &req.tags {
+        if let Err(e) = validation::validate_tag(tag) {
+            return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
+        }
+    }
+    
+    // Validate config limits if provided
+    if let Some(ref cfg) = req.config {
+        // Validate env vars count
+        if let Some(ref env) = cfg.env_vars {
+            if env.len() > validation::MAX_ENV_VARS_COUNT {
+                return Err((StatusCode::BAD_REQUEST, format!("Too many environment variables (max {})", validation::MAX_ENV_VARS_COUNT)));
+            }
+            // Validate each env var key/value
+            for (key, value) in env {
+                if let Err(e) = validation::validate_env_key(key) {
+                    return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
+                }
+                if let Err(e) = validation::validate_env_value(value) {
+                    return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
+                }
+            }
+        }
+        
+        // Validate secrets count
+        if let Some(ref secrets) = cfg.secrets {
+            if secrets.len() > validation::MAX_SECRETS_COUNT {
+                return Err((StatusCode::BAD_REQUEST, format!("Too many secrets (max {})", validation::MAX_SECRETS_COUNT)));
+            }
+            for secret in secrets {
+                if let Err(e) = validation::validate_secret_name(secret) {
+                    return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
+                }
+            }
+        }
+        
+        // Validate volumes count and paths
+        if let Some(ref volumes) = cfg.volumes {
+            if volumes.len() > validation::MAX_VOLUMES_COUNT {
+                return Err((StatusCode::BAD_REQUEST, format!("Too many volumes (max {})", validation::MAX_VOLUMES_COUNT)));
+            }
+            for vol in volumes {
+                // Note: Full path validation requires filesystem access, done at container creation
+                if let Err(e) = validation::validate_container_target(&vol.target) {
+                    return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
+                }
+            }
+        }
+        
+        // Validate LLM model name if provided
+        if let Some(ref model) = cfg.llm_model {
+            if let Err(e) = validation::validate_llm_model(model) {
+                return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
+            }
+        }
+        
+        // Validate memory and CPU if provided
+        if let Some(mem) = cfg.memory_mb {
+            if let Err(e) = validation::validate_memory_mb(mem) {
+                return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
+            }
+        }
+        if let Some(cpu) = cfg.cpu_cores {
+            if let Err(e) = validation::validate_cpu_cores(cpu) {
+                return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
+            }
+        }
+    }
+    
+    // === End Input Validation ===
+
     // Build config from template + overrides
     let mut config = if let Some(ref template_name) = req.template {
         state
@@ -420,9 +533,29 @@ pub async fn get_logs(
 pub async fn logs_websocket(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
     ws: WebSocketUpgrade,
-) -> Response {
-    ws.on_upgrade(move |socket| handle_logs_stream(socket, state, id))
+) -> Result<Response, (StatusCode, String)> {
+    // Validate JWT token from query parameter
+    let token = params.get("token").ok_or((
+        StatusCode::UNAUTHORIZED,
+        "Missing authentication token".to_string(),
+    ))?;
+    
+    let auth = state.auth.read().await;
+    auth.validate_token(token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {}", e)))?;
+    drop(auth);
+
+    // Check if agent exists
+    let containers = state.containers.read().await;
+    let _agent = containers
+        .iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
+    drop(containers);
+
+    Ok(ws.on_upgrade(move |socket| handle_logs_stream(socket, state, id)))
 }
 
 async fn handle_logs_stream(mut socket: WebSocket, state: Arc<AppState>, id: String) {
@@ -765,7 +898,6 @@ pub async fn delete_api_key(
 }
 
 // === Snapshots ===
-// === Snapshots ===
 
 pub async fn list_snapshots(
     State(state): State<Arc<AppState>>,
@@ -896,11 +1028,28 @@ fn parse_provider(s: &str) -> LlmProvider {
 
 // === Chat WebSocket ===
 
+/// WebSocket endpoint for agent chat
+/// 
+/// Authentication: Pass JWT token via `?token=<jwt>` query parameter
+/// 
+/// Example: `ws://localhost:3000/api/agents/{id}/chat?token=eyJhbGciOiJIUzI1NiIs...`
 pub async fn chat_websocket(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, (StatusCode, String)> {
+    // Validate JWT token from query parameter
+    let token = params.get("token").ok_or((
+        StatusCode::UNAUTHORIZED,
+        "Missing authentication token".to_string(),
+    ))?;
+    
+    let auth = state.auth.read().await;
+    let _claims = auth.validate_token(token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {}", e)))?;
+    drop(auth);
+
     // Check if agent exists and is running
     let containers = state.containers.read().await;
     let agent = containers
@@ -1012,11 +1161,25 @@ pub struct ClassifyRequest {
 }
 
 /// WebSocket endpoint for team chat with routing
+/// 
+/// Authentication: Pass JWT token via `?token=<jwt>` query parameter
 pub async fn team_chat_websocket(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, (StatusCode, String)> {
+    // Validate JWT token from query parameter
+    let token = params.get("token").ok_or((
+        StatusCode::UNAUTHORIZED,
+        "Missing authentication token".to_string(),
+    ))?;
+    
+    let auth = state.auth.read().await;
+    auth.validate_token(token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {}", e)))?;
+    drop(auth);
+
     // Check if team exists
     let team = state
         .teams

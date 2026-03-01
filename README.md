@@ -1,10 +1,22 @@
 # Claw Pen 🦀
 
-> ⚠️ **WORK IN PROGRESS** — Early development. Not ready for production use.
+> Easy OpenClaw agent deployment. Create, configure, and manage isolated AI agents with one command.
 
 ![Status](https://img.shields.io/badge/status-WIP-red) ![Version](https://img.shields.io/badge/version-1.0.0--alpha-orange) ![CI](https://github.com/AchyErrorJ/claw-pen/actions/workflows/ci.yml/badge.svg)
 
-**Easy OpenClaw agent deployment.** Create, configure, and manage isolated AI agents with one command.
+## What It Does
+
+Claw Pen lets you run multiple AI agents in isolated containers, each with its own:
+- LLM provider and model
+- Memory and CPU limits
+- Environment variables and secrets
+- Network identity (via Tailscale)
+
+Perfect for:
+- Running specialized agents for different tasks
+- Testing agents with different models side-by-side
+- Isolating production agents from experiments
+- Building multi-agent teams with smart routing
 
 ## Quick Start
 
@@ -19,333 +31,273 @@ git clone https://github.com/AchyErrorJ/claw-pen.git
 cd claw-pen/orchestrator && cargo build --release
 ```
 
-### Create an Agent
+### Set Password
 
 ```bash
-# From template (easiest)
-claw-pen create --template coding-assistant --name my-coder
-
-# Custom
-claw-pen create --name my-agent --provider openai --model gpt-4o
+./claw-pen-orchestrator --set-password
 ```
 
-### Templates
+### Start & Create Agent
 
-Templates are just starting points — override anything at creation:
+```bash
+# Start the orchestrator
+./claw-pen-orchestrator
 
-| Template | Default Provider | Typical Use Case |
-|----------|------------------|------------------|
+# In another terminal, login and create an agent
+export TOKEN=$(curl -s -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"password": "your-password"}' | jq -r '.access_token')
+
+curl -X POST http://localhost:3000/api/agents \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-agent", "template": "coding-assistant"}'
+```
+
+📖 **[Full Getting Started Guide →](docs/GETTING-STARTED.md)**
+
+## Templates
+
+Create agents instantly from pre-configured templates:
+
+| Template | Provider | Use Case |
+|----------|----------|----------|
+| `openclaw-agent` | z.ai | Full OpenClaw with built-in webchat |
 | `coding-assistant` | OpenAI | General coding |
 | `code-reviewer` | Anthropic | PR reviews |
-| `local-assistant` | Ollama | Private, local |
-| `lm-studio` | LM Studio | Local, easy GUI |
+| `local-assistant` | Ollama | Private, offline |
+| `lm-studio` | LM Studio | Local with GUI |
 | `researcher` | OpenAI | Web research |
-| `devops` | OpenAI | Infrastructure |
-| `kimi` | Kimi (Moonshot) | Long-context Chinese/English (OAuth) |
-| `zai` | z.ai | z.ai powered assistant (OAuth) |
+| `tutor-box` | z.ai | Learning companion |
 
-> **OAuth Providers:** Kimi and z.ai use OAuth authentication. Tokens are managed by the OpenClaw Gateway — no API keys needed in container config. Configure once via `openclaw configure`.
-
-> 💡 These are suggestions, not requirements. Use any template with any provider/model:
+Override anything at creation:
 
 ```bash
-# Researcher template, but local
-claw-pen create --template researcher --provider ollama --model llama3.2
-
-# Coding assistant with a smaller model
-claw-pen create --template coding-assistant --model gpt-4o-mini
-
-# Skip templates entirely, bring your own config
-claw-pen create --name custom --provider lmstudio --model "" --memory 4096
+# Local researcher
+curl -X POST http://localhost:3000/api/agents \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "local-researcher",
+    "template": "researcher",
+    "config": {
+      "llm_provider": "ollama",
+      "llm_model": "llama3.2"
+    }
+  }'
 ```
 
-## Deployment Modes
+## Teams & Routing
 
-Claw Pen supports three deployment patterns. Choose based on your setup:
+Group specialists into a team with automatic message routing:
 
-### Mode 1: All Windows (WSL2)
+```toml
+# teams/finance.toml
+[team]
+name = "Finance AI Team"
 
-Everything runs on Windows except containers.
+[router]
+mode = "hybrid"
 
-```
-Windows
-├── Tauri App (GUI)
-├── Orchestrator (port 3000)
-├── AndOR Bridge (port 3456)
-├── AndOR Hub
-├── OpenClaw Gateway (port 18789)
-├── Model Server (Ollama/LM Studio)
-└── WSL2
-    └── Containment Runtime + Agent Containers
-```
+[agents]
+receipts = { agent = "finn", description = "Expense receipts" }
+payables = { agent = "pax", description = "Bills to pay" }
 
-Configure:
-```bash
-DEPLOYMENT_MODE=windows-wsl
-RUNTIME_SOCKET=//./pipe/docker_engine
-ANDOR_BRIDGE__URL=http://localhost:3456
+[routing.receipts]
+keywords = ["receipt", "expense", "bought"]
 ```
 
-### Mode 2: All Linux
+One endpoint → routed to the right specialist automatically.
 
-Everything runs on a single Linux machine (VM or bare metal).
-
-```
-Linux
-├── Tauri App (local or remote via Tailscale)
-├── Orchestrator (port 3000)
-├── AndOR Bridge (port 3456)
-├── AndOR Hub
-├── OpenClaw Gateway (port 18789)
-├── Model Server (Ollama/LM Studio)
-└── Containment Runtime + Agent Containers
-```
-
-Configure:
-```bash
-DEPLOYMENT_MODE=linux-native
-RUNTIME_SOCKET=/var/run/docker.sock
-ANDOR_BRIDGE__URL=http://localhost:3456
-```
-
-### Mode 3: Split (Windows + Linux VM)
-
-Orchestrator and containers on Linux, GUI and bridge on Windows. Connected via Tailscale.
-
-```
-Linux VM (Tailnet: linux-agent-host)
-├── Orchestrator (port 3000)
-├── Containment Runtime + Agent Containers
-├── Model Server (optional)
-└── OpenClaw Gateway (if agents need it)
-
-Windows (Tailnet: windows-desktop)
-├── Tauri App
-├── AndOR Bridge (connects to Linux orchestrator)
-├── AndOR Hub
-└── Model Server (optional, shared with Linux)
-```
-
-Configure on Linux:
-```bash
-DEPLOYMENT_MODE=linux-native
-RUNTIME_SOCKET=/var/run/docker.sock
-```
-
-Configure AndOR Bridge on Windows:
-```bash
-ANDOR_BRIDGE__URL=http://linux-agent-host.tailXXXX.ts.net:3456
-OPENCLAW_GATEWAY_URL=http://linux-agent-host.tailXXXX.ts.net:18789
-```
-
-Configure Orchestrator on Linux to accept remote connections:
-```bash
-ORCHESTRATOR_BIND=0.0.0.0:3000
-```
-
----
-
-**Quick reference:**
-
-| Mode | Orchestrator | Containers | AndOR Bridge | Best For |
-|------|--------------|------------|--------------|----------|
-| `windows-wsl` | Windows | WSL2 (Containment) | Windows | Windows dev, simple setup |
-| `linux-native` | Linux | Linux (Containment) | Linux | Servers, single machine |
-| `split` | Linux VM | Linux VM (Containment) | Windows | Hybrid, Windows GUI + Linux backend |
+📖 **[Teams Documentation →](docs/TEAMS.md)**
 
 ## Architecture
 
 ```
-[Tauri Desktop App] ──→ [Orchestrator API] ──→ [Containment Runtime]
-        │                     │                      │
-        │              ┌──────┴──────┐              │
-        │              ↓             ↓              ↓
-   Setup wizard    [Agent 1]     [Agent N]    Linux namespaces
-   Agent management (Tailscale)   (Tailscale)  cgroups, seccomp
-   Settings/config                          │
-        │                                   └── WSL2 (on Windows)
-        └── [Yew Web UI] ←── Mobile/browser monitoring
+┌─────────────────┐
+│  Tauri App      │  Desktop GUI with setup wizard
+│  (or Web UI)    │
+└────────┬────────┘
+         │ HTTP/WebSocket
+         ▼
+┌─────────────────┐
+│  Orchestrator   │  Rust API (Axum), JWT auth
+│  (port 3000)    │  Template & team management
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Container      │  Docker/Podman/Containment
+│  Runtime        │
+└────────┬────────┘
+         │
+    ┌────┴────┬─────────┐
+    ▼         ▼         ▼
+┌───────┐ ┌───────┐ ┌───────┐
+│Agent A│ │Agent B│ │Agent C│
+│(isolated)│(isolated)│(isolated)│
+└───────┘ └───────┘ └───────┘
 ```
 
-**Runtime:** Uses [Containment](https://github.com/containment/container) — a lightweight container runtime optimized for AI agents. No Docker required.
+Each agent runs in its own container with dedicated resources and networking.
 
-### User Flow
+📖 **[Architecture Deep Dive →](docs/ARCHITECTURE.md)**
 
-1. **Install** → Tauri app with setup wizard
-2. **Setup** → Checks Docker, WSL2, Tailscale; pulls images
-3. **Manage** → Create agents, configure providers, start/stop
-4. **Monitor** → Yew dashboard for on-the-go status (optional)
+## Authentication
 
-## Projects
+Claw Pen uses JWT authentication for all API endpoints.
 
-- `runtime/` — Rust container runtime (WIP by Jer)
-- `orchestrator/` — Rust API layer, config management, serves Yew UI
-- `ui/` — Yew web dashboard (monitoring on the go)
-- `tauri-app/` — Desktop app with setup wizard (builds, in testing)
-- `agents/` — Pre-configured agent examples (Finance AI Team, etc.)
-
-For the UI, build the WASM and serve via Tauri on Windows.
-
-## Tech Stack
-
-- **Runtime:** Containment (Linux namespaces, cgroups, seccomp)
-- **Orchestrator:** Rust (axum), serves Yew UI
-- **Desktop App:** Tauri (setup wizard, full management)
-- **Web Dashboard:** Yew (WASM, mobile-friendly monitoring)
-- **Networking:** Tailscale mesh or Headscale (self-hosted)
-
-## Goals
-
-- One-click install via Tauri setup wizard
-- GUI-first: create, configure, manage agents from desktop app
-- Lightweight web dashboard for mobile monitoring
-- Isolated agent containers, each with own Tailscale address
-- Per-container config: LLM provider, cores, RAM, env vars
-- Cross-platform (compile on Linux, run on Windows)
-
-## AndOR Bridge Integration
-
-Claw Pen can automatically register agents with [AndOR Hub](https://github.com/your-repo/andor-bridge) for per-agent DM channels.
-
-Configure in `.env`:
-```
-ANDOR_BRIDGE__URL=http://localhost:3456
-ANDOR_BRIDGE__REGISTER_ON_CREATE=true
-```
-
-When enabled:
-- Creating an agent → Registers with AndOR Bridge
-- Deleting an agent → Unregisters from AndOR Bridge
-- Each agent gets its own DM channel via @mention or channel name
-
-All communication stays on your Tailscale network.
-
-## Teams & Router Agents
-
-Claw Pen supports **teams** — groups of specialist agents with a single router entry point. The router classifies incoming messages and routes them to the appropriate specialist.
-
-### Example: Finance AI Team
-
-```
-agents/finance/
-├── finn/      # Receipts & expenses
-├── rae/       # Invoicing & receivables
-├── pax/       # Bills & payables
-└── reporter/  # Financial summaries
-```
-
-One email/channel → routed to the right specialist automatically.
-
-### Quick Example
-
-```toml
-# teams/finance-team.toml
-[team]
-name = "Finance AI Team"
-
-[agents]
-receipts = { agent = "finn", description = "Handles expense receipts" }
-payables = { agent = "pax", description = "Handles bills to pay" }
-
-[routing.receipts]
-keywords = ["receipt", "expense", "bought", "purchased"]
-
-[routing.payables]
-keywords = ["pay", "bill", "owe", "vendor"]
-```
-
-Connect to the team:
+### Setup
 
 ```bash
-# WebSocket endpoint for routed chat
-ws://localhost:3000/api/teams/finance-team/chat
+# Set admin password
+./claw-pen-orchestrator --set-password
 ```
 
-Messages are automatically routed:
-- "I bought office supplies" → `finn` (receipts)
-- "Need to pay the electric bill" → `pax` (payables)
+### Login
 
-See [docs/TEAMS.md](docs/TEAMS.md) for full documentation.
+```bash
+# Get access token
+curl -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"password": "your-password"}'
+
+# Returns:
+# {
+#   "access_token": "eyJ...",
+#   "refresh_token": "eyJ...",
+#   "expires_in": 86400
+# }
+```
+
+### Use Token
+
+```bash
+# HTTP requests
+curl http://localhost:3000/api/agents \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# WebSocket connections
+wscat -c "ws://localhost:3000/api/agents/my-agent/chat?token=YOUR_TOKEN"
+```
+
+### Refresh
+
+```bash
+curl -X POST http://localhost:3000/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "YOUR_REFRESH_TOKEN"}'
+```
+
+## Deployment Modes
+
+| Mode | Orchestrator | Containers | Best For |
+|------|--------------|------------|----------|
+| `linux-native` | Linux | Linux | Servers, single machine |
+| `windows-wsl` | Windows | WSL2 | Windows development |
+| `split` | Linux VM | Linux VM | Windows GUI + Linux backend |
+
+Configure in `claw-pen.toml`:
+```toml
+deployment-mode = "linux-native"
+runtime-socket = "/var/run/docker.sock"
+```
 
 ## Local Models
 
-For agents using local LLMs (Ollama, llama.cpp, vLLM, LM Studio), run a **shared model server** on the host:
-
-```
-[Model Server (GPU)] ← HTTP → [Agent Containers]
-     Ollama/:11434
-```
-
-Benefits:
-- One model in memory, shared by multiple agents
-- GPU utilization stays efficient
-- Agents using local models need less RAM allocated
-
-### LM Studio
-
-1. Download and install [LM Studio](https://lmstudio.ai/)
-2. Load a model in LM Studio
-3. Start the local server (default: `http://localhost:1234`)
-4. Create an agent:
-
-```bash
-curl -X POST http://localhost:3000/api/agents \
-  -H "Content-Type: application/json" \
-  -d '{"name": "my-local-agent", "template": "lm-studio"}'
-```
-
-Configure in `.env`:
-```
-MODEL_SERVERS__LM_STUDIO__ENDPOINT=http://localhost:1234
-```
+Run agents with local LLMs - no API keys needed.
 
 ### Ollama
 
 ```bash
-ollama serve
+# Install and start
+curl https://ollama.ai/install.sh | sh
+ollama serve &
 ollama pull llama3.2
+
+# Create agent
+curl -X POST http://localhost:3000/api/agents \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "local-agent", "template": "local-assistant"}'
 ```
 
-Configure in `.env`:
-```
-MODEL_SERVERS__OLLAMA__ENDPOINT=http://localhost:11434
-MODEL_SERVERS__OLLAMA__DEFAULT_MODEL=llama3.2
-```
+### LM Studio
 
-Cloud providers (OpenAI, Anthropic, etc.) work out of the box — just set API keys per-agent.
+1. Download from lmstudio.ai
+2. Load a model and start the server
+3. Use the `lm-studio` template
+
+## API Reference
+
+### Authentication
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/auth/login` | POST | Get JWT tokens |
+| `/auth/refresh` | POST | Refresh access token |
+| `/auth/status` | GET | Check auth config |
+
+### Agents
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/agents` | GET | List agents |
+| `/api/agents` | POST | Create agent |
+| `/api/agents/:id` | GET/PUT/DELETE | Get/update/delete agent |
+| `/api/agents/:id/start` | POST | Start agent |
+| `/api/agents/:id/stop` | POST | Stop agent |
+| `/api/agents/:id/chat` | WS | Chat with agent |
+| `/api/agents/:id/logs` | GET | Get logs |
+
+### Teams
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/teams` | GET | List teams |
+| `/api/teams/:id` | GET | Get team config |
+| `/api/teams/:id/chat` | WS | Routed team chat |
 
 ## Project Structure
 
 ```
 claw-pen/
-├── orchestrator/     # REST API + Docker runtime
-├── ui/               # Yew web dashboard (monitoring)
-├── tauri-app/        # Desktop app with setup wizard
-├── runtime/          # Custom container runtime (future)
-├── agents/           # Pre-configured agent examples
-├── teams/            # Team configurations with router agents
-├── images/           # Pre-built OpenClaw container images
-├── scripts/          # Install scripts
-└── templates/        # Agent configuration templates
+├── orchestrator/     # Rust API server
+├── templates/        # Agent templates (YAML)
+├── teams/            # Team configurations (TOML)
+├── agents/           # Example agent setups
+├── tauri-app/        # Desktop GUI (Tauri)
+├── ui/               # Web dashboard (Yew/WASM)
+└── runtime/          # Custom container runtime (future)
 ```
 
-## Networking Options
+## Prerequisites
 
-Claw Pen supports two mesh networking backends:
+- **Docker** 20.10+ (or Podman 4.0+)
+- **Rust** 1.70+ (building from source)
+- **Node.js** 18+ (Tauri app)
+- **4GB RAM** minimum (8GB+ for local models)
 
-| Backend | Description |
-|---------|-------------|
-| **Tailscale** | Managed mesh (default) |
-| **Headscale** | Self-hosted Tailscale control plane |
+## Documentation
 
-Configure via environment:
+- [Getting Started](docs/GETTING-STARTED.md) - Step-by-step guide
+- [Architecture](docs/ARCHITECTURE.md) - How it works
+- [Templates](docs/TEMPLATES.md) - Template guide
+- [Teams](docs/TEAMS.md) - Multi-agent routing
+- [Security Fixes](docs/SECURITY_FIXES.md) - Security notes
 
-```bash
-# Tailscale (default)
-NETWORK_BACKEND=tailscale
+## Links
 
-# Headscale
-NETWORK_BACKEND=headscale
-HEADSCALE_URL=https://mesh.yourcompany.com
-HEADSCALE_AUTH_KEY=<pre-auth-key>
-```
+- **GitHub:** https://github.com/AchyErrorJ/claw-pen
+- **Discord:** https://discord.gg/claw-pen
+- **Website:** https://claw-pen.dev
+
+## Status
+
+⚠️ **Work in Progress** - Early development. Not ready for production use.
+
+Contributions welcome! See [GitHub Issues](https://github.com/AchyErrorJ/claw-pen/issues) for roadmap.
+
+## License
+
+MIT

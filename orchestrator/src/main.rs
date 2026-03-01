@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 mod andor;
 mod api;
+mod auth;
 mod config;
 mod container;
 mod containment;
@@ -12,6 +13,7 @@ mod storage;
 mod teams;
 mod templates;
 mod types;
+mod validation;
 
 use axum::{
     routing::{delete, get, post},
@@ -20,10 +22,12 @@ use axum::{
 use container::ContainerRuntime;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
+use axum::http::{header, Method, HeaderValue};
 
 use crate::secret_manager::SecretsManager;
 use crate::snapshots::SnapshotManager;
+use crate::auth::AuthManager;
 
 pub struct AppState {
     pub config: config::Config,
@@ -36,6 +40,7 @@ pub struct AppState {
     pub teams: teams::TeamRegistry,
     pub api_keys: RwLock<HashMap<String, String>>,
     pub data_dir: std::path::PathBuf,
+    pub auth: RwLock<AuthManager>,
 }
 
 fn load_api_keys(data_dir: &std::path::Path) -> HashMap<String, String> {
@@ -52,6 +57,14 @@ fn load_api_keys(data_dir: &std::path::Path) -> HashMap<String, String> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Check for CLI password setting mode
+    let args: Vec<String> = std::env::args().collect();
+    if args.contains(&"--set-password".to_string()) {
+        let data_dir = std::path::PathBuf::from("/data/claw-pen/data");
+        auth::cli_set_password(&data_dir)?;
+        return Ok(());
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()))
         .init();
@@ -60,6 +73,14 @@ async fn main() -> anyhow::Result<()> {
     let data_dir = std::path::PathBuf::from("/data/claw-pen/data");
     std::fs::create_dir_all(&data_dir).ok();
     tracing::info!("Loaded config: {:?}", config);
+
+    // Initialize Auth Manager
+    let auth_manager = AuthManager::new(&data_dir)?;
+    if !auth_manager.has_admin() {
+        tracing::warn!("⚠️  No admin password set. Use --set-password to set one, or enable ENABLE_REGISTRATION=true for first-time setup.");
+    } else {
+        tracing::info!("Authentication initialized - admin user configured");
+    }
 
     // Load templates
     let template_registry = templates::TemplateRegistry::load()?;
@@ -144,11 +165,11 @@ async fn main() -> anyhow::Result<()> {
         teams,
         api_keys: RwLock::new(load_api_keys(&data_dir)),
         data_dir,
+        auth: RwLock::new(auth_manager),
     });
 
-    let app = Router::new()
-        // Health check
-        .route("/health", get(api::health))
+    // Create the protected API routes with auth middleware
+    let protected_routes = Router::new()
         // Agent management - more specific routes MUST come before :id routes
         .route("/api/agents/:id/start", post(api::start_agent))
         .route("/api/agents/:id/stop", post(api::stop_agent))
@@ -208,11 +229,49 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/agents/import", post(api::import_agent))
         // Runtime status
         .route("/api/runtime/status", get(api::runtime_status))
-        .layer(CorsLayer::permissive())
+        .route("/api/auth/refresh", post(auth::refresh))
+        .with_state(state.clone());
+
+    // Public routes (no auth required)
+    let public_routes = Router::new()
+        .route("/health", get(api::health))
+        .route("/auth/login", post(auth::login))
+        .route("/auth/register", post(auth::register))
+        .route("/auth/status", get(auth::auth_status))
+        .with_state(state.clone());
+    // Configure CORS with explicit allowed origins (not permissive)
+    // Allowed origins: Claw Pen UI domains and localhost for development
+    let cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _req_parts| {
+            // Check if origin is in allowed list
+            if let Ok(origin_str) = origin.to_str() {
+                // Allow any localhost origin for development (with any port)
+                if origin_str.starts_with("http://localhost:")
+                    || origin_str.starts_with("http://127.0.0.1:")
+                    || origin_str.starts_with("https://localhost")
+                    || origin_str == "tauri://localhost"
+                    || origin_str == "https://tauri.localhost"
+                {
+                    return true;
+                }
+            }
+            false
+        }))
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS, Method::PATCH])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT, header::ORIGIN])
+        .allow_credentials(true);
+
+    let app = Router::new()
+        .merge(public_routes)
+        .merge(protected_routes)
+        .layer(cors)
         .with_state(state);
 
     let addr = format!("{}:{}", "0.0.0.0", 3000);
     tracing::info!("🦀 Claw Pen orchestrator listening on {}", addr);
+    tracing::info!("🔐 JWT authentication enabled - all API endpoints require Bearer token");
+    tracing::info!("   GET /auth/status to check auth configuration");
+    tracing::info!("   POST /auth/login to authenticate");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;

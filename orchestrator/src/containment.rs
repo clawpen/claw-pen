@@ -1,6 +1,7 @@
 // Containment runtime client
 // Communicates with the Containment container runtime
 
+use crate::validation;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -104,6 +105,15 @@ impl ContainmentClient {
 
     async fn create_container_internal(&self, name: &str, config: &AgentConfig) -> Result<String> {
         // Build container spec
+        validation::validate_container_name(name)
+            .map_err(|e| anyhow::anyhow!("Invalid container name: {}", e))?;
+        
+        // Validate resource limits
+        validation::validate_memory_mb(config.memory_mb)
+            .map_err(|e| anyhow::anyhow!("Invalid memory config: {}", e))?;
+        validation::validate_cpu_cores(config.cpu_cores)
+            .map_err(|e| anyhow::anyhow!("Invalid CPU config: {}", e))?;
+
         let spec = serde_json::json!({
             "name": name,
             "image": "openclaw-agent:latest",
@@ -353,21 +363,42 @@ impl ContainmentClient {
     }
 
     /// Build mount specifications
+    /// Build mount specifications with path validation
     fn build_mounts(&self, volumes: &[VolumeMount]) -> Vec<serde_json::Value> {
         volumes
             .iter()
-            .map(|v| {
-                serde_json::json!({
+            .filter_map(|v| {
+                // Validate target path
+                if let Err(e) = validation::validate_container_target(&v.target) {
+                    tracing::warn!("Invalid volume target path {}: {}", v.target, e);
+                    return None;
+                }
+                
+                // Validate source path for path traversal
+                // Note: Full canonicalization requires filesystem access
+                if v.source.contains("..") {
+                    tracing::warn!("Path traversal attempt in volume source: {}", v.source);
+                    return None;
+                }
+                
+                // Check for suspicious source paths
+                let suspicious = ["/etc/passwd", "/etc/shadow", "/root/.ssh", "/var/run/docker.sock"];
+                if suspicious.iter().any(|s| v.source.starts_with(s)) {
+                    tracing::warn!("Suspicious volume source path rejected: {}", v.source);
+                    return None;
+                }
+                
+                Some(serde_json::json!({
                     "type": "bind",
                     "source": v.source,
                     "target": v.target,
                     "readonly": v.read_only,
-                })
+                }))
             })
             .collect()
     }
-}
 
+}
 #[async_trait]
 impl ContainerRuntime for ContainmentClient {
     async fn list_containers(&self) -> Result<Vec<AgentContainer>> {

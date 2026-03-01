@@ -1,4 +1,5 @@
 // Container runtime interface
+use crate::validation;
 // Abstracts over Docker and Containment runtimes
 
 use anyhow::Result;
@@ -196,7 +197,13 @@ impl ContainerRuntime for RuntimeClient {
 // ============================================================================
 
 use bollard::container::{Config, CreateContainerOptions, ListContainersOptions};
+use bollard::network::{CreateNetworkOptions, ConnectNetworkOptions};
 use std::collections::HashMap;
+/// Default port for agent containers (internal communication)
+const AGENT_INTERNAL_PORT: u16 = 8080;
+
+/// Network name for Claw Pen containers (for isolation)
+const CLAW_PEN_NETWORK: &str = "claw-pen-network";
 
 /// Docker runtime client - uses Docker daemon via named pipe or socket
 pub struct DockerClient {
@@ -389,6 +396,47 @@ impl DockerClient {
         );
         labels
     }
+
+    /// Ensure the Claw Pen network exists for container isolation
+    async fn ensure_network(&self) -> Result<()> {
+        // Check if network exists
+        let networks = self.docker.list_networks::<String>(None).await
+            .map_err(|e| anyhow::anyhow!("Failed to list networks: {}", e))?;
+        
+        let exists = networks.iter().any(|n| {
+            n.name.as_ref().map(|name| name == CLAW_PEN_NETWORK).unwrap_or(false)
+        });
+        
+        if !exists {
+            let create_opts = CreateNetworkOptions {
+                name: CLAW_PEN_NETWORK,
+                driver: "bridge",
+                check_duplicate: true,
+                internal: false, // Allow external access for API calls
+                enable_ipv6: false,
+                options: HashMap::new(),
+                labels: HashMap::from([
+                    ("claw-pen", "true"),
+                    ("purpose", "agent-isolation"),
+                ]),
+                ipam: bollard::models::Ipam {
+                    config: Some(vec![bollard::models::IpamConfig {
+                        subnet: Some("172.28.0.0/16".to_string()),
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                },
+                attachable: true,
+                ingress: false,
+            };
+            self.docker.create_network(create_opts).await
+                .map_err(|e| anyhow::anyhow!("Failed to create network: {}", e))?;
+            
+            tracing::info!("Created isolated network: {}", CLAW_PEN_NETWORK);
+        }
+        
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -450,6 +498,16 @@ impl ContainerRuntime for DockerClient {
     }
 
     async fn create_container(&self, name: &str, config: &AgentConfig) -> Result<String> {
+        // Validate container name to prevent command injection
+        validation::validate_container_name(name)
+            .map_err(|e| anyhow::anyhow!("Invalid container name: {}", e))?;
+        
+        // Validate resource limits
+        validation::validate_memory_mb(config.memory_mb)
+            .map_err(|e| anyhow::anyhow!("Invalid memory config: {}", e))?;
+        validation::validate_cpu_cores(config.cpu_cores)
+            .map_err(|e| anyhow::anyhow!("Invalid CPU config: {}", e))?;
+        
         let image = Self::get_image_for_provider(&config.llm_provider);
         let mut env = Self::build_env_vars(config);
 
@@ -459,15 +517,50 @@ impl ContainerRuntime for DockerClient {
 
         let labels = Self::build_labels(name, &config.llm_provider);
 
-        // Container configuration
+        // Ensure the isolated network exists
+        self.ensure_network().await?;
+
+        // Build port bindings for bridge mode
+        // Agent containers expose port 8080 internally for communication
+        let port_bindings = HashMap::from([
+            (
+                format!("{}/tcp", AGENT_INTERNAL_PORT),
+                Some(vec![bollard::models::PortBinding {
+                    host_ip: Some("127.0.0.1".to_string()), // Only bind to localhost for security
+                    host_port: None, // Let Docker assign a random port
+                }]),
+            ),
+        ]);
+
+        // Exposed ports (ports the container listens on)
+        let exposed_ports = HashMap::from([
+            (
+                format!("{}/tcp", AGENT_INTERNAL_PORT),
+                HashMap::new(),
+            ),
+        ]);
+
+        // Container configuration with bridge network (isolated from host)
         let container_config = Config {
             image: Some(image.to_string()),
             env: Some(env),
             labels: Some(labels),
+            exposed_ports: Some(exposed_ports),
             host_config: Some(bollard::models::HostConfig {
                 memory: Some((config.memory_mb * 1024 * 1024) as i64),
                 nano_cpus: Some((config.cpu_cores * 1_000_000_000.0) as i64),
-                network_mode: Some("host".to_string()),
+                // Use bridge mode for network isolation instead of host mode
+                network_mode: Some("bridge".to_string()),
+                port_bindings: Some(port_bindings),
+                // Security options
+                security_opt: Some(vec!["no-new-privileges:true".to_string()]),
+                // Prevent privilege escalation
+                privileged: Some(false),
+                // Read-only root filesystem where possible
+                readonly_rootfs: Some(false), // Some agents may need to write
+                // Drop all capabilities, add only what is needed
+                cap_drop: Some(vec!["ALL".to_string()]),
+                cap_add: Some(vec!["NET_BIND_SERVICE".to_string()]),
                 ..Default::default()
             }),
             ..Default::default()
@@ -484,6 +577,20 @@ impl ContainerRuntime for DockerClient {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create container: {}", e))?;
 
+        // Connect to the isolated Claw Pen network
+        let connect_opts = ConnectNetworkOptions {
+            container: &result.id,
+            endpoint_config: bollard::models::EndpointSettings {
+                // No special endpoint config needed
+                ..Default::default()
+            },
+        };
+        
+        if let Err(e) = self.docker.connect_network(CLAW_PEN_NETWORK, connect_opts).await {
+            tracing::warn!("Failed to connect container to isolated network: {}", e);
+        }
+
+        tracing::info!("Created container {} in isolated bridge network", result.id);
         Ok(result.id)
     }
 
@@ -494,7 +601,6 @@ impl ContainerRuntime for DockerClient {
             .map_err(|e| anyhow::anyhow!("Failed to start container: {}", e))?;
         Ok(())
     }
-
     async fn stop_container(&self, id: &str) -> Result<()> {
         use bollard::container::StopContainerOptions;
 
