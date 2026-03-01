@@ -1,0 +1,16 @@
+{
+  "codi": {
+    "agentId": "main",
+    "displayName": "Codi",
+    "triggers": ["codi", "openclaw"],
+    "emoji": "🧩",
+    "description": "Main AI assistant"
+  },
+  "kimi": {
+    "agentId": "Kimi Claw 4",
+    "displayName": "Kimi Claw 4",
+    "triggers": ["kimi", "kimiclaw4", "kimi claw 4"],
+    "emoji": "🌙",
+    "description": "Kimi-powered AI assistant"
+  }
+}
