@@ -15,6 +15,7 @@ mod templates;
 mod types;
 mod validation;
 
+use axum::http::{header, HeaderValue, Method};
 use axum::{
     routing::{delete, get, post},
     Router,
@@ -23,11 +24,10 @@ use container::ContainerRuntime;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use axum::http::{header, Method, HeaderValue};
 
+use crate::auth::AuthManager;
 use crate::secret_manager::SecretsManager;
 use crate::snapshots::SnapshotManager;
-use crate::auth::AuthManager;
 
 pub struct AppState {
     pub config: config::Config,
@@ -242,23 +242,37 @@ async fn main() -> anyhow::Result<()> {
     // Configure CORS with explicit allowed origins (not permissive)
     // Allowed origins: Claw Pen UI domains and localhost for development
     let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _req_parts| {
-            // Check if origin is in allowed list
-            if let Ok(origin_str) = origin.to_str() {
-                // Allow any localhost origin for development (with any port)
-                if origin_str.starts_with("http://localhost:")
-                    || origin_str.starts_with("http://127.0.0.1:")
-                    || origin_str.starts_with("https://localhost")
-                    || origin_str == "tauri://localhost"
-                    || origin_str == "https://tauri.localhost"
-                {
-                    return true;
+        .allow_origin(AllowOrigin::predicate(
+            |origin: &HeaderValue, _req_parts| {
+                // Check if origin is in allowed list
+                if let Ok(origin_str) = origin.to_str() {
+                    // Allow any localhost origin for development (with any port)
+                    if origin_str.starts_with("http://localhost:")
+                        || origin_str.starts_with("http://127.0.0.1:")
+                        || origin_str.starts_with("https://localhost")
+                        || origin_str == "tauri://localhost"
+                        || origin_str == "https://tauri.localhost"
+                    {
+                        return true;
+                    }
                 }
-            }
-            false
-        }))
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS, Method::PATCH])
-        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT, header::ORIGIN])
+                false
+            },
+        ))
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+            Method::PATCH,
+        ])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::ACCEPT,
+            header::ORIGIN,
+        ])
         .allow_credentials(true);
 
     let app = Router::new()

@@ -197,7 +197,7 @@ impl ContainerRuntime for RuntimeClient {
 // ============================================================================
 
 use bollard::container::{Config, CreateContainerOptions, ListContainersOptions};
-use bollard::network::{CreateNetworkOptions, ConnectNetworkOptions};
+use bollard::network::{ConnectNetworkOptions, CreateNetworkOptions};
 use std::collections::HashMap;
 /// Default port for agent containers (internal communication)
 const AGENT_INTERNAL_PORT: u16 = 8080;
@@ -400,13 +400,19 @@ impl DockerClient {
     /// Ensure the Claw Pen network exists for container isolation
     async fn ensure_network(&self) -> Result<()> {
         // Check if network exists
-        let networks = self.docker.list_networks::<String>(None).await
+        let networks = self
+            .docker
+            .list_networks::<String>(None)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to list networks: {}", e))?;
-        
+
         let exists = networks.iter().any(|n| {
-            n.name.as_ref().map(|name| name == CLAW_PEN_NETWORK).unwrap_or(false)
+            n.name
+                .as_ref()
+                .map(|name| name == CLAW_PEN_NETWORK)
+                .unwrap_or(false)
         });
-        
+
         if !exists {
             let create_opts = CreateNetworkOptions {
                 name: CLAW_PEN_NETWORK,
@@ -415,10 +421,7 @@ impl DockerClient {
                 internal: false, // Allow external access for API calls
                 enable_ipv6: false,
                 options: HashMap::new(),
-                labels: HashMap::from([
-                    ("claw-pen", "true"),
-                    ("purpose", "agent-isolation"),
-                ]),
+                labels: HashMap::from([("claw-pen", "true"), ("purpose", "agent-isolation")]),
                 ipam: bollard::models::Ipam {
                     config: Some(vec![bollard::models::IpamConfig {
                         subnet: Some("172.28.0.0/16".to_string()),
@@ -429,12 +432,14 @@ impl DockerClient {
                 attachable: true,
                 ingress: false,
             };
-            self.docker.create_network(create_opts).await
+            self.docker
+                .create_network(create_opts)
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to create network: {}", e))?;
-            
+
             tracing::info!("Created isolated network: {}", CLAW_PEN_NETWORK);
         }
-        
+
         Ok(())
     }
 }
@@ -501,13 +506,13 @@ impl ContainerRuntime for DockerClient {
         // Validate container name to prevent command injection
         validation::validate_container_name(name)
             .map_err(|e| anyhow::anyhow!("Invalid container name: {}", e))?;
-        
+
         // Validate resource limits
         validation::validate_memory_mb(config.memory_mb)
             .map_err(|e| anyhow::anyhow!("Invalid memory config: {}", e))?;
         validation::validate_cpu_cores(config.cpu_cores)
             .map_err(|e| anyhow::anyhow!("Invalid CPU config: {}", e))?;
-        
+
         let image = Self::get_image_for_provider(&config.llm_provider);
         let mut env = Self::build_env_vars(config);
 
@@ -522,23 +527,17 @@ impl ContainerRuntime for DockerClient {
 
         // Build port bindings for bridge mode
         // Agent containers expose port 8080 internally for communication
-        let port_bindings = HashMap::from([
-            (
-                format!("{}/tcp", AGENT_INTERNAL_PORT),
-                Some(vec![bollard::models::PortBinding {
-                    host_ip: Some("127.0.0.1".to_string()), // Only bind to localhost for security
-                    host_port: None, // Let Docker assign a random port
-                }]),
-            ),
-        ]);
+        let port_bindings = HashMap::from([(
+            format!("{}/tcp", AGENT_INTERNAL_PORT),
+            Some(vec![bollard::models::PortBinding {
+                host_ip: Some("127.0.0.1".to_string()), // Only bind to localhost for security
+                host_port: None,                        // Let Docker assign a random port
+            }]),
+        )]);
 
         // Exposed ports (ports the container listens on)
-        let exposed_ports = HashMap::from([
-            (
-                format!("{}/tcp", AGENT_INTERNAL_PORT),
-                HashMap::new(),
-            ),
-        ]);
+        let exposed_ports =
+            HashMap::from([(format!("{}/tcp", AGENT_INTERNAL_PORT), HashMap::new())]);
 
         // Container configuration with bridge network (isolated from host)
         let container_config = Config {
@@ -585,8 +584,12 @@ impl ContainerRuntime for DockerClient {
                 ..Default::default()
             },
         };
-        
-        if let Err(e) = self.docker.connect_network(CLAW_PEN_NETWORK, connect_opts).await {
+
+        if let Err(e) = self
+            .docker
+            .connect_network(CLAW_PEN_NETWORK, connect_opts)
+            .await
+        {
             tracing::warn!("Failed to connect container to isolated network: {}", e);
         }
 

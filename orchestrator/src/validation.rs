@@ -13,17 +13,21 @@ use std::path::{Component, Path, PathBuf};
 pub const MAX_NAME_LENGTH: usize = 64;
 pub const MAX_ENV_KEY_LENGTH: usize = 128;
 pub const MAX_ENV_VALUE_LENGTH: usize = 4096;
+#[allow(dead_code)]
 pub const MAX_SECRET_VALUE_LENGTH: usize = 65536; // 64KB
 pub const MAX_VOLUMES_COUNT: usize = 32;
 pub const MAX_ENV_VARS_COUNT: usize = 128;
 pub const MAX_SECRETS_COUNT: usize = 64;
+#[allow(dead_code)]
 pub const MAX_TAGS_COUNT: usize = 32;
 pub const MAX_PROJECT_NAME_LENGTH: usize = 128;
+#[allow(dead_code)]
 pub const MAX_DESCRIPTION_LENGTH: usize = 1024;
 pub const MAX_LLM_MODEL_LENGTH: usize = 256;
 
 /// Allowed base directories for volume mounts
 /// These are the only directories from which containers can mount volumes
+#[allow(dead_code)]
 pub const ALLOWED_MOUNT_BASES: &[&str] = &[
     "/data/claw-pen/volumes",
     "/data/claw-pen/projects",
@@ -32,10 +36,11 @@ pub const ALLOWED_MOUNT_BASES: &[&str] = &[
 
 /// Development/testing mount bases (only allowed in debug builds)
 #[cfg(debug_assertions)]
+#[allow(dead_code)]
 pub const DEV_MOUNT_BASES: &[&str] = &["/tmp/claw-pen-volumes", "./test-volumes"];
 
 /// Validate a container name against a strict whitelist
-/// 
+///
 /// Container names must:
 /// - Be 1-64 characters long
 /// - Contain only alphanumeric characters, underscores, and hyphens
@@ -73,6 +78,7 @@ pub fn validate_container_name(name: &str) -> Result<()> {
 
 /// Validate an agent ID
 /// Agent IDs are typically hex strings or UUIDs, so we allow a broader character set
+#[allow(dead_code)]
 pub fn validate_agent_id(id: &str) -> Result<()> {
     if id.is_empty() {
         return Err(anyhow!("Agent ID cannot be empty"));
@@ -113,9 +119,7 @@ pub fn validate_project_name(name: &str) -> Result<()> {
         .all(|c| c.is_alphanumeric() || c == ' ' || c == '-' || c == '_');
 
     if !valid {
-        return Err(anyhow!(
-            "Project name contains invalid characters"
-        ));
+        return Err(anyhow!("Project name contains invalid characters"));
     }
 
     Ok(())
@@ -185,13 +189,16 @@ pub fn validate_env_value(value: &str) -> Result<()> {
 
     // Check for null bytes which could cause issues
     if value.contains('\0') {
-        return Err(anyhow!("Environment variable value cannot contain null bytes"));
+        return Err(anyhow!(
+            "Environment variable value cannot contain null bytes"
+        ));
     }
 
     Ok(())
 }
 
 /// Validate a secret value
+#[allow(dead_code)]
 pub fn validate_secret_value(value: &str) -> Result<()> {
     if value.is_empty() {
         return Err(anyhow!("Secret value cannot be empty"));
@@ -230,15 +237,18 @@ pub fn validate_secret_name(name: &str) -> Result<()> {
 
     // Prevent path traversal in secret names
     if name.contains("..") || name.contains('/') || name.contains('\\') {
-        return Err(anyhow!("Secret name cannot contain path separators or '..'"));
+        return Err(anyhow!(
+            "Secret name cannot contain path separators or '..'"
+        ));
     }
 
     Ok(())
 }
 
 /// Validate a volume mount path for path traversal attacks
-/// 
+///
 /// Returns the canonicalized path if valid, or an error if the path is unsafe
+#[allow(dead_code)]
 pub fn validate_volume_path(source: &str) -> Result<PathBuf> {
     // Check for empty path
     if source.is_empty() {
@@ -247,7 +257,9 @@ pub fn validate_volume_path(source: &str) -> Result<PathBuf> {
 
     // Check for obvious path traversal attempts
     if source.contains("..") {
-        return Err(anyhow!("Volume path cannot contain '..' (path traversal denied)"));
+        return Err(anyhow!(
+            "Volume path cannot contain '..' (path traversal denied)"
+        ));
     }
 
     // Check for null bytes
@@ -257,11 +269,13 @@ pub fn validate_volume_path(source: &str) -> Result<PathBuf> {
 
     // Convert to Path and check components
     let path = Path::new(source);
-    
+
     for component in path.components() {
         match component {
             Component::ParentDir => {
-                return Err(anyhow!("Volume path cannot contain '..' (path traversal denied)"));
+                return Err(anyhow!(
+                    "Volume path cannot contain '..' (path traversal denied)"
+                ));
             }
             Component::Prefix(_) => {
                 // Windows drive letter or UNC path - reject for consistency
@@ -272,8 +286,8 @@ pub fn validate_volume_path(source: &str) -> Result<PathBuf> {
     }
 
     // Canonicalize the path to resolve any remaining tricks
-    let canonical = std::fs::canonicalize(path)
-        .map_err(|e| anyhow!("Failed to resolve volume path: {}", e))?;
+    let canonical =
+        std::fs::canonicalize(path).map_err(|e| anyhow!("Failed to resolve volume path: {}", e))?;
 
     // Check if the canonical path is within an allowed base directory
     if !is_path_allowed(&canonical) {
@@ -287,6 +301,7 @@ pub fn validate_volume_path(source: &str) -> Result<PathBuf> {
 }
 
 /// Check if a canonical path is within an allowed base directory
+#[allow(dead_code)]
 fn is_path_allowed(path: &Path) -> bool {
     // In debug builds, also check development mount bases
     #[cfg(debug_assertions)]
@@ -295,7 +310,7 @@ fn is_path_allowed(path: &Path) -> bool {
         .chain(DEV_MOUNT_BASES.iter())
         .copied()
         .collect();
-    
+
     #[cfg(not(debug_assertions))]
     let all_bases = ALLOWED_MOUNT_BASES;
 
@@ -319,7 +334,9 @@ pub fn validate_container_target(target: &str) -> Result<()> {
 
     // Must be an absolute path
     if !target.starts_with('/') {
-        return Err(anyhow!("Container target path must be absolute (start with /)"));
+        return Err(anyhow!(
+            "Container target path must be absolute (start with /)"
+        ));
     }
 
     // Check for path traversal
@@ -369,9 +386,9 @@ pub fn validate_llm_model(model: &str) -> Result<()> {
     }
 
     // Allow alphanumeric, hyphens, underscores, dots, colons, and forward slashes
-    let valid = model
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == ':' || c == '/');
+    let valid = model.chars().all(|c| {
+        c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == ':' || c == '/'
+    });
 
     if !valid {
         return Err(anyhow!("LLM model name contains invalid characters"));
@@ -381,6 +398,7 @@ pub fn validate_llm_model(model: &str) -> Result<()> {
 }
 
 /// Validate description text
+#[allow(dead_code)]
 pub fn validate_description(desc: &str) -> Result<()> {
     if desc.len() > MAX_DESCRIPTION_LENGTH {
         return Err(anyhow!(
@@ -398,7 +416,7 @@ pub fn validate_description(desc: &str) -> Result<()> {
 }
 
 /// Sanitize an error message for client display
-/// 
+///
 /// This removes potentially sensitive information like:
 /// - Internal filesystem paths
 /// - Container IDs

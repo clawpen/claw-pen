@@ -107,7 +107,7 @@ impl ContainmentClient {
         // Build container spec
         validation::validate_container_name(name)
             .map_err(|e| anyhow::anyhow!("Invalid container name: {}", e))?;
-        
+
         // Validate resource limits
         validation::validate_memory_mb(config.memory_mb)
             .map_err(|e| anyhow::anyhow!("Invalid memory config: {}", e))?;
@@ -373,21 +373,26 @@ impl ContainmentClient {
                     tracing::warn!("Invalid volume target path {}: {}", v.target, e);
                     return None;
                 }
-                
+
                 // Validate source path for path traversal
                 // Note: Full canonicalization requires filesystem access
                 if v.source.contains("..") {
                     tracing::warn!("Path traversal attempt in volume source: {}", v.source);
                     return None;
                 }
-                
+
                 // Check for suspicious source paths
-                let suspicious = ["/etc/passwd", "/etc/shadow", "/root/.ssh", "/var/run/docker.sock"];
+                let suspicious = [
+                    "/etc/passwd",
+                    "/etc/shadow",
+                    "/root/.ssh",
+                    "/var/run/docker.sock",
+                ];
                 if suspicious.iter().any(|s| v.source.starts_with(s)) {
                     tracing::warn!("Suspicious volume source path rejected: {}", v.source);
                     return None;
                 }
-                
+
                 Some(serde_json::json!({
                     "type": "bind",
                     "source": v.source,
@@ -397,7 +402,6 @@ impl ContainmentClient {
             })
             .collect()
     }
-
 }
 #[async_trait]
 impl ContainerRuntime for ContainmentClient {

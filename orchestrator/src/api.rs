@@ -90,32 +90,38 @@ pub async fn create_agent(
     Json(req): Json<CreateAgentRequest>,
 ) -> Result<Json<AgentContainer>, (StatusCode, String)> {
     // === Input Validation ===
-    
+
     // Validate agent name (container name)
     if let Err(e) = validation::validate_container_name(&req.name) {
         return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
     }
-    
+
     // Validate project name if provided
     if let Some(ref project) = req.project {
         if let Err(e) = validation::validate_project_name(project) {
             return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
         }
     }
-    
+
     // Validate tags if provided
     for tag in &req.tags {
         if let Err(e) = validation::validate_tag(tag) {
             return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
         }
     }
-    
+
     // Validate config limits if provided
     if let Some(ref cfg) = req.config {
         // Validate env vars count
         if let Some(ref env) = cfg.env_vars {
             if env.len() > validation::MAX_ENV_VARS_COUNT {
-                return Err((StatusCode::BAD_REQUEST, format!("Too many environment variables (max {})", validation::MAX_ENV_VARS_COUNT)));
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "Too many environment variables (max {})",
+                        validation::MAX_ENV_VARS_COUNT
+                    ),
+                ));
             }
             // Validate each env var key/value
             for (key, value) in env {
@@ -127,11 +133,14 @@ pub async fn create_agent(
                 }
             }
         }
-        
+
         // Validate secrets count
         if let Some(ref secrets) = cfg.secrets {
             if secrets.len() > validation::MAX_SECRETS_COUNT {
-                return Err((StatusCode::BAD_REQUEST, format!("Too many secrets (max {})", validation::MAX_SECRETS_COUNT)));
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("Too many secrets (max {})", validation::MAX_SECRETS_COUNT),
+                ));
             }
             for secret in secrets {
                 if let Err(e) = validation::validate_secret_name(secret) {
@@ -139,11 +148,14 @@ pub async fn create_agent(
                 }
             }
         }
-        
+
         // Validate volumes count and paths
         if let Some(ref volumes) = cfg.volumes {
             if volumes.len() > validation::MAX_VOLUMES_COUNT {
-                return Err((StatusCode::BAD_REQUEST, format!("Too many volumes (max {})", validation::MAX_VOLUMES_COUNT)));
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("Too many volumes (max {})", validation::MAX_VOLUMES_COUNT),
+                ));
             }
             for vol in volumes {
                 // Note: Full path validation requires filesystem access, done at container creation
@@ -152,14 +164,14 @@ pub async fn create_agent(
                 }
             }
         }
-        
+
         // Validate LLM model name if provided
         if let Some(ref model) = cfg.llm_model {
             if let Err(e) = validation::validate_llm_model(model) {
                 return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
             }
         }
-        
+
         // Validate memory and CPU if provided
         if let Some(mem) = cfg.memory_mb {
             if let Err(e) = validation::validate_memory_mb(mem) {
@@ -172,7 +184,7 @@ pub async fn create_agent(
             }
         }
     }
-    
+
     // === End Input Validation ===
 
     // Build config from template + overrides
@@ -541,7 +553,7 @@ pub async fn logs_websocket(
         StatusCode::UNAUTHORIZED,
         "Missing authentication token".to_string(),
     ))?;
-    
+
     let auth = state.auth.read().await;
     auth.validate_token(token)
         .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {}", e)))?;
@@ -1029,9 +1041,9 @@ fn parse_provider(s: &str) -> LlmProvider {
 // === Chat WebSocket ===
 
 /// WebSocket endpoint for agent chat
-/// 
+///
 /// Authentication: Pass JWT token via `?token=<jwt>` query parameter
-/// 
+///
 /// Example: `ws://localhost:3000/api/agents/{id}/chat?token=eyJhbGciOiJIUzI1NiIs...`
 pub async fn chat_websocket(
     State(state): State<Arc<AppState>>,
@@ -1044,9 +1056,10 @@ pub async fn chat_websocket(
         StatusCode::UNAUTHORIZED,
         "Missing authentication token".to_string(),
     ))?;
-    
+
     let auth = state.auth.read().await;
-    let _claims = auth.validate_token(token)
+    let _claims = auth
+        .validate_token(token)
         .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {}", e)))?;
     drop(auth);
 
@@ -1161,7 +1174,7 @@ pub struct ClassifyRequest {
 }
 
 /// WebSocket endpoint for team chat with routing
-/// 
+///
 /// Authentication: Pass JWT token via `?token=<jwt>` query parameter
 pub async fn team_chat_websocket(
     State(state): State<Arc<AppState>>,
@@ -1174,7 +1187,7 @@ pub async fn team_chat_websocket(
         StatusCode::UNAUTHORIZED,
         "Missing authentication token".to_string(),
     ))?;
-    
+
     let auth = state.auth.read().await;
     auth.validate_token(token)
         .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {}", e)))?;
