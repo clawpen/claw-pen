@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claw Den - Agent Chat</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #0f0f1a;
+            --bg-secondary: #1a1a2e;
+            --bg-tertiary: #16213e;
+            --accent: #e94560;
+            --accent-hover: #ff6b6b;
+            --success: #22c55e;
+            --warning: #fbbf24;
+            --danger: #ef4444;
+            --text-primary: #f0f0f0;
+            --text-secondary: #94a3b8;
+            --border: #0f3460;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 280px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .sidebar-header h1 {
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .sidebar-header h1 span {
+            font-size: 1.8rem;
+        }
+
+        .agent-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .agent-card {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .agent-card:hover {
+            border-color: var(--accent);
+        }
+
+        .agent-card.active {
+            border-color: var(--accent);
+            background: rgba(233, 69, 96, 0.1);
+        }
+
+        .agent-card .name {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .agent-card .status {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .agent-card .status.running {
+            color: var(--success);
+        }
+
+        .agent-card .status.stopped {
+            color: var(--danger);
+        }
+
+        .sidebar-footer {
+            padding: 15px;
+            border-top: 1px solid var(--border);
+        }
+
+        .btn {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-hover);
+        }
+
+        /* Main Content */
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .main-header {
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .agent-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .agent-info .emoji {
+            font-size: 2rem;
+        }
+
+        .agent-info h2 {
+            font-size: 1.2rem;
+        }
+
+        .agent-info .model {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        /* Chat Area */
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .message {
+            max-width: 80%;
+            margin-bottom: 15px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user {
+            margin-left: auto;
+        }
+
+        .message-bubble {
+            padding: 12px 16px;
+            border-radius: 16px;
+            line-height: 1.5;
+        }
+
+        .message.user .message-bubble {
+            background: var(--accent);
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.agent .message-bubble {
+            background: var(--bg-tertiary);
+            border-bottom-left-radius: 4px;
+        }
+
+        .message .time {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .message.user .time {
+            text-align: right;
+        }
+
+        /* Input Area */
+        .input-area {
+            padding: 15px 20px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 10px;
+        }
+
+        .input-area textarea {
+            flex: 1;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 12px;
+            color: var(--text-primary);
+            font-size: 0.95rem;
+            resize: none;
+            font-family: inherit;
+        }
+
+        .input-area textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .input-area .send-btn {
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
+            background: var(--accent);
+            border: none;
+            color: white;
+            cursor: pointer;
+            font-size: 1.2rem;
+            transition: all 0.2s;
+        }
+
+        .input-area .send-btn:hover {
+            background: var(--accent-hover);
+        }
+
+        .input-area .send-btn:disabled {
+            background: var(--bg-tertiary);
+            cursor: not-allowed;
+        }
+
+        /* Status indicators */
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--danger);
+        }
+
+        .status-dot.connected {
+            background: var(--success);
+        }
+
+        .status-dot.connecting {
+            background: var(--warning);
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Empty state */
+        .empty-state {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+        }
+
+        .empty-state .emoji {
+            font-size: 4rem;
+            margin-bottom: 20px;
+        }
+
+        .empty-state h3 {
+            margin-bottom: 10px;
+            color: var(--text-primary);
+        }
+
+        /* Typing indicator */
+        .typing {
+            display: flex;
+            gap: 4px;
+            padding: 12px 16px;
+        }
+
+        .typing span {
+            width: 8px;
+            height: 8px;
+            background: var(--text-secondary);
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing span:nth-child(2) { animation-delay: 0.2s; }
+        .typing span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-10px); }
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h1><span>🦞</span> Claw Den</h1>
+        </div>
+        <div class="agent-list" id="agentList">
+            <div class="agent-card active">
+                <div class="name">Tutor Box</div>
+                <div class="status running">running</div>
+            </div>
+        </div>
+        <div class="sidebar-footer">
+            <button class="btn btn-primary" onclick="refreshAgents()">↻ Refresh</button>
+        </div>
+    </div>
+
+    <div class="main">
+        <div class="main-header">
+            <div class="agent-info">
+                <span class="emoji">📚</span>
+                <div>
+                    <h2>Tutor Box</h2>
+                    <div class="model">zai/glm-5</div>
+                </div>
+            </div>
+            <div class="header-actions">
+                <div class="connection-status">
+                    <span class="status-dot" id="statusDot"></span>
+                    <span id="statusText">Disconnected</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-container" id="chatContainer">
+            <div class="empty-state" id="emptyState">
+                <div class="emoji">📚</div>
+                <h3>Tutor Box</h3>
+                <p>Learn anything with adaptive teaching</p>
+                <p style="margin-top: 10px; font-size: 0.9rem;">Send a message to start learning!</p>
+            </div>
+        </div>
+
+        <div class="input-area">
+            <textarea 
+                id="messageInput" 
+                placeholder="Ask me anything..." 
+                rows="1"
+                onkeydown="handleKeydown(event)"
+            ></textarea>
+            <button class="send-btn" id="sendBtn" onclick="sendMessage()">➤</button>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            autoResizeTextarea();
+            connectToAgent();
+        });
+
+        function autoResizeTextarea() {
+            const textarea = document.getElementById('messageInput');
+            textarea.addEventListener('input', function() {
+                this.style.height = 'auto';
+                this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+            });
+        }
+
+        function connectToAgent() {
+            updateStatus('connecting');
+            
+            if (ws) ws.close();
+
+            ws = new WebSocket('ws://localhost:18790/ws');
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                updateStatus('connected');
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleWebSocketMessage(data);
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                updateStatus('disconnected');
+                // Reconnect after 3 seconds
+                setTimeout(connectToAgent, 3000);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                updateStatus('disconnected');
+            };
+        }
+
+        function handleWebSocketMessage(data) {
+            console.log('WS message:', data);
+
+            if (data.type === 'event' && data.event === 'connect.challenge') {
+                ws.send(JSON.stringify({ type: 'auth', method: 'none' }));
+                return;
+            }
+
+            if (data.type === 'event' && data.event === 'auth.success') {
+                console.log('Auth successful');
+                return;
+            }
+
+            // Handle agent response
+            if (data.type === 'agent-reply' || data.type === 'reply') {
+                const content = data.content || data.text || data.message;
+                if (content) addMessage(content, 'agent');
+                document.getElementById('sendBtn').disabled = false;
+            }
+
+            // Handle streaming chunks
+            if (data.delta || data.chunk) {
+                // Could implement streaming here
+            }
+        }
+
+        function updateStatus(status) {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            dot.className = 'status-dot';
+            
+            switch (status) {
+                case 'connected':
+                    dot.classList.add('connected');
+                    text.textContent = 'Connected';
+                    break;
+                case 'connecting':
+                    dot.classList.add('connecting');
+                    text.textContent = 'Connecting...';
+                    break;
+                default:
+                    text.textContent = 'Disconnected';
+            }
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const text = input.value.trim();
+            
+            if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+            addMessage(text, 'user');
+            input.value = '';
+            input.style.height = 'auto';
+
+            ws.send(JSON.stringify({ type: 'user-text', text: text }));
+            document.getElementById('sendBtn').disabled = true;
+        }
+
+        function addMessage(text, sender) {
+            document.getElementById('emptyState').style.display = 'none';
+
+            const container = document.getElementById('chatContainer');
+            const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            const div = document.createElement('div');
+            div.className = `message ${sender}`;
+            div.innerHTML = `
+                <div class="message-bubble">${escapeHtml(text)}</div>
+                <div class="time">${time}</div>
+            `;
+
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML.replace(/\n/g, '<br>');
+        }
+
+        function handleKeydown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        function refreshAgents() {
+            // For standalone mode, just reconnect
+            connectToAgent();
+        }
+    </script>
+</body>
+</html>
