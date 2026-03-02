@@ -6,16 +6,49 @@ Get your first AI agent running in under 5 minutes.
 
 Before you start, make sure you have:
 
-- **Docker** 20.10+ (or Podman 4.0+)
+- **Docker** 20.10+ (or Podman 4.0+) OR **Exo** container runtime
 - **Node.js** 18+ (for Tauri app, optional)
 - **Rust** 1.70+ (for building from source)
 - **4GB RAM** minimum (8GB+ recommended for local models)
+
+### Container Runtime Options
+
+Claw Pen supports two container runtimes:
+
+| Runtime | Description | Best For |
+|---------|-------------|----------|
+| **Docker** | Default, widely supported | Most users, production |
+| **Exo** | Agent-first container runtime | AI agents, rootless, fast spawning |
+
+#### Installing Exo (Optional)
+
+If you want to use Exo instead of Docker:
+
+```bash
+# From source
+git clone https://github.com/clawpen/exo.git
+cd exo
+cargo build --release
+sudo cp target/release/exo /usr/local/bin/
+
+# Verify installation
+exo --version
+```
+
+Exo features:
+- **Agent-first communication** — Stdio + tool bus, not HTTP
+- **Tool-level sandboxing** — Each tool gets its own security context
+- **Fast spawning** — Daemonless, spin up in milliseconds
+- **Rootless by default** — User namespaces, no system privileges required
 
 ### Verify Prerequisites
 
 ```bash
 # Check Docker
 docker --version  # Should show 20.10+
+
+# Or check Exo (if using Exo)
+exo --version
 
 # Check Rust (if building from source)
 rustc --version   # Should show 1.70+
@@ -55,6 +88,36 @@ npm run tauri build
 ```
 
 Install the resulting package for your platform.
+
+---
+
+## Configure Container Runtime
+
+By default, Claw Pen uses Docker. To use Exo instead:
+
+### Via Config File
+
+Create `claw-pen.toml`:
+
+```toml
+# Use Exo runtime instead of Docker
+container-runtime = "exo"
+
+# Optional: Custom path to exo binary
+# exo-path = "/usr/local/bin/exo"
+
+# Other settings
+deployment-mode = "linux-native"
+network-backend = "tailscale"
+```
+
+### Via Environment Variable
+
+```bash
+export CONTAINER_RUNTIME=exo
+# Optional: custom exo path
+export EXO_PATH=/path/to/exo
+```
 
 ---
 
@@ -122,13 +185,29 @@ The token is valid for 24 hours. Use `/auth/refresh` to get a new one without re
 ### Using a Template (Easiest)
 
 ```bash
-# Create a coding assistant
+# Create a coding assistant (uses global runtime - Docker by default)
 curl -X POST http://localhost:3000/api/agents \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "my-coder",
     "template": "coding-assistant"
+  }'
+```
+
+### With Exo Runtime (Per-Agent)
+
+You can specify the runtime per-agent, regardless of the global default:
+
+```bash
+# Create an agent that uses Exo runtime
+curl -X POST http://localhost:3000/api/agents \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "exo-agent",
+    "template": "coding-assistant",
+    "runtime": "exo"
   }'
 ```
 
@@ -214,6 +293,18 @@ curl http://localhost:3000/api/agents \
   -H "Authorization: Bearer $TOKEN"
 ```
 
+### Filter by Runtime
+
+```bash
+# List only Docker agents
+curl "http://localhost:3000/api/agents?runtime=docker" \
+  -H "Authorization: Bearer $TOKEN"
+
+# List only Exo agents
+curl "http://localhost:3000/api/agents?runtime=exo" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
 ### Stop an Agent
 
 ```bash
@@ -230,7 +321,7 @@ curl -X DELETE http://localhost:3000/api/agents/my-coder \
 
 ---
 
-## Available Templates
+## Available templates
 
 | Template | Description | Provider | Use Case |
 |----------|-------------|----------|----------|
@@ -262,6 +353,27 @@ curl -X POST http://localhost:3000/api/agents \
 
 ---
 
+## Runtime Status
+
+Check the current runtime configuration:
+
+```bash
+curl http://localhost:3000/api/runtime/status \
+  -H "Authorization: Bearer $TOKEN"
+
+# Returns:
+# {
+#   "runtime": "exo",
+#   "version": "1.0.0",
+#   "agents": {
+#     "total": 5,
+#     "running": 2
+#   }
+# }
+```
+
+---
+
 ## Next Steps
 
 - [Architecture Overview](ARCHITECTURE.md) - How it all works
@@ -287,6 +399,7 @@ curl -X POST http://localhost:3000/api/agents \
 ### Agent won't start
 
 - Check Docker is running: `docker ps`
+- Or check Exo is available: `exo ps`
 - View orchestrator logs for error details
 - Verify the template exists: `curl http://localhost:3000/api/templates -H "Authorization: Bearer $TOKEN"`
 
@@ -328,6 +441,23 @@ ws://localhost:3000/api/agents/my-coder/chat?token=YOUR_JWT_TOKEN
    ```
    MODEL_SERVERS__OLLAMA__ENDPOINT=http://localhost:11434
    MODEL_SERVERS__LM_STUDIO__ENDPOINT=http://localhost:1234
+   ```
+
+### Exo runtime not available
+
+1. Verify exo is installed:
+   ```bash
+   exo --version
+   ```
+
+2. If not in PATH, specify the path in config:
+   ```toml
+   exo-path = "/path/to/exo"
+   ```
+
+3. Or via environment variable:
+   ```bash
+   export EXO_PATH=/path/to/exo
    ```
 
 ### Docker permission denied

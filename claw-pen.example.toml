@@ -13,6 +13,15 @@ network-backend = "tailscale"
 # Container runtime socket path
 runtime-socket = "/var/run/claw-pen.sock"
 
+# Container runtime: "docker" (default) or "exo"
+# Docker is the default for backward compatibility
+# Exo is an agent-first container runtime designed for AI agents
+container-runtime = "docker"
+
+# Custom path to exo binary (optional, defaults to "exo" in PATH)
+# Only used when container-runtime = "exo"
+# exo-path = "/usr/local/bin/exo"
+
 # Tailscale auth key (optional, for auto-joining agents to tailnet)
 # tailscale-auth-key = "tskey-auth-xxxxx"
 

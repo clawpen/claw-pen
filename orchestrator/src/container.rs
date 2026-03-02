@@ -1,11 +1,11 @@
 // Container runtime interface
 use crate::validation;
-// Abstracts over Docker and Containment runtimes
+// Abstracts over Docker, Containment, and Exo runtimes
 
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::config::NetworkBackend;
+use crate::config::{ContainerRuntimeType, NetworkBackend};
 use crate::containment::ContainmentClient;
 use crate::types::{
     AgentConfig, AgentContainer, AgentStatus, LlmProvider, LogEntry, ResourceUsage,
@@ -45,7 +45,8 @@ pub trait ContainerRuntime: Send + Sync {
     async fn health_check(&self, id: &str) -> Result<bool>;
 }
 
-/// Runtime client that uses either Containment or Docker based on availability
+/// Runtime client that uses Docker, Containment, or Exo based on configuration
+#[derive(Clone)]
 pub struct RuntimeClient {
     inner: RuntimeClientInner,
     network_backend: NetworkBackend,
@@ -54,40 +55,66 @@ pub struct RuntimeClient {
     headscale_namespace: Option<String>,
 }
 
+#[derive(Clone)]
 enum RuntimeClientInner {
     Containment(ContainmentClient),
     Docker(DockerClient),
+    Exo(ExoClient),
 }
 
 impl RuntimeClient {
     pub async fn new() -> Result<Self> {
-        // Try Docker first (easier setup for most users)
-        match DockerClient::new().await {
-            Ok(docker_client) => {
-                tracing::info!("Using Docker runtime");
-                return Ok(Self {
-                    inner: RuntimeClientInner::Docker(docker_client),
+        // Default to Docker for backward compatibility
+        Self::with_runtime(ContainerRuntimeType::default(), None).await
+    }
+
+    /// Create runtime client with specific runtime type
+    pub async fn with_runtime(
+        runtime_type: ContainerRuntimeType,
+        exo_path: Option<String>,
+    ) -> Result<Self> {
+        match runtime_type {
+            ContainerRuntimeType::Exo => {
+                let exo_client = ExoClient::new(exo_path)?;
+                tracing::info!("Using Exo runtime");
+                Ok(Self {
+                    inner: RuntimeClientInner::Exo(exo_client),
                     network_backend: NetworkBackend::default(),
                     headscale_url: None,
                     headscale_auth_key: None,
                     headscale_namespace: None,
-                });
+                })
             }
-            Err(e) => {
-                tracing::info!("Docker not available, trying Containment: {}", e);
+            ContainerRuntimeType::Docker => {
+                // Try Docker first (easier setup for most users)
+                match DockerClient::new().await {
+                    Ok(docker_client) => {
+                        tracing::info!("Using Docker runtime");
+                        return Ok(Self {
+                            inner: RuntimeClientInner::Docker(docker_client),
+                            network_backend: NetworkBackend::default(),
+                            headscale_url: None,
+                            headscale_auth_key: None,
+                            headscale_namespace: None,
+                        });
+                    }
+                    Err(e) => {
+                        tracing::info!("Docker not available, trying Containment: {}", e);
+                    }
+                }
+
+                // Fallback to Containment
+                let containment_client = ContainmentClient::new()?;
+                tracing::info!("Using Containment runtime");
+                Ok(Self {
+                    inner: RuntimeClientInner::Containment(containment_client),
+                    network_backend: NetworkBackend::default(),
+                    headscale_url: None,
+                    headscale_auth_key: None,
+                    headscale_namespace: None,
+                })
             }
         }
-
-        // Fallback to Containment
-        let containment_client = ContainmentClient::new()?;
-        tracing::info!("Using Containment runtime");
-        Ok(Self {
-            inner: RuntimeClientInner::Containment(containment_client),
-            network_backend: NetworkBackend::default(),
-            headscale_url: None,
-            headscale_auth_key: None,
-            headscale_namespace: None,
-        })
     }
 
     /// Configure the network backend (called after loading config)
@@ -117,6 +144,11 @@ impl RuntimeClient {
 
         self
     }
+
+    /// Clone the runtime client (used for secondary runtime instances)
+    pub fn clone_runtime_client(&self) -> Self {
+        self.clone()
+    }
 }
 
 #[async_trait]
@@ -125,6 +157,7 @@ impl ContainerRuntime for RuntimeClient {
         match &self.inner {
             RuntimeClientInner::Docker(client) => client.list_containers().await,
             RuntimeClientInner::Containment(client) => client.list_containers().await,
+            RuntimeClientInner::Exo(client) => client.list_containers().await,
         }
     }
 
@@ -132,6 +165,7 @@ impl ContainerRuntime for RuntimeClient {
         match &self.inner {
             RuntimeClientInner::Docker(client) => client.create_container(name, config).await,
             RuntimeClientInner::Containment(client) => client.create_container(name, config).await,
+            RuntimeClientInner::Exo(client) => client.create_container(name, config).await,
         }
     }
 
@@ -139,6 +173,7 @@ impl ContainerRuntime for RuntimeClient {
         match &self.inner {
             RuntimeClientInner::Docker(client) => client.start_container(id).await,
             RuntimeClientInner::Containment(client) => client.start_container(id).await,
+            RuntimeClientInner::Exo(client) => client.start_container(id).await,
         }
     }
 
@@ -146,6 +181,7 @@ impl ContainerRuntime for RuntimeClient {
         match &self.inner {
             RuntimeClientInner::Docker(client) => client.stop_container(id).await,
             RuntimeClientInner::Containment(client) => client.stop_container(id).await,
+            RuntimeClientInner::Exo(client) => client.stop_container(id).await,
         }
     }
 
@@ -153,6 +189,7 @@ impl ContainerRuntime for RuntimeClient {
         match &self.inner {
             RuntimeClientInner::Docker(client) => client.delete_container(id).await,
             RuntimeClientInner::Containment(client) => client.delete_container(id).await,
+            RuntimeClientInner::Exo(client) => client.delete_container(id).await,
         }
     }
 
@@ -160,6 +197,7 @@ impl ContainerRuntime for RuntimeClient {
         match &self.inner {
             RuntimeClientInner::Docker(client) => client.get_stats(id).await,
             RuntimeClientInner::Containment(client) => client.get_stats(id).await,
+            RuntimeClientInner::Exo(client) => client.get_stats(id).await,
         }
     }
 
@@ -167,6 +205,7 @@ impl ContainerRuntime for RuntimeClient {
         match &self.inner {
             RuntimeClientInner::Docker(client) => client.container_exists(id).await,
             RuntimeClientInner::Containment(client) => client.container_exists(id).await,
+            RuntimeClientInner::Exo(client) => client.container_exists(id).await,
         }
     }
 
@@ -174,6 +213,7 @@ impl ContainerRuntime for RuntimeClient {
         match &self.inner {
             RuntimeClientInner::Docker(client) => client.get_logs(id, tail).await,
             RuntimeClientInner::Containment(client) => client.get_logs(id, tail).await,
+            RuntimeClientInner::Exo(client) => client.get_logs(id, tail).await,
         }
     }
 
@@ -181,6 +221,7 @@ impl ContainerRuntime for RuntimeClient {
         match &self.inner {
             RuntimeClientInner::Docker(client) => client.stream_logs(id).await,
             RuntimeClientInner::Containment(client) => client.stream_logs(id).await,
+            RuntimeClientInner::Exo(client) => client.stream_logs(id).await,
         }
     }
 
@@ -188,6 +229,7 @@ impl ContainerRuntime for RuntimeClient {
         match &self.inner {
             RuntimeClientInner::Docker(client) => client.health_check(id).await,
             RuntimeClientInner::Containment(client) => client.health_check(id).await,
+            RuntimeClientInner::Exo(client) => client.health_check(id).await,
         }
     }
 }
@@ -206,6 +248,7 @@ const AGENT_INTERNAL_PORT: u16 = 8080;
 const CLAW_PEN_NETWORK: &str = "claw-pen-network";
 
 /// Docker runtime client - uses Docker daemon via named pipe or socket
+#[derive(Clone)]
 pub struct DockerClient {
     docker: bollard::Docker,
     network_backend: NetworkBackend,
@@ -495,6 +538,7 @@ impl ContainerRuntime for DockerClient {
                     tags: vec![],
                     restart_policy: Default::default(),
                     health_status: None,
+                    runtime: Some("docker".to_string()),
                 });
             }
         }
@@ -662,5 +706,324 @@ impl ContainerRuntime for DockerClient {
     async fn health_check(&self, id: &str) -> Result<bool> {
         // For Docker, check if container is running
         self.container_exists(id).await
+    }
+}
+
+// ============================================================================
+// Exo Runtime
+// ============================================================================
+
+use std::process::Command;
+
+/// Exo runtime client - uses exo CLI for agent containers
+#[derive(Clone)]
+pub struct ExoClient {
+    exo_path: String,
+}
+
+impl ExoClient {
+    /// Create a new Exo client
+    /// 
+    /// # Arguments
+    /// * `exo_path` - Optional custom path to exo binary. Defaults to "exo" in PATH.
+    pub fn new(exo_path: Option<String>) -> Result<Self> {
+        let exo_path = exo_path.unwrap_or_else(|| "exo".to_string());
+        
+        // Verify exo is available
+        let output = Command::new(&exo_path)
+            .arg("--version")
+            .output()
+            .map_err(|e| anyhow::anyhow!("exo binary not found at '{}': {}. Ensure exo is installed and in PATH.", exo_path, e))?;
+        
+        if !output.status.success() {
+            return Err(anyhow::anyhow!("exo binary at '{}' returned error", exo_path));
+        }
+        
+        let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        tracing::info!("Connected to Exo runtime: {}", version);
+        
+        Ok(Self { exo_path })
+    }
+
+    /// Get the image name for a provider
+    fn get_image_for_provider(provider: &LlmProvider) -> &'static str {
+        // Exo uses the same images as Docker for compatibility
+        match provider {
+            LlmProvider::OpenAI => "openclaw-agent:latest",
+            LlmProvider::Anthropic => "openclaw-agent:latest",
+            LlmProvider::Gemini => "openclaw-agent:latest",
+            LlmProvider::Kimi => "openclaw-agent:latest",
+            LlmProvider::Zai => "openclaw-agent:latest",
+            LlmProvider::Huggingface => "openclaw-agent:latest",
+            LlmProvider::Ollama => "openclaw-agent:latest",
+            LlmProvider::KimiCode => "openclaw-agent:latest",
+            LlmProvider::Access => "openclaw-agent:latest",
+            LlmProvider::LlamaCpp => "openclaw-agent:latest",
+            LlmProvider::Vllm => "openclaw-agent:latest",
+            LlmProvider::Lmstudio => "openclaw-agent:latest",
+            _ => "openclaw-agent:latest",
+        }
+    }
+
+    /// Build environment variables for exo run command
+    fn build_env_args(config: &AgentConfig) -> Vec<String> {
+        let mut args = Vec::new();
+
+        // LLM provider configuration
+        if let Some(key) = config.env_vars.get("OPENAI_API_KEY") {
+            args.push("-e".to_string());
+            args.push(format!("OPENAI_API_KEY={}", key));
+        }
+        if let Some(key) = config.env_vars.get("ANTHROPIC_API_KEY") {
+            args.push("-e".to_string());
+            args.push(format!("ANTHROPIC_API_KEY={}", key));
+        }
+        if let Some(key) = config.env_vars.get("GEMINI_API_KEY") {
+            args.push("-e".to_string());
+            args.push(format!("GEMINI_API_KEY={}", key));
+        }
+        if let Some(key) = config.env_vars.get("KIMI_API_KEY") {
+            args.push("-e".to_string());
+            args.push(format!("KIMI_API_KEY={}", key));
+        }
+        if let Some(key) = config.env_vars.get("ZAI_API_KEY") {
+            args.push("-e".to_string());
+            args.push(format!("ZAI_API_KEY={}", key));
+        }
+        if let Some(key) = config.env_vars.get("HF_TOKEN") {
+            args.push("-e".to_string());
+            args.push(format!("HF_TOKEN={}", key));
+        }
+
+        // Pass provider and model
+        args.push("-e".to_string());
+        args.push(format!("LLM_PROVIDER={:?}", config.llm_provider));
+        if let Some(ref model) = config.llm_model {
+            args.push("-e".to_string());
+            args.push(format!("LLM_MODEL={}", model));
+        }
+
+        // Pass all custom env vars
+        for (key, value) in &config.env_vars {
+            if !key.starts_with("OPENAI_API_KEY")
+                && !key.starts_with("ANTHROPIC_API_KEY")
+                && !key.starts_with("GEMINI_API_KEY")
+                && !key.starts_with("KIMI_API_KEY")
+                && !key.starts_with("ZAI_API_KEY")
+                && !key.starts_with("HF_TOKEN")
+                && !key.starts_with("OLLAMA_ENDPOINT")
+            {
+                args.push("-e".to_string());
+                args.push(format!("{}={}", key, value));
+            }
+        }
+
+        args
+    }
+
+    /// Parse container ID from exo ps output
+    #[allow(dead_code)]
+    fn parse_container_id(line: &str) -> Option<String> {
+        // exo ps output format: ID  NAME  STATUS  IMAGE
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        parts.first().map(|s| s.to_string())
+    }
+}
+
+#[async_trait]
+impl ContainerRuntime for ExoClient {
+    async fn list_containers(&self) -> Result<Vec<AgentContainer>> {
+        let output = Command::new(&self.exo_path)
+            .args(["ps", "--all"])
+            .output()
+            .map_err(|e| anyhow::anyhow!("Failed to list exo containers: {}", e))?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "exo ps failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut containers = Vec::new();
+
+        for line in stdout.lines().skip(1) {
+            // Skip header
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 {
+                let id = parts.get(0).unwrap_or(&"").to_string();
+                let name = parts.get(1).unwrap_or(&"").to_string();
+                let status_str = parts.get(2).unwrap_or(&"").to_lowercase();
+
+                let status = if status_str.contains("running") {
+                    AgentStatus::Running
+                } else if status_str.contains("stopped") || status_str.contains("exited") {
+                    AgentStatus::Stopped
+                } else if status_str.contains("starting") {
+                    AgentStatus::Starting
+                } else {
+                    AgentStatus::Error
+                };
+
+                containers.push(AgentContainer {
+                    id,
+                    name,
+                    status,
+                    config: AgentConfig::default(),
+                    tailscale_ip: None,
+                    resource_usage: None,
+                    project: None,
+                    tags: vec![],
+                    restart_policy: Default::default(),
+                    health_status: None,
+                    runtime: Some("exo".to_string()),
+                });
+            }
+        }
+
+        Ok(containers)
+    }
+
+    async fn create_container(&self, name: &str, config: &AgentConfig) -> Result<String> {
+        // Validate container name
+        validation::validate_container_name(name)
+            .map_err(|e| anyhow::anyhow!("Invalid container name: {}", e))?;
+
+        let image = Self::get_image_for_provider(&config.llm_provider);
+        let mut args = vec![
+            "run".to_string(),
+            "--name".to_string(),
+            name.to_string(),
+            "--detach".to_string(),
+        ];
+
+        // Add memory limit (convert MB to bytes)
+        args.push("--memory".to_string());
+        args.push(format!("{}m", config.memory_mb));
+
+        // Add CPU limit (as fraction of 1)
+        args.push("--cpu".to_string());
+        args.push(format!("{}", config.cpu_cores));
+
+        // Add environment variables
+        args.extend(Self::build_env_args(config));
+
+        // Add image
+        args.push(image.to_string());
+
+        // Default command for agent containers
+        args.push("openclaw".to_string());
+
+        let output = Command::new(&self.exo_path)
+            .args(&args)
+            .output()
+            .map_err(|e| anyhow::anyhow!("Failed to create exo container: {}", e))?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "exo run failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        // exo run --detach returns the container ID
+        let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        tracing::info!("Created exo container: {} ({})", name, id);
+        Ok(id)
+    }
+
+    async fn start_container(&self, id: &str) -> Result<()> {
+        let output = Command::new(&self.exo_path)
+            .args(["start", id])
+            .output()
+            .map_err(|e| anyhow::anyhow!("Failed to start exo container: {}", e))?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "exo start failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        tracing::info!("Started exo container: {}", id);
+        Ok(())
+    }
+
+    async fn stop_container(&self, id: &str) -> Result<()> {
+        let output = Command::new(&self.exo_path)
+            .args(["stop", id])
+            .output()
+            .map_err(|e| anyhow::anyhow!("Failed to stop exo container: {}", e))?;
+
+        if !output.status.success() {
+            // Container might already be stopped
+            tracing::warn!("exo stop returned non-zero (container may already be stopped): {}", 
+                String::from_utf8_lossy(&output.stderr));
+        }
+
+        tracing::info!("Stopped exo container: {}", id);
+        Ok(())
+    }
+
+    async fn delete_container(&self, id: &str) -> Result<()> {
+        let output = Command::new(&self.exo_path)
+            .args(["rm", id])
+            .output()
+            .map_err(|e| anyhow::anyhow!("Failed to delete exo container: {}", e))?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "exo rm failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        tracing::info!("Deleted exo container: {}", id);
+        Ok(())
+    }
+
+    async fn get_stats(&self, _id: &str) -> Result<Option<ResourceUsage>> {
+        // TODO: Implement stats collection for exo
+        Ok(None)
+    }
+
+    async fn container_exists(&self, id: &str) -> Result<bool> {
+        let containers = self.list_containers().await?;
+        Ok(containers.iter().any(|c| c.id == id || c.name == id))
+    }
+
+    async fn get_logs(&self, id: &str, tail: usize) -> Result<Vec<LogEntry>> {
+        let output = Command::new(&self.exo_path)
+            .args(["logs", id, "--tail", &tail.to_string()])
+            .output()
+            .map_err(|e| anyhow::anyhow!("Failed to get exo logs: {}", e))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut logs = Vec::new();
+
+        for line in stdout.lines() {
+            logs.push(LogEntry {
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                level: "info".to_string(),
+                message: line.to_string(),
+            });
+        }
+
+        Ok(logs)
+    }
+
+    async fn stream_logs(&self, _id: &str) -> tokio_stream::wrappers::ReceiverStream<LogEntry> {
+        // TODO: Implement log streaming for exo
+        let (_tx, rx) = tokio::sync::mpsc::channel(10);
+        tokio_stream::wrappers::ReceiverStream::new(rx)
+    }
+
+    async fn health_check(&self, id: &str) -> Result<bool> {
+        // For exo, check if container exists and is running
+        let containers = self.list_containers().await?;
+        Ok(containers
+            .iter()
+            .any(|c| (c.id == id || c.name == id) && c.status == AgentStatus::Running))
     }
 }

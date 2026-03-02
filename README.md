@@ -127,7 +127,7 @@ One endpoint → routed to the right specialist automatically.
          │
          ▼
 ┌─────────────────┐
-│  Container      │  Docker/Podman/Containment
+│  Container      │  Docker/Podman/Containment/Exo
 │  Runtime        │
 └────────┬────────┘
          │
@@ -273,7 +273,7 @@ claw-pen/
 
 ## Prerequisites
 
-- **Docker** 20.10+ (or Podman 4.0+)
+- **Docker** 20.10+ (or Podman 4.0+) OR **Exo** container runtime
 - **Rust** 1.70+ (building from source)
 - **Node.js** 18+ (Tauri app)
 - **4GB RAM** minimum (8GB+ for local models)

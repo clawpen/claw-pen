@@ -21,6 +21,9 @@ pub struct AgentContainer {
     /// Last health check result
     #[serde(default)]
     pub health_status: Option<HealthStatus>,
+    /// Runtime used for this container (docker or exo)
+    #[serde(default)]
+    pub runtime: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -203,6 +206,9 @@ pub struct CreateAgentRequest {
     /// Tags for organization
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Container runtime to use: "docker" or "exo" (defaults to global config)
+    #[serde(default)]
+    pub runtime: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
