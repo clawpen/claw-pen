@@ -545,6 +545,7 @@
         let agents = [], selectedAgent = null, isConnected = false, currentStreamEl = null, chatHistory = {};
         const ORCHESTRATOR_URL = 'http://localhost:8081';
         let authToken = localStorage.getItem('clawpen_token');
+        let globalKeys = {};  // Store global API key status
         
         async function authFetch(url, options = {}) {
             console.log('[authFetch]', url, authToken ? 'with token' : 'no token');
@@ -729,12 +730,23 @@
             } catch (e) {}
         }
         
+        async function loadGlobalKeys() {
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/keys`);
+                const keys = await res.json();
+                globalKeys = {};
+                keys.forEach(k => { if (k.has_key) globalKeys[k.provider] = true; });
+            } catch (e) { console.error('Failed to load global keys:', e); }
+        }
+        
         function updateModelOptions() {
             const provider = document.getElementById('new-agent-provider').value;
             document.getElementById('new-agent-model').innerHTML = 
                 providerModels[provider].map(m => `<option value="${m.value}">${m.label}</option>`).join('');
+            // Check if global key exists for this provider
+            const globalKeyStatus = globalKeys[provider] ? '✓ Global key available' : 'No global key';
             document.getElementById('apikey-hint').textContent = 
-                `Enter your ${providerKeyNames[provider]} API key`;
+                `${providerKeyNames[provider]} API key (optional - ${globalKeyStatus})`;
         }
         
         async function fetchAgents() {
@@ -800,8 +812,9 @@
         
         async function connectToAgent(agent) {
             setStatus('Connecting...', 'connecting');
-            // Connect through orchestrator's chat proxy, not directly to container
-            const wsUrl = `ws://localhost:8081/api/agents/${agent.id}/chat${authToken ? '?token=' + authToken : ''}`;
+            // Connect directly to agent's WebSocket (agents use host networking on port 18790)
+            const port = agent.config?.env_vars?.PORT || '18790';
+            const wsUrl = `ws://localhost:${port}/ws`;
             console.log('[connectToAgent] connecting to', wsUrl);
             try {
                 if (window.__TAURI__) {
@@ -813,7 +826,11 @@
             }
         }
         
-        function showCreateModal() { updateModelOptions(); document.getElementById('create-modal').classList.add('active'); }
+        async function showCreateModal() { 
+            await loadGlobalKeys();
+            updateModelOptions(); 
+            document.getElementById('create-modal').classList.add('active'); 
+        }
         function hideCreateModal() { document.getElementById('create-modal').classList.remove('active'); }
         
         async function createAgent() {
@@ -824,7 +841,7 @@
             const memory = parseInt(document.getElementById('new-agent-memory').value);
             
             if (!name) { alert('Enter a name'); return; }
-            if (!apiKey) { alert('Enter an API key'); return; }
+            // API key is optional - will use global key if available
             
             try {
                 const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents`, {
