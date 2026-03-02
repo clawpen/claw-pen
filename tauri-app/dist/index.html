@@ -153,6 +153,18 @@
             font-size: 14px;
             display: inline-block;
         }
+        .btn-refresh {
+            background: #0f0f1a;
+            border: 1px solid #2a2a4a;
+            border-radius: 6px;
+            padding: 6px 10px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .btn-refresh:hover {
+            background: #1a1a2e;
+            border-color: #3a3a5a;
+        }
         .status.connected { color: #22c55e; }
         .status.connecting { color: #f59e0b; }
         .status.error { color: #ef4444; }
@@ -489,7 +501,10 @@
     <div id="main">
         <div class="chat-header">
             <h2 id="chat-title">Select an agent</h2>
-            <div class="status" id="status">Not connected</div>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <div class="status" id="status">Not connected</div>
+                <button class="btn-refresh" onclick="refreshConnection()" title="Reconnect">🔄</button>
+            </div>
         </div>
         
         <div id="chat-container">
@@ -879,6 +894,13 @@
         
         function setStatus(text, state) { statusEl.textContent = text; statusEl.className = 'status ' + state; }
         function setConnected(c) { isConnected = c; inputEl.disabled = sendBtn.disabled = !c; if (c) setStatus('Connected', 'connected'); }
+        
+        function refreshConnection() {
+            if (!selectedAgent) return;
+            console.log('[refresh] Reconnecting to', selectedAgent.name);
+            messagesEl.innerHTML = '<div class="message system">Reconnecting...</div>';
+            connectToAgent(selectedAgent);
+        }
         
         function addMessage(text, type = 'system') {
             const div = document.createElement('div');
