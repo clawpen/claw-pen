@@ -723,25 +723,34 @@ pub struct ExoClient {
 
 impl ExoClient {
     /// Create a new Exo client
-    /// 
+    ///
     /// # Arguments
     /// * `exo_path` - Optional custom path to exo binary. Defaults to "exo" in PATH.
     pub fn new(exo_path: Option<String>) -> Result<Self> {
         let exo_path = exo_path.unwrap_or_else(|| "exo".to_string());
-        
+
         // Verify exo is available
         let output = Command::new(&exo_path)
             .arg("--version")
             .output()
-            .map_err(|e| anyhow::anyhow!("exo binary not found at '{}': {}. Ensure exo is installed and in PATH.", exo_path, e))?;
-        
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "exo binary not found at '{}': {}. Ensure exo is installed and in PATH.",
+                    exo_path,
+                    e
+                )
+            })?;
+
         if !output.status.success() {
-            return Err(anyhow::anyhow!("exo binary at '{}' returned error", exo_path));
+            return Err(anyhow::anyhow!(
+                "exo binary at '{}' returned error",
+                exo_path
+            ));
         }
-        
+
         let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
         tracing::info!("Connected to Exo runtime: {}", version);
-        
+
         Ok(Self { exo_path })
     }
 
@@ -852,7 +861,7 @@ impl ContainerRuntime for ExoClient {
             // Skip header
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 3 {
-                let id = parts.get(0).unwrap_or(&"").to_string();
+                let id = parts.first().unwrap_or(&"").to_string();
                 let name = parts.get(1).unwrap_or(&"").to_string();
                 let status_str = parts.get(2).unwrap_or(&"").to_lowercase();
 
@@ -958,8 +967,10 @@ impl ContainerRuntime for ExoClient {
 
         if !output.status.success() {
             // Container might already be stopped
-            tracing::warn!("exo stop returned non-zero (container may already be stopped): {}", 
-                String::from_utf8_lossy(&output.stderr));
+            tracing::warn!(
+                "exo stop returned non-zero (container may already be stopped): {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
 
         tracing::info!("Stopped exo container: {}", id);

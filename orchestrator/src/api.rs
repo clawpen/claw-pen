@@ -120,8 +120,10 @@ pub async fn create_agent(
     let runtime = req.runtime.as_ref().map(|r| r.to_lowercase());
     if let Some(ref rt) = runtime {
         if rt != "docker" && rt != "exo" {
-            return Err((StatusCode::BAD_REQUEST,
-                format!("Invalid runtime '{}'. Must be 'docker' or 'exo'.", rt)));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Invalid runtime '{}'. Must be 'docker' or 'exo'.", rt),
+            ));
         }
     }
     if let Some(ref cfg) = req.config {
@@ -253,11 +255,9 @@ pub async fn create_agent(
 
     // Determine which runtime to use
     // Priority: per-agent runtime > global config runtime
-    let agent_runtime = runtime.or_else(|| {
-        match state.config.container_runtime {
-            crate::config::ContainerRuntimeType::Docker => Some("docker".to_string()),
-            crate::config::ContainerRuntimeType::Exo => Some("exo".to_string()),
-        }
+    let agent_runtime = runtime.or_else(|| match state.config.container_runtime {
+        crate::config::ContainerRuntimeType::Docker => Some("docker".to_string()),
+        crate::config::ContainerRuntimeType::Exo => Some("exo".to_string()),
     });
 
     // Get the appropriate runtime client based on agent's runtime preference
@@ -567,7 +567,7 @@ pub async fn start_all(
             } else {
                 &state.runtime
             };
-            
+
             if runtime.start_container(&agent.id).await.is_ok() {
                 started.push(agent.id.clone());
             }
@@ -598,7 +598,7 @@ pub async fn stop_all(
             } else {
                 &state.runtime
             };
-            
+
             if runtime.stop_container(&agent.id).await.is_ok() {
                 stopped.push(agent.id.clone());
             }
@@ -736,7 +736,7 @@ pub async fn get_all_metrics(
             } else {
                 &state.runtime
             };
-            
+
             if let Ok(Some(usage)) = runtime.get_stats(&agent.id).await {
                 metrics.insert(agent.id.clone(), usage);
             }
