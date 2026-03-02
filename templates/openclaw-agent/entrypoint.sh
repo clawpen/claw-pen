@@ -14,7 +14,7 @@ case "$PROVIDER" in
     ;;
   kimi|kimi-code) 
     API_KEY="$KIMI_API_KEY" 
-    BASE_URL="https://api.kimi.com/coding"
+    BASE_URL="https://api.kimi.com/coding/v1"
     PROVIDER="openai"
     ;;
   anthropic) API_KEY="$ANTHROPIC_API_KEY" ;;
