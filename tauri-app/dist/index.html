@@ -809,8 +809,21 @@
         }
         
         async function startAgent(id) {
-            await authFetch(`${ORCHESTRATOR_URL}/api/agents/${id}/start`, { method: 'POST' });
-            setTimeout(() => { fetchAgents(); fetchSystemStats(); }, 2000);
+            console.log('[startAgent] starting', id);
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents/${id}/start`, { method: 'POST' });
+                if (!res.ok) {
+                    const err = await res.text();
+                    console.error('[startAgent] failed:', err);
+                    alert('Failed to start: ' + err);
+                    return;
+                }
+                console.log('[startAgent] started successfully');
+                setTimeout(() => { fetchAgents(); fetchSystemStats(); }, 2000);
+            } catch (e) {
+                console.error('[startAgent] error:', e);
+                alert('Error: ' + e);
+            }
         }
         
         async function stopAgent(id) {
