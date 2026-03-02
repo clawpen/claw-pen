@@ -364,6 +364,9 @@ impl DockerClient {
         env.push(format!("LLM_PROVIDER={:?}", config.llm_provider));
         if let Some(ref model) = config.llm_model {
             env.push(format!("LLM_MODEL={}", model));
+        
+        // Agent port (default 18790)
+        env.push("PORT=18790".to_string());
         }
 
         // Pass all custom env vars
