@@ -14,6 +14,7 @@ mod teams;
 mod templates;
 mod types;
 mod validation;
+// mod code_index;  // TODO: fix dependencies
 
 use axum::http::{header, HeaderValue, Method};
 use axum::{
@@ -321,7 +322,7 @@ async fn main() -> anyhow::Result<()> {
         .layer(cors)
         .with_state(state);
 
-    let addr = format!("{}:{}", "0.0.0.0", 3000);
+    let addr = format!("{}:{}", "0.0.0.0", 8081);
     tracing::info!("🦀 Claw Pen orchestrator listening on {}", addr);
     tracing::info!("🔐 JWT authentication enabled - all API endpoints require Bearer token");
     tracing::info!("   GET /auth/status to check auth configuration");

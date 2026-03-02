@@ -1,0 +1,13 @@
+# Core
+openai>=1.0.0  # For local Ollama API
+
+# Code parsing
+tree-sitter>=0.21.0
+tree-sitter-languages>=1.10.0
+
+# Semantic search (local)
+scikit-learn>=1.3.0
+numpy>=1.24.0
+
+# SQLite with VSS
+sqlite-vss>=0.1.0

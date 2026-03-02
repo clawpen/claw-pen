@@ -1,0 +1,22 @@
+FROM python:3.11-slim
+
+# Security: no network at build time either
+# (user verifies with --network=none)
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy agent code
+COPY agent/ ./agent/
+
+# Security hardening
+RUN useradd -m -s /bin/bash agent && \
+    chown -R agent:agent /app
+
+USER agent
+
+# Agent entrypoint
+ENTRYPOINT ["python", "-m", "agent.main"]

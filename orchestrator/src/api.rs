@@ -237,20 +237,38 @@ pub async fn create_agent(
 
     // Create container
 
-    // Inject API key from agent config
-    if let Some(ref key) = config.api_key {
-        let key_var = match config.llm_provider {
-            LlmProvider::Zai => "ZAI_API_KEY",
-            LlmProvider::Anthropic => "ANTHROPIC_API_KEY",
-            LlmProvider::OpenAI => "OPENAI_API_KEY",
-            LlmProvider::Kimi => "KIMI_API_KEY",
-            LlmProvider::KimiCode => "KIMI_CODE_API_KEY",
-            LlmProvider::Gemini => "GOOGLE_API_KEY",
-            LlmProvider::Access => "ACCESS_API_KEY",
-            LlmProvider::Huggingface => "HF_TOKEN",
-            _ => "API_KEY",
-        };
-        config.env_vars.insert(key_var.to_string(), key.clone());
+    // Inject API key from agent config, or from global stored keys
+    let key_var = match config.llm_provider {
+        LlmProvider::Zai => "ZAI_API_KEY",
+        LlmProvider::Anthropic => "ANTHROPIC_API_KEY",
+        LlmProvider::OpenAI => "OPENAI_API_KEY",
+        LlmProvider::Kimi => "KIMI_API_KEY",
+        LlmProvider::KimiCode => "KIMI_CODE_API_KEY",
+        LlmProvider::Gemini => "GOOGLE_API_KEY",
+        LlmProvider::Access => "ACCESS_API_KEY",
+        LlmProvider::Huggingface => "HF_TOKEN",
+        _ => "API_KEY",
+    };
+
+    // First check agent-specific key, then fall back to globally stored key
+    let stored_keys = state.api_keys.read().await;
+    let provider_name = match config.llm_provider {
+        LlmProvider::Zai => "zai",
+        LlmProvider::Anthropic => "anthropic",
+        LlmProvider::OpenAI => "openai",
+        LlmProvider::Kimi => "kimi",
+        LlmProvider::KimiCode => "kimi-code",
+        LlmProvider::Gemini => "google",
+        LlmProvider::Access => "access",
+        LlmProvider::Huggingface => "huggingface",
+        _ => "unknown",
+    };
+    let global_key = stored_keys.get(provider_name).cloned();
+    drop(stored_keys); // Release lock before mutating config
+
+    let api_key = config.api_key.clone().or(global_key);
+    if let Some(key) = api_key {
+        config.env_vars.insert(key_var.to_string(), key);
     }
 
     // Determine which runtime to use
@@ -452,23 +470,38 @@ pub async fn start_agent(
     if !container_exists {
         // Create the container for this stored agent
 
-        // Inject API key from agent config
-        if let Some(ref key) = agent.config.api_key {
-            let key_var = match agent.config.llm_provider {
-                LlmProvider::Zai => "ZAI_API_KEY",
-                LlmProvider::Anthropic => "ANTHROPIC_API_KEY",
-                LlmProvider::OpenAI => "OPENAI_API_KEY",
-                LlmProvider::Kimi => "KIMI_API_KEY",
-                LlmProvider::KimiCode => "KIMI_CODE_API_KEY",
-                LlmProvider::Gemini => "GOOGLE_API_KEY",
-                LlmProvider::Access => "ACCESS_API_KEY",
-                LlmProvider::Huggingface => "HF_TOKEN",
-                _ => "API_KEY",
-            };
-            agent
-                .config
-                .env_vars
-                .insert(key_var.to_string(), key.clone());
+        // Inject API key from agent config, or from global stored keys
+        let key_var = match agent.config.llm_provider {
+            LlmProvider::Zai => "ZAI_API_KEY",
+            LlmProvider::Anthropic => "ANTHROPIC_API_KEY",
+            LlmProvider::OpenAI => "OPENAI_API_KEY",
+            LlmProvider::Kimi => "KIMI_API_KEY",
+            LlmProvider::KimiCode => "KIMI_CODE_API_KEY",
+            LlmProvider::Gemini => "GOOGLE_API_KEY",
+            LlmProvider::Access => "ACCESS_API_KEY",
+            LlmProvider::Huggingface => "HF_TOKEN",
+            _ => "API_KEY",
+        };
+
+        // First check agent-specific key, then fall back to globally stored key
+        let stored_keys = state.api_keys.read().await;
+        let provider_name = match agent.config.llm_provider {
+            LlmProvider::Zai => "zai",
+            LlmProvider::Anthropic => "anthropic",
+            LlmProvider::OpenAI => "openai",
+            LlmProvider::Kimi => "kimi",
+            LlmProvider::KimiCode => "kimi-code",
+            LlmProvider::Gemini => "google",
+            LlmProvider::Access => "access",
+            LlmProvider::Huggingface => "huggingface",
+            _ => "unknown",
+        };
+        let global_key = stored_keys.get(provider_name).cloned();
+        drop(stored_keys);
+
+        let api_key = agent.config.api_key.clone().or(global_key);
+        if let Some(key) = api_key {
+            agent.config.env_vars.insert(key_var.to_string(), key);
         }
         let new_id = runtime
             .create_container(&agent.name, &agent.config)
@@ -1202,7 +1235,7 @@ fn parse_provider(s: &str) -> LlmProvider {
 ///
 /// Authentication: Pass JWT token via `?token=<jwt>` query parameter
 ///
-/// Example: `ws://localhost:3000/api/agents/{id}/chat?token=eyJhbGciOiJIUzI1NiIs...`
+/// Example: `ws://localhost:8081/api/agents/{id}/chat?token=eyJhbGciOiJIUzI1NiIs...`
 pub async fn chat_websocket(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,

@@ -1,0 +1,75 @@
+name: safe-code-assistant
+display_name: "Safe Code Assistant"
+description: "Secure code analysis agent - network isolated, read-only mounts, no exfiltration possible"
+
+# Security guarantees
+security:
+  network: none           # No network access at all
+  exfiltration: blocked   # Cannot send data out
+  secrets: injected       # Secrets only at runtime
+  
+# Container config
+container:
+  image: claw-pen/safe-code-assistant:latest
+  build:
+    context: .
+    dockerfile: Containerfile
+  
+  # Default resources
+  memory_mb: 2048
+  cpu_cores: 2.0
+  
+  # Network isolation
+  network:
+    mode: none
+  
+  # No default mounts - user must specify
+  mounts: []
+
+# Agent config
+agent:
+  provider: local  # Use local Ollama
+  model: llama3.2
+  
+  # Capabilities
+  capabilities:
+    - code_analysis
+    - semantic_search
+    - file_read
+    - file_write  # Only to mounted rw paths
+  
+  # Indexing for large codebases
+  indexing:
+    enabled: true
+    include:
+      - "**/*.py"
+      - "**/*.js"
+      - "**/*.ts"
+      - "**/*.rs"
+      - "**/*.go"
+    exclude:
+      - "**/node_modules/**"
+      - "**/target/**"
+      - "**/.git/**"
+    max_file_size_kb: 500
+
+# Usage example
+usage: |
+  # User creates agent with their code mounted
+  claw-pen create safe-code-assistant \
+    --mount ~/my-project:/workspace:ro \
+    --network none \
+    --provider local
+  
+  # Agent can ONLY see /workspace
+  # Agent has NO network access
+  # Data never leaves user's machine
+
+# Verification
+attestation:
+  # Template hash (signed by ClawHub)
+  sha256: "..."
+  # No network calls in code
+  network_free: true
+  # No hardcoded secrets
+  secrets_free: true

@@ -31,7 +31,8 @@
             flex-shrink: 0;
         }
         
-        .sidebar-header h1 { color: #e94560; font-size: 24px; }
+        .sidebar-header h1 { color: #e94560; font-size: 24px; margin: 0; }
+        .sidebar-header { display: flex; align-items: center; justify-content: space-between; }
         
         .system-stats {
             padding: 16px 20px;
@@ -267,12 +268,66 @@
         .btn:hover { opacity: 0.9; }
         
         .api-key-hint { font-size: 11px; color: #666; margin-top: 4px; }
-    </style>
+    
+.settings-btn {
+    background: transparent;
+    border: none;
+    color: #888;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 6px;
+    transition: all 0.2s;
+}
+.settings-btn:hover {
+    background: #2a2a4a;
+    color: #e94560;
+}
+
+/* Settings Modal */
+#settings-modal .modal-content {
+    max-width: 500px;
+}
+.api-key-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.api-key-row label {
+    width: 100px;
+    font-size: 14px;
+    color: #aaa;
+}
+.api-key-row input {
+    flex: 1;
+    padding: 10px 12px;
+    background: #1a1a2e;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    color: #eee;
+    font-family: monospace;
+    font-size: 13px;
+}
+.api-key-row input:focus {
+    outline: none;
+    border-color: #e94560;
+}
+.api-key-row .status {
+    width: 24px;
+    text-align: center;
+}
+.api-key-row .status.has-key { color: #22c55e; }
+.api-key-row .status.no-key { color: #666; }
+</style>
+
+
 </head>
 <body>
     <div id="sidebar">
         <div class="sidebar-header">
-            <h1>🦞 Claw Pen</h1>
+            <h1>🦀 Claw Pen</h1>
+            <button class="settings-btn" onclick="showSettingsModal()" title="Settings">⚙️</button>
         </div>
         
         <div class="system-stats">
@@ -304,6 +359,57 @@
         <div id="agent-list"></div>
     </div>
     
+
+    <div class="modal-overlay" id="settings-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>⚙️ Settings</h3>
+                <button class="modal-close" onclick="hideSettingsModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <h4 style="margin-bottom: 16px; color: #aaa;">API Keys</h4>
+                <p style="font-size: 13px; color: #666; margin-bottom: 20px;">
+                    Keys are stored encrypted and only used for agent LLM calls.
+                </p>
+                
+                <div class="api-key-row">
+                    <label>Z.AI</label>
+                    <input type="password" id="key-zai" placeholder="sk-..." />
+                    <span class="status" id="status-zai"></span>
+                </div>
+                
+                <div class="api-key-row">
+                    <label>Kimi</label>
+                    <input type="password" id="key-kimi" placeholder="sk-..." />
+                    <span class="status" id="status-kimi"></span>
+                </div>
+                
+                <div class="api-key-row">
+                    <label>Anthropic</label>
+                    <input type="password" id="key-anthropic" placeholder="sk-ant-..." />
+                    <span class="status" id="status-anthropic"></span>
+                </div>
+                
+                <div class="api-key-row">
+                    <label>OpenAI</label>
+                    <input type="password" id="key-openai" placeholder="sk-..." />
+                    <span class="status" id="status-openai"></span>
+                </div>
+                
+                <div class="api-key-row">
+                    <label>Google</label>
+                    <input type="password" id="key-google" placeholder="AIza..." />
+                    <span class="status" id="status-google"></span>
+                </div>
+                
+                <div style="margin-top: 24px; display: flex; gap: 12px;">
+                    <button class="btn-primary" onclick="saveApiKeys()">Save Keys</button>
+                    <button class="btn-secondary" onclick="hideSettingsModal()">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="main">
         <div class="chat-header">
             <h2 id="chat-title">Select an agent</h2>
@@ -362,6 +468,46 @@
     <script>
         let agents = [], selectedAgent = null, isConnected = false, currentStreamEl = null, chatHistory = {};
         const ORCHESTRATOR_URL = 'http://localhost:3000';
+        let authToken = localStorage.getItem('clawpen_token');
+        
+        async function authFetch(url, options = {}) {
+            console.log('[authFetch]', url, authToken ? 'with token' : 'no token');
+            if (authToken) {
+                options.headers = options.headers || {};
+                options.headers['Authorization'] = `Bearer ${authToken}`;
+            }
+            const res = await fetch(url, options);
+            if (res.status === 401) {
+                await login();
+                if (authToken) {
+                    options.headers = options.headers || {};
+                    options.headers['Authorization'] = `Bearer ${authToken}`;
+                    return fetch(url, options);
+                }
+            }
+            return res;
+        }
+        
+        async function login() {
+            console.log('[login] attempting login...');
+            const username = localStorage.getItem('clawpen_user') || 'admin';
+            const password = localStorage.getItem('clawpen_pass') || 'test1234';
+            try {
+                const res = await fetch(`${ORCHESTRATOR_URL}/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    authToken = data.access_token;
+                    console.log('[login] success, token:', authToken.substring(0, 20) + '...');
+                    localStorage.setItem('clawpen_token', authToken);
+                    return true;
+                }
+            } catch (e) { console.error('Login failed:', e); }
+            return false;
+        }
         
         const providerModels = {
             zai: [{ value: 'glm-5', label: 'GLM-5' }],
@@ -392,7 +538,7 @@
         
         async function fetchSystemStats() {
             try {
-                const res = await fetch(`${ORCHESTRATOR_URL}/api/system/stats`);
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/system/stats`);
                 const stats = await res.json();
                 
                 const ramPercent = (stats.used_memory_mb / stats.total_memory_mb * 100).toFixed(0);
@@ -422,7 +568,7 @@
         
         async function fetchAgents() {
             try {
-                const res = await fetch(`${ORCHESTRATOR_URL}/api/agents`);
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents`);
                 agents = await res.json();
                 renderAgents();
             } catch (e) {}
@@ -445,19 +591,19 @@
         }
         
         async function startAgent(id) {
-            await fetch(`${ORCHESTRATOR_URL}/api/agents/${id}/start`, { method: 'POST' });
+            await authFetch(`${ORCHESTRATOR_URL}/api/agents/${id}/start`, { method: 'POST' });
             setTimeout(() => { fetchAgents(); fetchSystemStats(); }, 2000);
         }
         
         async function stopAgent(id) {
-            await fetch(`${ORCHESTRATOR_URL}/api/agents/${id}/stop`, { method: 'POST' });
+            await authFetch(`${ORCHESTRATOR_URL}/api/agents/${id}/stop`, { method: 'POST' });
             fetchAgents();
             fetchSystemStats();
         }
         
         async function deleteAgent(id, name) {
             if (!confirm(`Delete "${name}"?`)) return;
-            await fetch(`${ORCHESTRATOR_URL}/api/agents/${id}`, { method: 'DELETE' });
+            await authFetch(`${ORCHESTRATOR_URL}/api/agents/${id}`, { method: 'DELETE' });
             delete chatHistory[name];
             fetchAgents();
             fetchSystemStats();
@@ -505,7 +651,7 @@
             if (!apiKey) { alert('Enter an API key'); return; }
             
             try {
-                const res = await fetch(`${ORCHESTRATOR_URL}/api/agents`, {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
@@ -578,7 +724,74 @@
             return '';
         }
         
+        
+        // === Settings Modal ===
+        function showSettingsModal() {
+            loadApiKeys();
+            document.getElementById('settings-modal').classList.add('active');
+        }
+        
+        function hideSettingsModal() {
+            document.getElementById('settings-modal').classList.remove('active');
+        }
+        
+        async function loadApiKeys() {
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/keys`);
+                const keys = await res.json();
+                
+                // Update status indicators
+                keys.forEach(k => {
+                    const status = document.getElementById(`status-${k.provider}`);
+                    if (status) {
+                        status.textContent = k.has_key ? '✓' : '—';
+                        status.className = 'status ' + (k.has_key ? 'has-key' : 'no-key');
+                    }
+                });
+            } catch (e) {
+                console.error('Failed to load API keys status:', e);
+            }
+        }
+        
+        async function saveApiKeys() {
+            const providers = ['zai', 'kimi', 'anthropic', 'openai', 'google'];
+            let saved = 0;
+            
+            for (const provider of providers) {
+                const input = document.getElementById(`key-${provider}`);
+                const value = input.value.trim();
+                
+                if (value) {
+                    try {
+                        const res = await authFetch(`${ORCHESTRATOR_URL}/api/keys`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ provider: provider, key: value })
+                        });
+                        
+                        if (res.ok) {
+                            saved++;
+                            input.value = ''; // Clear after save
+                            input.placeholder = '✓ Saved';
+                        }
+                    } catch (e) {
+                        console.error(`Failed to save ${provider} key:`, e);
+                    }
+                }
+            }
+            
+            if (saved > 0) {
+                alert(`Saved ${saved} API key(s)`);
+                loadApiKeys();
+            }
+            
+            hideSettingsModal();
+        }
+        
+
         async function init() {
+            console.log('[init] starting...');
+            await login();
             await fetchAgents();
             await fetchSystemStats();
             setInterval(fetchAgents, 5000);
