@@ -1,7 +1,7 @@
 use crate::types::AgentContainer;
 use gloo_net::http::Request;
 
-const API_BASE: &str = "http://localhost:3000/api";
+const API_BASE: &str = "http://localhost:8081/api";
 
 pub async fn fetch_agents() -> Result<Vec<AgentContainer>, String> {
     let response = Request::get(&format!("{}/agents", API_BASE))
