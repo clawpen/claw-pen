@@ -23,6 +23,9 @@ pub struct StoredAgent {
     pub config: crate::types::AgentConfig,
     pub created_at: String,
     pub updated_at: String,
+    /// Container runtime: "docker" or "exo"
+    #[serde(default)]
+    pub runtime: Option<String>,
 }
 
 /// Load all persisted agents from disk
@@ -96,6 +99,7 @@ impl From<StoredAgent> for crate::types::AgentContainer {
             tags: vec![],
             restart_policy: Default::default(),
             health_status: None,
+            runtime: stored.runtime,
         }
     }
 }
@@ -110,6 +114,7 @@ pub fn to_stored_agent(container: &crate::types::AgentContainer) -> StoredAgent 
         config: container.config.clone(),
         created_at: now.clone(), // In production, track original creation time
         updated_at: now,
+        runtime: container.runtime.clone(),
     }
 }
 

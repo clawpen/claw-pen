@@ -33,6 +33,8 @@ pub struct AppState {
     pub config: config::Config,
     pub containers: RwLock<Vec<types::AgentContainer>>,
     pub runtime: container::RuntimeClient,
+    /// Exo-specific runtime for agents that use exo
+    pub exo_runtime: container::RuntimeClient,
     pub templates: templates::TemplateRegistry,
     pub andor: Option<andor::AndorClient>,
     pub secrets: SecretsManager,
@@ -43,7 +45,7 @@ pub struct AppState {
     pub auth: RwLock<AuthManager>,
 }
 
-fn load_api_keys(data_dir: &std::path::Path) -> HashMap<String, String> {
+fn load_api_keys(data_dir: &std::path::PathBuf) -> HashMap<String, String> {
     let keys_path = data_dir.join("api_keys.json");
     if keys_path.exists() {
         if let Ok(contents) = std::fs::read_to_string(&keys_path) {
@@ -92,9 +94,43 @@ async fn main() -> anyhow::Result<()> {
         andor::AndorClient::new(cfg.clone())
     });
 
-    // Connect to runtime
-    let runtime = container::RuntimeClient::new().await?;
-    tracing::info!("Connected to container runtime");
+    // Connect to primary runtime (based on global config)
+    let runtime = container::RuntimeClient::with_runtime(
+        config.container_runtime.clone(),
+        config.exo_path.clone(),
+    )
+    .await?
+    .with_network_config(
+        config.network_backend.clone(),
+        config.headscale_url.clone(),
+        config.headscale_auth_key.clone(),
+        config.headscale_namespace.clone(),
+    );
+    
+    tracing::info!(
+        "Connected to primary container runtime: {:?}",
+        config.container_runtime
+    );
+
+    // Always initialize exo runtime as secondary (for per-agent selection)
+    // This allows agents to use exo even if docker is the global default
+    let exo_runtime = match container::RuntimeClient::with_runtime(
+        config::ContainerRuntimeType::Exo,
+        config.exo_path.clone(),
+    ).await {
+        Ok(client) => {
+            tracing::info!("Exo runtime available for per-agent selection");
+            client
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Exo runtime not available (per-agent exo selection will fail): {}",
+                e
+            );
+            // Fall back to primary runtime - operations will fail gracefully
+            runtime.clone_runtime_client()
+        }
+    };
 
     // Load persisted agents from storage
     let stored_agents = storage::load_agents().unwrap_or_default();
@@ -129,6 +165,7 @@ async fn main() -> anyhow::Result<()> {
             tags: vec![],
             restart_policy: Default::default(),
             health_status: None,
+            runtime: stored.runtime,
         });
     }
 
@@ -158,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
         config,
         containers: RwLock::new(merged_agents),
         runtime,
+        exo_runtime,
         templates: template_registry,
         andor: andor_client,
         secrets,

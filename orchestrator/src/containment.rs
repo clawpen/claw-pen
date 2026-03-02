@@ -13,6 +13,7 @@ use crate::types::{
     AgentConfig, AgentContainer, AgentStatus, LlmProvider, LogEntry, ResourceUsage, VolumeMount,
 };
 
+#[derive(Clone)]
 pub struct ContainmentClient {
     /// Path to containment binary (or wsl command on Windows)
     runtime_path: String,
@@ -96,6 +97,7 @@ impl ContainmentClient {
                     tags: vec![],
                     restart_policy: Default::default(),
                     health_status: None,
+                    runtime: Some("containment".to_string()),
                 });
             }
         }

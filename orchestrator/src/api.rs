@@ -77,6 +77,12 @@ pub async fn list_agents(
                     return false;
                 }
             }
+            // Filter by runtime
+            if let Some(runtime) = params.get("runtime") {
+                if c.runtime.as_deref() != Some(runtime.as_str()) {
+                    return false;
+                }
+            }
             true
         })
         .cloned()
@@ -110,7 +116,14 @@ pub async fn create_agent(
         }
     }
 
-    // Validate config limits if provided
+    // Validate runtime if provided
+    let runtime = req.runtime.as_ref().map(|r| r.to_lowercase());
+    if let Some(ref rt) = runtime {
+        if rt != "docker" && rt != "exo" {
+            return Err((StatusCode::BAD_REQUEST,
+                format!("Invalid runtime '{}'. Must be 'docker' or 'exo'.", rt)));
+        }
+    }
     if let Some(ref cfg) = req.config {
         // Validate env vars count
         if let Some(ref env) = cfg.env_vars {
@@ -238,11 +251,39 @@ pub async fn create_agent(
         config.env_vars.insert(key_var.to_string(), key.clone());
     }
 
-    let id = state
-        .runtime
-        .create_container(&req.name, &config)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // Determine which runtime to use
+    // Priority: per-agent runtime > global config runtime
+    let agent_runtime = runtime.or_else(|| {
+        match state.config.container_runtime {
+            crate::config::ContainerRuntimeType::Docker => Some("docker".to_string()),
+            crate::config::ContainerRuntimeType::Exo => Some("exo".to_string()),
+        }
+    });
+
+    // Get the appropriate runtime client based on agent's runtime preference
+    let id = if let Some(ref rt) = agent_runtime {
+        if rt == "exo" {
+            // Use exo-specific runtime if available
+            state
+                .exo_runtime
+                .create_container(&req.name, &config)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        } else {
+            // Use default runtime (docker or containment)
+            state
+                .runtime
+                .create_container(&req.name, &config)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        }
+    } else {
+        state
+            .runtime
+            .create_container(&req.name, &config)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    };
 
     let agent = AgentContainer {
         id,
@@ -255,6 +296,7 @@ pub async fn create_agent(
         tags: req.tags,
         restart_policy: AgentConfig::default().restart_policy,
         health_status: None,
+        runtime: agent_runtime,
     };
 
     // Register with AndOR Bridge if configured
@@ -340,21 +382,32 @@ pub async fn delete_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    // First check if agent exists in our list
-    let agent_exists = {
+    // First check if agent exists in our list and get its runtime
+    let (agent_exists, agent_runtime) = {
         let containers = state.containers.read().await;
-        containers.iter().any(|a| a.id == id)
+        containers
+            .iter()
+            .find(|a| a.id == id)
+            .map(|a| (true, a.runtime.clone()))
+            .unwrap_or((false, None))
     };
 
     if !agent_exists {
         return Err((StatusCode::NOT_FOUND, "Agent not found".to_string()));
     }
 
+    // Choose the right runtime based on agent's runtime setting
+    let runtime: &dyn ContainerRuntime = if agent_runtime.as_deref() == Some("exo") {
+        &state.exo_runtime
+    } else {
+        &state.runtime
+    };
+
     // Stop if running (ignore errors if container doesn't exist)
-    let _ = state.runtime.stop_container(&id).await;
+    let _ = runtime.stop_container(&id).await;
 
     // Delete container (ignore errors if container doesn't exist)
-    let _ = state.runtime.delete_container(&id).await;
+    let _ = runtime.delete_container(&id).await;
 
     // Unregister from AndOR Bridge
     if let Some(ref andor) = state.andor {
@@ -386,8 +439,15 @@ pub async fn start_agent(
         .find(|a| a.id == id)
         .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
 
+    // Choose the right runtime based on agent's runtime setting
+    let runtime: &dyn ContainerRuntime = if agent.runtime.as_deref() == Some("exo") {
+        &state.exo_runtime
+    } else {
+        &state.runtime
+    };
+
     // Check if container exists, if not create it
-    let container_exists = state.runtime.container_exists(&id).await.unwrap_or(false);
+    let container_exists = runtime.container_exists(&id).await.unwrap_or(false);
 
     if !container_exists {
         // Create the container for this stored agent
@@ -410,8 +470,7 @@ pub async fn start_agent(
                 .env_vars
                 .insert(key_var.to_string(), key.clone());
         }
-        let new_id = state
-            .runtime
+        let new_id = runtime
             .create_container(&agent.name, &agent.config)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -427,8 +486,7 @@ pub async fn start_agent(
     }
 
     // Start the container
-    state
-        .runtime
+    runtime
         .start_container(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -447,8 +505,23 @@ pub async fn stop_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<AgentContainer>, (StatusCode, String)> {
-    state
-        .runtime
+    // Get agent to find its runtime
+    let agent_runtime = {
+        let containers = state.containers.read().await;
+        containers
+            .iter()
+            .find(|a| a.id == id)
+            .and_then(|a| a.runtime.clone())
+    };
+
+    // Choose the right runtime
+    let runtime: &dyn ContainerRuntime = if agent_runtime.as_deref() == Some("exo") {
+        &state.exo_runtime
+    } else {
+        &state.runtime
+    };
+
+    runtime
         .stop_container(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -487,10 +560,17 @@ pub async fn start_all(
             }
         }
 
-        if agent.status != AgentStatus::Running
-            && state.runtime.start_container(&agent.id).await.is_ok()
-        {
-            started.push(agent.id.clone());
+        if agent.status != AgentStatus::Running {
+            // Choose runtime based on agent's runtime setting
+            let runtime: &dyn ContainerRuntime = if agent.runtime.as_deref() == Some("exo") {
+                &state.exo_runtime
+            } else {
+                &state.runtime
+            };
+            
+            if runtime.start_container(&agent.id).await.is_ok() {
+                started.push(agent.id.clone());
+            }
         }
     }
 
@@ -511,10 +591,17 @@ pub async fn stop_all(
             }
         }
 
-        if agent.status == AgentStatus::Running
-            && state.runtime.stop_container(&agent.id).await.is_ok()
-        {
-            stopped.push(agent.id.clone());
+        if agent.status == AgentStatus::Running {
+            // Choose runtime based on agent's runtime setting
+            let runtime: &dyn ContainerRuntime = if agent.runtime.as_deref() == Some("exo") {
+                &state.exo_runtime
+            } else {
+                &state.runtime
+            };
+            
+            if runtime.stop_container(&agent.id).await.is_ok() {
+                stopped.push(agent.id.clone());
+            }
         }
     }
 
@@ -528,13 +615,28 @@ pub async fn get_logs(
     Path(id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<LogEntry>>, (StatusCode, String)> {
+    // Get agent to find its runtime
+    let agent_runtime = {
+        let containers = state.containers.read().await;
+        containers
+            .iter()
+            .find(|a| a.id == id)
+            .and_then(|a| a.runtime.clone())
+    };
+
+    // Choose the right runtime
+    let runtime: &dyn ContainerRuntime = if agent_runtime.as_deref() == Some("exo") {
+        &state.exo_runtime
+    } else {
+        &state.runtime
+    };
+
     let tail: usize = params
         .get("tail")
         .and_then(|s| s.parse().ok())
         .unwrap_or(100);
 
-    let logs = state
-        .runtime
+    let logs = runtime
         .get_logs(&id, tail)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -590,8 +692,23 @@ pub async fn get_metrics(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<ResourceUsage>, (StatusCode, String)> {
-    let usage = state
-        .runtime
+    // Get agent to find its runtime
+    let agent_runtime = {
+        let containers = state.containers.read().await;
+        containers
+            .iter()
+            .find(|a| a.id == id)
+            .and_then(|a| a.runtime.clone())
+    };
+
+    // Choose the right runtime
+    let runtime: &dyn ContainerRuntime = if agent_runtime.as_deref() == Some("exo") {
+        &state.exo_runtime
+    } else {
+        &state.runtime
+    };
+
+    let usage = runtime
         .get_stats(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -613,7 +730,14 @@ pub async fn get_all_metrics(
 
     for agent in containers.iter() {
         if agent.status == AgentStatus::Running {
-            if let Ok(Some(usage)) = state.runtime.get_stats(&agent.id).await {
+            // Choose runtime based on agent's runtime setting
+            let runtime: &dyn ContainerRuntime = if agent.runtime.as_deref() == Some("exo") {
+                &state.exo_runtime
+            } else {
+                &state.runtime
+            };
+            
+            if let Ok(Some(usage)) = runtime.get_stats(&agent.id).await {
                 metrics.insert(agent.id.clone(), usage);
             }
         }
@@ -628,8 +752,23 @@ pub async fn run_health_check(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<HealthStatus>, (StatusCode, String)> {
-    let healthy = state
-        .runtime
+    // Get agent to find its runtime
+    let agent_runtime = {
+        let containers = state.containers.read().await;
+        containers
+            .iter()
+            .find(|a| a.id == id)
+            .and_then(|a| a.runtime.clone())
+    };
+
+    // Choose the right runtime
+    let runtime: &dyn ContainerRuntime = if agent_runtime.as_deref() == Some("exo") {
+        &state.exo_runtime
+    } else {
+        &state.runtime
+    };
+
+    let healthy = runtime
         .health_check(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -665,6 +804,7 @@ pub struct SystemStats {
     pub agent_count: usize,
     pub running_agents: usize,
     pub agent_memory_mb: u64,
+    pub runtime: String,
 }
 
 pub async fn get_system_stats(State(state): State<Arc<AppState>>) -> Json<SystemStats> {
@@ -686,6 +826,12 @@ pub async fn get_system_stats(State(state): State<Arc<AppState>>) -> Json<System
     // Get CPU usage (simplified - just count running containers)
     let cpu_usage = (running.len() as f32 / cpu_cores.max(1.0)) * 100.0;
 
+    // Determine active runtime
+    let runtime = match state.config.container_runtime {
+        crate::config::ContainerRuntimeType::Docker => "docker",
+        crate::config::ContainerRuntimeType::Exo => "exo",
+    };
+
     Json(SystemStats {
         total_memory_mb: total_mem / 1024,
         used_memory_mb: used_mem / 1024,
@@ -695,6 +841,7 @@ pub async fn get_system_stats(State(state): State<Arc<AppState>>) -> Json<System
         agent_count: containers.len(),
         running_agents: running.len(),
         agent_memory_mb: agent_memory,
+        runtime: runtime.to_string(),
     })
 }
 
@@ -990,9 +1137,15 @@ pub async fn import_agent(
     State(state): State<Arc<AppState>>,
     Json(agent): Json<AgentContainer>,
 ) -> Result<Json<AgentContainer>, (StatusCode, String)> {
+    // Choose runtime based on imported agent's runtime setting
+    let runtime: &dyn ContainerRuntime = if agent.runtime.as_deref() == Some("exo") {
+        &state.exo_runtime
+    } else {
+        &state.runtime
+    };
+
     // Create the container
-    let id = state
-        .runtime
+    let id = runtime
         .create_container(&agent.name, &agent.config)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1010,8 +1163,13 @@ pub async fn import_agent(
 // === Runtime Status ===
 
 pub async fn runtime_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let runtime_name = match state.config.container_runtime {
+        crate::config::ContainerRuntimeType::Docker => "docker",
+        crate::config::ContainerRuntimeType::Exo => "exo",
+    };
+
     Json(serde_json::json!({
-        "runtime": "containment",
+        "runtime": runtime_name,
         "version": env!("CARGO_PKG_VERSION"),
         "agents": {
             "total": state.containers.read().await.len(),

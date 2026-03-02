@@ -20,11 +20,26 @@ pub enum NetworkBackend {
     Local,
 }
 
+/// Container runtime selection
+#[derive(Debug, Deserialize, Clone, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContainerRuntimeType {
+    #[default]
+    Docker,
+    Exo,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub deployment_mode: DeploymentMode,
     pub network_backend: NetworkBackend,
     pub runtime_socket: String,
+    /// Container runtime to use: "docker" (default) or "exo"
+    #[serde(default)]
+    pub container_runtime: ContainerRuntimeType,
+    /// Custom path to exo binary (defaults to "exo" in PATH)
+    #[serde(default)]
+    pub exo_path: Option<String>,
     pub tailscale_auth_key: Option<String>,
     /// Headscale server URL (e.g., https://mesh.yourcompany.com)
     /// Used when network_backend = "headscale"
@@ -102,6 +117,8 @@ pub fn load() -> anyhow::Result<Config> {
         .set_default("deployment_mode", "windows-wsl")?
         .set_default("network_backend", "tailscale")?
         .set_default("runtime_socket", "/var/run/claw-pen.sock")?
+        .set_default("container_runtime", "docker")?
+        .set_default("exo_path", None::<String>)?
         .set_default("tailscale_auth_key", None::<String>)?
         .set_default("headscale_url", None::<String>)?
         .set_default("headscale_auth_key", None::<String>)?
