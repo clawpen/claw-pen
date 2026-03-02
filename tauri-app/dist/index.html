@@ -546,6 +546,7 @@
         const ORCHESTRATOR_URL = 'http://localhost:8081';
         let authToken = localStorage.getItem('clawpen_token');
         let globalKeys = {};  // Store global API key status
+        let intervalsSet = false;  // Track if we've started polling
         
         async function authFetch(url, options = {}) {
             console.log('[authFetch]', url, authToken ? 'with token' : 'no token');
@@ -575,6 +576,14 @@
         
         function hideLoginModal() {
             document.getElementById('login-modal').classList.add('hidden');
+            // Now fetch data after successful login
+            fetchAgents();
+            fetchSystemStats();
+            if (!intervalsSet) {
+                setInterval(fetchAgents, 5000);
+                setInterval(fetchSystemStats, 3000);
+                intervalsSet = true;
+            }
         }
         
         function showLoginError(msg) {
@@ -984,7 +993,11 @@
 
         async function init() {
             console.log('[init] starting...');
-            await login();
+            const loggedIn = await login();
+            if (!loggedIn) {
+                console.log('[init] waiting for login...');
+                return;  // Stop here - login modal will call fetchAgents after success
+            }
             await fetchAgents();
             await fetchSystemStats();
             setInterval(fetchAgents, 5000);
