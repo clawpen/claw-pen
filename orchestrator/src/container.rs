@@ -593,7 +593,7 @@ impl ContainerRuntime for DockerClient {
                 memory: Some((config.memory_mb * 1024 * 1024) as i64),
                 nano_cpus: Some((config.cpu_cores * 1_000_000_000.0) as i64),
                 // Use bridge mode for network isolation instead of host mode
-                network_mode: Some("bridge".to_string()),
+                network_mode: Some("host".to_string()),
                 port_bindings: Some(port_bindings),
                 // Security options
                 security_opt: Some(vec!["no-new-privileges:true".to_string()]),
