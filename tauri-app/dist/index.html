@@ -1,13 +1,14 @@
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
     <title>Claw Pen</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { 
             background: #1a1a2e; 
             color: #eee; 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Color Emoji', sans-serif;
             min-height: 100vh;
             display: flex;
         }
@@ -390,6 +391,15 @@
 }
 .login-box button:hover { background: #d63050; }
 .login-box button:disabled { background: #4a4a5e; cursor: not-allowed; }
+
+        /* Emoji support */
+        @font-face {
+            font-family: 'Emoji';
+            src: local('Noto Color Emoji'), local('Apple Color Emoji'), local('Segoe UI Emoji');
+        }
+        .emoji, .sidebar-header h1, .btn-refresh {
+            font-family: 'Emoji', 'Noto Color Emoji', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
 </style>
 
 
