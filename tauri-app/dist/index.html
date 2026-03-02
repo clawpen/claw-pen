@@ -558,7 +558,7 @@
             if (res.status === 401) {
                 authToken = null;
                 localStorage.removeItem('clawpen_token');
-                showLoginModal(false);
+                checkAuthAndShowModal();
             }
             return res;
         }
@@ -664,8 +664,8 @@
             document.getElementById('login-btn').textContent = authStatus && !authStatus.has_admin ? 'Create Account' : 'Login';
         });
         
-        async function login() {
-            console.log('[login] checking auth...');
+        async function checkAuthAndShowModal() {
+            console.log('[auth] checking...');
             const status = await checkAuthStatus();
             if (!status) {
                 showLoginError('Cannot connect to server');
@@ -993,7 +993,7 @@
 
         async function init() {
             console.log('[init] starting...');
-            const loggedIn = await login();
+            const loggedIn = await checkAuthAndShowModal();
             if (!loggedIn) {
                 console.log('[init] waiting for login...');
                 return;  // Stop here - login modal will call fetchAgents after success
