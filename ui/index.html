@@ -25,6 +25,9 @@
         }
         
         .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             margin-bottom: 2rem;
             border-bottom: 1px solid #333;
             padding-bottom: 1rem;
@@ -33,6 +36,20 @@
         .header h1 {
             font-size: 1.8rem;
             color: #f0f0f0;
+        }
+        
+        .btn-logout {
+            background: transparent;
+            color: #94a3b8;
+            border: 1px solid #333;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        .btn-logout:hover {
+            background: #333;
+            color: #fff;
         }
         
         .toolbar {
@@ -48,12 +65,102 @@
             font-size: 1rem;
             cursor: pointer;
             transition: background 0.2s;
+            width: 100%;
         }
         
         .btn-primary:hover {
             background: #ff6b6b;
         }
         
+        .btn-primary:disabled {
+            background: #4a4a5e;
+            cursor: not-allowed;
+        }
+        
+        /* Login Styles */
+        .login-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        
+        .login-box {
+            background: #16213e;
+            border-radius: 16px;
+            padding: 2.5rem;
+            width: 100%;
+            max-width: 400px;
+            border: 1px solid #0f3460;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+        }
+        
+        .login-box h1 {
+            text-align: center;
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .login-box h2 {
+            text-align: center;
+            color: #94a3b8;
+            font-size: 1.2rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .setup-message {
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        
+        .setup-message h2 {
+            color: #e94560;
+            margin-bottom: 0.5rem;
+        }
+        
+        .setup-message p {
+            color: #94a3b8;
+        }
+        
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        
+        .form-group input {
+            width: 100%;
+            padding: 0.875rem 1rem;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            background: #1a1a2e;
+            color: #eee;
+            font-size: 1rem;
+        }
+        
+        .form-group input:focus {
+            outline: none;
+            border-color: #e94560;
+        }
+        
+        .form-group input::placeholder {
+            color: #6b7280;
+        }
+        
+        .error-message {
+            background: #7f1d1d;
+            color: #fecaca;
+            padding: 0.75rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+        }
+        
+        .loading {
+            text-align: center;
+            color: #94a3b8;
+            padding: 2rem;
+        }
+        
+        /* Agent Grid Styles */
         .agents-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -127,8 +234,13 @@
             color: white;
         }
         
-        .btn-config {
+        .btn-chat {
             background: #3b82f6;
+            color: white;
+        }
+        
+        .btn-config {
+            background: #6b7280;
             color: white;
         }
         

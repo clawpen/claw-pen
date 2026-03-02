@@ -319,11 +319,87 @@
 }
 .api-key-row .status.has-key { color: #22c55e; }
 .api-key-row .status.no-key { color: #666; }
+
+/* Login Modal */
+.login-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+}
+.login-overlay.hidden { display: none; }
+.login-box {
+    background: #16213e;
+    border-radius: 16px;
+    padding: 2.5rem;
+    width: 100%;
+    max-width: 400px;
+    border: 1px solid #0f3460;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+    text-align: center;
+}
+.login-box h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
+.login-box h2 { color: #94a3b8; font-size: 1.2rem; margin-bottom: 1.5rem; }
+.login-setup h2 { color: #e94560; margin-bottom: 0.5rem; }
+.login-setup p { color: #94a3b8; margin-bottom: 1.5rem; }
+.login-error {
+    background: #7f1d1d;
+    color: #fecaca;
+    padding: 0.75rem;
+    border-radius: 6px;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+}
+.login-box input {
+    width: 100%;
+    padding: 0.875rem 1rem;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    background: #1a1a2e;
+    color: #eee;
+    font-size: 1rem;
+    margin-bottom: 1rem;
+}
+.login-box input:focus { outline: none; border-color: #e94560; }
+.login-box input::placeholder { color: #6b7280; }
+.login-box button {
+    width: 100%;
+    padding: 0.875rem;
+    background: #e94560;
+    border: none;
+    border-radius: 8px;
+    color: white;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+}
+.login-box button:hover { background: #d63050; }
+.login-box button:disabled { background: #4a4a5e; cursor: not-allowed; }
 </style>
 
 
 </head>
 <body>
+    <!-- Login Modal -->
+    <div class="login-overlay hidden" id="login-modal">
+        <div class="login-box">
+            <h1>🦀 Claw Pen</h1>
+            <div id="login-setup" class="login-setup hidden">
+                <h2>Welcome!</h2>
+                <p>Create an admin password to get started.</p>
+            </div>
+            <h2 id="login-title">Login</h2>
+            <div id="login-error" class="login-error hidden"></div>
+            <form id="login-form">
+                <input type="password" id="login-password" placeholder="Password" autocomplete="current-password" />
+                <button type="submit" id="login-btn">Login</button>
+            </form>
+        </div>
+    </div>
+
     <div id="sidebar">
         <div class="sidebar-header">
             <h1>🦀 Claw Pen</h1>
@@ -467,7 +543,7 @@
 
     <script>
         let agents = [], selectedAgent = null, isConnected = false, currentStreamEl = null, chatHistory = {};
-        const ORCHESTRATOR_URL = 'http://localhost:3000';
+        const ORCHESTRATOR_URL = 'http://localhost:8081';
         let authToken = localStorage.getItem('clawpen_token');
         
         async function authFetch(url, options = {}) {
@@ -478,34 +554,129 @@
             }
             const res = await fetch(url, options);
             if (res.status === 401) {
-                await login();
-                if (authToken) {
-                    options.headers = options.headers || {};
-                    options.headers['Authorization'] = `Bearer ${authToken}`;
-                    return fetch(url, options);
-                }
+                authToken = null;
+                localStorage.removeItem('clawpen_token');
+                showLoginModal(false);
             }
             return res;
         }
         
-        async function login() {
+        let authStatus = null;
+        
+        function showLoginModal(isSetup = false) {
+            document.getElementById('login-modal').classList.remove('hidden');
+            document.getElementById('login-setup').classList.toggle('hidden', !isSetup);
+            document.getElementById('login-title').classList.toggle('hidden', isSetup);
+            document.getElementById('login-password').placeholder = isSetup ? 'Create password (min 8 chars)' : 'Password';
+            document.getElementById('login-btn').textContent = isSetup ? 'Create Account' : 'Login';
+            document.getElementById('login-password').focus();
+        }
+        
+        function hideLoginModal() {
+            document.getElementById('login-modal').classList.add('hidden');
+        }
+        
+        function showLoginError(msg) {
+            const el = document.getElementById('login-error');
+            el.textContent = msg;
+            el.classList.remove('hidden');
+        }
+        
+        function hideLoginError() {
+            document.getElementById('login-error').classList.add('hidden');
+        }
+        
+        async function checkAuthStatus() {
+            try {
+                const res = await fetch(`${ORCHESTRATOR_URL}/auth/status`);
+                authStatus = await res.json();
+                console.log('[auth] status:', authStatus);
+                return authStatus;
+            } catch (e) {
+                console.error('[auth] failed to check status:', e);
+                return null;
+            }
+        }
+        
+        async function login(password) {
             console.log('[login] attempting login...');
-            const username = localStorage.getItem('clawpen_user') || 'admin';
-            const password = localStorage.getItem('clawpen_pass') || 'test1234';
+            hideLoginError();
+            
+            // If first-time setup, register first
+            if (authStatus && !authStatus.has_admin) {
+                const regRes = await fetch(`${ORCHESTRATOR_URL}/auth/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password })
+                });
+                if (!regRes.ok) {
+                    const err = await regRes.text();
+                    showLoginError('Registration failed: ' + err);
+                    return false;
+                }
+            }
+            
             try {
                 const res = await fetch(`${ORCHESTRATOR_URL}/auth/login`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password })
+                    body: JSON.stringify({ password })
                 });
                 if (res.ok) {
                     const data = await res.json();
                     authToken = data.access_token;
-                    console.log('[login] success, token:', authToken.substring(0, 20) + '...');
+                    console.log('[login] success');
                     localStorage.setItem('clawpen_token', authToken);
+                    hideLoginModal();
                     return true;
+                } else {
+                    const err = await res.text();
+                    showLoginError('Invalid password');
                 }
-            } catch (e) { console.error('Login failed:', e); }
+            } catch (e) {
+                console.error('Login failed:', e);
+                showLoginError('Connection failed');
+            }
+            return false;
+        }
+        
+        document.getElementById('login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const password = document.getElementById('login-password').value;
+            if (password.length < 8) {
+                showLoginError('Password must be at least 8 characters');
+                return;
+            }
+            document.getElementById('login-btn').disabled = true;
+            document.getElementById('login-btn').textContent = 'Please wait...';
+            await login(password);
+            document.getElementById('login-btn').disabled = false;
+            document.getElementById('login-btn').textContent = authStatus && !authStatus.has_admin ? 'Create Account' : 'Login';
+        });
+        
+        async function login() {
+            console.log('[login] checking auth...');
+            const status = await checkAuthStatus();
+            if (!status) {
+                showLoginError('Cannot connect to server');
+                showLoginModal();
+                return false;
+            }
+            
+            // Auth disabled - proceed
+            if (!status.auth_enabled) {
+                console.log('[login] auth disabled');
+                return true;
+            }
+            
+            // Already have a token - try it
+            if (authToken) {
+                console.log('[login] have token, testing...');
+                return true;
+            }
+            
+            // Need to login
+            showLoginModal(!status.has_admin);
             return false;
         }
         
