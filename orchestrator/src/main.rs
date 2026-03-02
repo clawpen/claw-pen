@@ -45,7 +45,7 @@ pub struct AppState {
     pub auth: RwLock<AuthManager>,
 }
 
-fn load_api_keys(data_dir: &std::path::PathBuf) -> HashMap<String, String> {
+fn load_api_keys(data_dir: &std::path::Path) -> HashMap<String, String> {
     let keys_path = data_dir.join("api_keys.json");
     if keys_path.exists() {
         if let Ok(contents) = std::fs::read_to_string(&keys_path) {
@@ -106,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
         config.headscale_auth_key.clone(),
         config.headscale_namespace.clone(),
     );
-    
+
     tracing::info!(
         "Connected to primary container runtime: {:?}",
         config.container_runtime
@@ -117,7 +117,9 @@ async fn main() -> anyhow::Result<()> {
     let exo_runtime = match container::RuntimeClient::with_runtime(
         config::ContainerRuntimeType::Exo,
         config.exo_path.clone(),
-    ).await {
+    )
+    .await
+    {
         Ok(client) => {
             tracing::info!("Exo runtime available for per-agent selection");
             client
