@@ -207,6 +207,13 @@ async fn connect_websocket(
 
                     loop {
                         tokio::select! {
+                            // Timeout for no-auth mode: if no challenge after 2s, assume auth disabled
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(2)), if !connect_sent && !authenticated => {
+                                eprintln!("[WS] No challenge received - assuming no-auth mode");
+                                authenticated = true;
+                                connect_sent = true;
+                                let _ = app_handle.emit("ws-authenticated", true);
+                            }
                             msg = read.next() => {
                                 match msg {
                                     Some(Ok(m)) => {
