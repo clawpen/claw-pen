@@ -800,12 +800,17 @@
         
         async function connectToAgent(agent) {
             setStatus('Connecting...', 'connecting');
-            const port = agent.config?.env_vars?.PORT || '18790';
+            // Connect through orchestrator's chat proxy, not directly to container
+            const wsUrl = `ws://localhost:8081/api/agents/${agent.id}/chat${authToken ? '?token=' + authToken : ''}`;
+            console.log('[connectToAgent] connecting to', wsUrl);
             try {
                 if (window.__TAURI__) {
-                    await window.__TAURI__.core.invoke('connect_websocket', { url: `ws://localhost:${port}/ws` });
+                    await window.__TAURI__.core.invoke('connect_websocket', { url: wsUrl });
                 }
-            } catch (e) { setStatus('Error: ' + e, 'error'); }
+            } catch (e) { 
+                console.error('[connectToAgent] error:', e);
+                setStatus('Error: ' + e, 'error'); 
+            }
         }
         
         function showCreateModal() { updateModelOptions(); document.getElementById('create-modal').classList.add('active'); }
