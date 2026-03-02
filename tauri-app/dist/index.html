@@ -572,6 +572,7 @@
         let authToken = localStorage.getItem('clawpen_token');
         let globalKeys = {};  // Store global API key status
         let intervalsSet = false;  // Track if we've started polling
+        let listenersRegistered = false;  // Track if Tauri listeners are registered
         
         async function authFetch(url, options = {}) {
             console.log('[authFetch]', url, authToken ? 'with token' : 'no token');
@@ -1035,7 +1036,8 @@
             setInterval(fetchAgents, 5000);
             setInterval(fetchSystemStats, 3000);
             
-            if (window.__TAURI__) {
+            if (window.__TAURI__ && !listenersRegistered) {
+                listenersRegistered = true;
                 await window.__TAURI__.event.listen('ws-connected', e => { if (e.payload) setConnected(true); });
                 await window.__TAURI__.event.listen('ws-authenticated', () => setConnected(true));
                 await window.__TAURI__.event.listen('ws-message', event => {
