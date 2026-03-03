@@ -17,3 +17,24 @@ data/
 # Secrets and sensitive files
 docs/SECRETS.md
 
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Runtime data
+.openclaw/
+notifications/
+agents-premium/*/memory/
+agents-premium/*/notifications/
+
+# Pitch/deck files (separate repo)
+pitch*.md
+PITCH*.md
+*.deck.md
+
+# Tools logs
+tools/*.log
+
