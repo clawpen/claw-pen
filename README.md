@@ -1,4 +1,4 @@
-# Claw Pen 🦀
+# Claw Pen
 
 > Multi-agent orchestration platform. Run isolated AI agents in containers with a Tauri desktop UI.
 
@@ -18,60 +18,60 @@ Claw Pen is a **container-based multi-agent orchestrator** with a desktop GUI. I
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Tauri Desktop App                         │
-│              (Rust backend + Web frontend)                   │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ HTTP / WebSocket
-                       ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  Orchestrator (Rust/Axum)                    │
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌───────┐  │
-│  │ REST API│ │WebSocket│ │  Auth   │ │Secrets  │ │Teams  │  │
-│  │         │ │ Gateway │ │ (JWT)   │ │Manager  │ │Router │  │
-│  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └───┬───┘  │
-│       └─────────────┴──────────┴───────────┴──────────┘      │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-         ┌─────────────┼─────────────┐
-         │             │             │
-         ▼             ▼             ▼
-   ┌─────────┐   ┌─────────┐   ┌──────────┐
-   │ Docker  │   │  Exo    │   │Containment│
-   │Runtime  │   │Runtime  │   │Runtime   │
-   └────┬────┘   └────┬────┘   └─────┬────┘
-        │             │              │
-        └─────────────┴──────────────┘
-                      │
-                      ▼
-        ┌─────────────────────────┐
-        │    Agent Containers     │
-        │  (OpenClaw instances)   │
-        └─────────────────────────┘
++-------------------------------------------------------------+
+|                    Tauri Desktop App                         |
+|              (Rust backend + Web frontend)                   |
++----------------------+--------------------------------------+
+                       | HTTP / WebSocket
+                       v
++-------------------------------------------------------------+
+|                  Orchestrator (Rust/Axum)                    |
+|  +---------+ +---------+ +---------+ +---------+ +-------+  |
+|  | REST API| |WebSocket| |  Auth   | |Secrets  | |Teams  |  |
+|  |         | | Gateway | | (JWT)   | |Manager  | |Router |  |
+|  +----+----+ +----+----+ +----+----+ +----+----+ +---+----+  |
+|       +-------------+----------+-----------+----------+      |
++----------------------+--------------------------------------+
+                       |
+         +-------------+-------------+
+         |             |             |
+         v             v             v
+   +---------+   +---------+   +----------+
+   | Docker  |   |  Exo    |   |Containment|
+   |Runtime  |   |Runtime  |   |Runtime   |
+   +----+----+   +----+----+   +-----+----+
+        |             |              |
+        +-------------+--------------+
+                      |
+                      v
+        +-------------------------+
+        |    Agent Containers     |
+        |  (OpenClaw instances)   |
+        +-------------------------+
 ```
 
 ## Features
 
-### 🤖 Agent Management
+### Agent Management
 - Create agents from templates (coding-assistant, researcher, local-llm, etc.)
 - Configure CPU, memory, and provider per agent
 - Start/stop/restart agents individually or in batch
 - Real-time logs via WebSocket streaming
 
-### 💬 Built-in Chat
+### Built-in Chat
 - WebSocket-based chat interface
 - Session persistence per agent
 - Typing indicators and real-time responses
 - Message history export
 
-### 🔐 Security
+### Security
 - JWT-based authentication with Argon2 password hashing
 - Per-agent secrets (API keys, tokens)
 - Ed25519 device identity for Tauri app
 - Input validation and sanitization
 - CORS protection
 
-### 🧩 Templates
+### Templates
 Pre-configured agent templates:
 - `coding-assistant` — OpenAI GPT-4o for coding tasks
 - `code-reviewer` — Anthropic Claude for code review
@@ -79,12 +79,12 @@ Pre-configured agent templates:
 - `local-assistant` — Ollama for local inference
 - `openclaw-agent` — Full OpenClaw instance with built-in chat
 
-### 👥 Teams & Routing
+### Teams and Routing
 - Group agents into teams with a router
 - Router intelligently classifies and routes messages
 - Team chat with automatic routing to specialists
 
-### 💾 Persistence
+### Persistence
 - SQLite-backed agent memory
 - Snapshots for backup/restore
 - JSON-based configuration storage
@@ -285,4 +285,4 @@ Contributions welcome! Please read our [Contributing Guide](CONTRIBUTING.md) (TO
 
 ---
 
-<p align="center">Built with 🦀 Rust + ⚡ Tauri</p>
+<p align="center">Built with Rust + Tauri</p>
