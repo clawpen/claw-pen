@@ -160,3 +160,140 @@
   - agent:main:main: 29 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-02-28.md
   - agent:main:subagent:4b520a70-1817-4b7f-8565-8209b4316df0: 2 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-02-28.md
   - agent:main:subagent:4d6f7b4e-dada-4480-a3f6-0490310d1289: 13 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-02-28.md
+[2026-02-28T21:00:01.213290] Exported:
+  - agent:main:main: 11 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-02-28.md
+[2026-02-28T21:30:01.554618] Exported:
+  - agent:main:main: 38 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-02-28.md
+  - agent:main:subagent:77dbb28c-5651-4c0a-ba9b-68ac6fcf904a: 2 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-02-28.md
+  - agent:main:subagent:e72edad2-f1e1-425d-a918-b8eae346ba21: 4 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-02-28.md
+[2026-02-28T22:00:01.567538] Exported:
+  - agent:main:main: 2 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-02-28.md
+  - agent:main:subagent:e72edad2-f1e1-425d-a918-b8eae346ba21: 1 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-02-28.md
+[2026-02-28T22:30:01.778922] No new messages to export
+[2026-02-28T23:00:01.877252] No new messages to export
+[2026-02-28T23:30:01.993558] No new messages to export
+[2026-03-01T00:00:01.138914] No new messages to export
+[2026-03-01T00:30:01.249817] No new messages to export
+[2026-03-01T01:00:01.360024] No new messages to export
+[2026-03-01T01:30:01.480674] No new messages to export
+[2026-03-01T02:00:01.573544] No new messages to export
+[2026-03-01T02:30:01.677556] No new messages to export
+[2026-03-01T03:00:01.098735] No new messages to export
+[2026-03-01T03:30:01.347123] No new messages to export
+[2026-03-01T04:00:01.210772] No new messages to export
+[2026-03-01T04:30:01.327056] No new messages to export
+[2026-03-01T05:00:01.405201] No new messages to export
+[2026-03-01T05:30:01.525881] No new messages to export
+[2026-03-01T06:00:01.634434] No new messages to export
+[2026-03-01T06:30:01.330326] No new messages to export
+[2026-03-01T07:00:01.360920] No new messages to export
+[2026-03-01T07:30:01.244509] No new messages to export
+[2026-03-01T08:00:01.350564] No new messages to export
+[2026-03-01T08:30:01.591527] No new messages to export
+[2026-03-01T09:00:01.847059] No new messages to export
+[2026-03-01T09:30:01.783499] No new messages to export
+[2026-03-01T10:00:01.080236] No new messages to export
+[2026-03-01T10:30:01.304008] No new messages to export
+[2026-03-01T11:00:01.495197] Exported:
+  - agent:main:main: 11 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-01.md
+[2026-03-01T11:30:01.587400] No new messages to export
+[2026-03-01T12:00:02.533644] No new messages to export
+[2026-03-01T12:30:02.244844] No new messages to export
+[2026-03-01T13:00:01.857568] No new messages to export
+[2026-03-01T13:30:01.987373] No new messages to export
+[2026-03-01T14:00:01.313432] No new messages to export
+[2026-03-01T14:30:01.412368] No new messages to export
+[2026-03-01T15:00:02.159824] No new messages to export
+[2026-03-01T15:30:01.489483] No new messages to export
+[2026-03-01T16:00:01.563223] No new messages to export
+[2026-03-01T16:30:01.222071] No new messages to export
+[2026-03-01T17:00:01.729758] No new messages to export
+[2026-03-01T17:30:01.819496] No new messages to export
+[2026-03-01T18:00:01.899373] No new messages to export
+[2026-03-01T18:30:01.312747] No new messages to export
+[2026-03-01T19:00:01.935529] No new messages to export
+[2026-03-01T19:30:01.265460] No new messages to export
+[2026-03-01T20:00:01.458371] No new messages to export
+[2026-03-01T20:30:01.126820] No new messages to export
+[2026-03-01T21:00:01.859155] Exported:
+  - agent:main:main: 16 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-01.md
+[2026-03-01T21:30:03.238022] Exported:
+  - agent:main:main: 26 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-01.md
+[2026-03-01T22:00:01.847042] Exported:
+  - agent:main:main: 4 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-01.md
+[2026-03-01T22:30:01.474501] Exported:
+  - agent:main:main: 27 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-01.md
+  - agent:main:subagent:c8cc0da6-7317-4dd8-b1e2-4a9afafc0b06: 1 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-01.md
+  - agent:main:subagent:21a7db18-d556-4698-b01d-ba8280159577: 2 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-01.md
+  - agent:main:subagent:eaece170-1e3b-4296-88dc-9f766ac3e621: 3 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-01.md
+[2026-03-01T23:00:01.754435] Exported:
+  - agent:main:main: 23 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-01.md
+  - agent:main:subagent:21a7db18-d556-4698-b01d-ba8280159577: 6 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-01.md
+[2026-03-01T23:30:02.141367] Exported:
+  - agent:main:main: 1 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-01.md
+[2026-03-02T00:00:01.255848] No new messages to export
+[2026-03-02T00:30:01.374243] No new messages to export
+[2026-03-02T01:00:01.446682] No new messages to export
+[2026-03-02T01:30:01.533740] No new messages to export
+[2026-03-02T02:00:02.028715] No new messages to export
+[2026-03-02T02:30:01.177193] No new messages to export
+[2026-03-02T03:00:01.356404] No new messages to export
+[2026-03-02T11:00:04.793605] No new messages to export
+[2026-03-02T11:30:02.175439] No new messages to export
+[2026-03-02T12:00:01.354963] Exported:
+  - agent:main:main: 14 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-02.md
+[2026-03-02T12:30:01.641660] Exported:
+  - agent:main:main: 7 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-02.md
+[2026-03-02T13:00:01.611016] Exported:
+  - agent:main:main: 8 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-02.md
+[2026-03-02T13:30:01.213553] Exported:
+  - agent:main:main: 40 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-02.md
+[2026-03-02T14:00:02.151136] Exported:
+  - agent:main:main: 19 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-02.md
+[2026-03-02T14:30:01.670398] Exported:
+  - agent:main:main: 18 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-02.md
+[2026-03-02T15:00:01.658108] Exported:
+  - agent:main:main: 14 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-02.md
+[2026-03-02T15:30:01.735055] Exported:
+  - agent:main:main: 13 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-02.md
+[2026-03-02T16:00:01.840848] Exported:
+  - agent:main:main: 8 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-02.md
+[2026-03-02T16:30:02.037043] Exported:
+  - agent:main:main: 5 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-02.md
+[2026-03-02T17:00:01.544018] Exported:
+  - agent:main:main: 12 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-02.md
+[2026-03-02T17:30:01.673007] Exported:
+  - agent:main:main: 8 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-02.md
+[2026-03-02T18:00:01.690567] Exported:
+  - agent:main:main: 19 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-02.md
+[2026-03-02T18:30:01.600296] Exported:
+  - agent:main:main: 6 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-02.md
+[2026-03-02T19:00:02.910907] No new messages to export
+[2026-03-02T19:30:03.081709] Exported:
+  - agent:main:main: 4 messages -> /home/codi/.openclaw/workspace/memory/chat/2026-03-02.md
+[2026-03-02T20:00:02.054634] No new messages to export
+[2026-03-02T20:30:01.990141] No new messages to export
+[2026-03-02T21:00:03.013068] No new messages to export
+[2026-03-02T21:30:03.058026] No new messages to export
+[2026-03-02T22:00:02.027870] No new messages to export
+[2026-03-02T22:30:01.998588] No new messages to export
+[2026-03-02T23:00:02.110613] No new messages to export
+[2026-03-02T23:30:02.030093] No new messages to export
+[2026-03-03T00:00:02.150744] No new messages to export
+[2026-03-03T00:30:02.963591] No new messages to export
+[2026-03-03T01:00:02.026760] No new messages to export
+[2026-03-03T01:30:02.020748] No new messages to export
+[2026-03-03T02:00:03.057325] No new messages to export
+[2026-03-03T02:30:02.141956] No new messages to export
+[2026-03-03T03:00:03.976793] No new messages to export
+[2026-03-03T03:30:02.038229] No new messages to export
+[2026-03-03T04:00:02.988361] No new messages to export
+[2026-03-03T04:30:03.082266] No new messages to export
+[2026-03-03T05:00:01.059549] No new messages to export
+[2026-03-03T05:30:01.100463] No new messages to export
+[2026-03-03T06:00:01.088340] No new messages to export
+[2026-03-03T06:30:01.590532] No new messages to export
+[2026-03-03T07:00:01.082023] No new messages to export
+[2026-03-03T07:30:01.089177] No new messages to export
+[2026-03-03T08:00:01.115316] No new messages to export
+[2026-03-03T08:30:01.114473] No new messages to export
