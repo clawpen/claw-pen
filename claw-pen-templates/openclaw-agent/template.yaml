@@ -1,0 +1,56 @@
+# OpenClaw Agent Template
+# Full OpenClaw instance with built-in AndOR Bridge chat
+
+name: openclaw-agent
+display_name: "OpenClaw Agent"
+description: "Full OpenClaw instance with built-in AndOR Bridge chat - no third-party channels required"
+
+# Container config
+container:
+  image: claw-pen/openclaw-agent:latest
+  build:
+    context: templates/openclaw-agent
+    dockerfile: Containerfile
+  
+  # Resource limits
+  memory_mb: 1024
+  cpu_cores: 1.0
+  
+  # Ports
+  ports:
+    - 18789  # OpenClaw gateway
+  
+  # Volumes (mounted at runtime)
+  volumes:
+    - /agent/memory      # Persist memory
+    - /agent/.openclaw   # Persist config
+
+# OpenClaw config
+openclaw:
+  # Channel config - AndOR Bridge is built-in
+  channels:
+    - type: andor
+      # No API keys needed - uses AndOR Bridge
+      # Each agent gets its own DM channel
+  
+  # Default model (override at creation)
+  provider: zai
+  model: glm-5
+  
+  # Memory
+  memory:
+    enabled: true
+    persist: true
+
+# AndOR Bridge registration
+andor:
+  # Triggers for routing messages to this agent
+  triggers: []
+  # Emoji for the agent in AndOR Hub
+  emoji: "🤖"
+
+# Environment (passed through from host)
+env:
+  - OPENAI_API_KEY
+  - ANTHROPIC_API_KEY
+  # OAuth tokens managed by OpenClaw gateway

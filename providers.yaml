@@ -1,0 +1,371 @@
+# Claw Pen Provider Catalog
+# Curated list of LLM providers for agent templates
+# Last updated: 2026-02-28
+
+# Provider tiers:
+# - essential: Always show, most commonly used
+# - popular: Good alternatives, regional favorites
+# - free: No cost, great for trying out
+# - optional: Power users, specific use cases
+
+providers:
+  # === ESSENTIAL ===
+  
+  openai:
+    tier: essential
+    name: "OpenAI"
+    description: "GPT models via API or Codex subscription"
+    env_key: "OPENAI_API_KEY"
+    auth_methods:
+      - id: openai-api-key
+        name: "API Key"
+        description: "Usage-based billing from OpenAI Platform"
+      - id: openai-codex
+        name: "Codex Subscription"
+        description: "Use ChatGPT/Codex subscription"
+    models:
+      - id: "gpt-5.3-codex"
+        name: "GPT-5.3 Codex"
+        context: 200000
+        vision: true
+        reasoning: true
+        recommended: true
+      - id: "gpt-5.2"
+        name: "GPT-5.2"
+        context: 128000
+        vision: true
+        reasoning: true
+      - id: "gpt-4o"
+        name: "GPT-4o"
+        context: 128000
+        vision: true
+        reasoning: false
+    default_model: "gpt-5.3-codex"
+
+  anthropic:
+    tier: essential
+    name: "Anthropic"
+    description: "Claude models with prompt caching"
+    env_key: "ANTHROPIC_API_KEY"
+    auth_methods:
+      - id: anthropic-api-key
+        name: "API Key"
+    models:
+      - id: "claude-opus-4-6"
+        name: "Claude Opus 4.6"
+        context: 200000
+        vision: true
+        reasoning: true
+        recommended: true
+      - id: "claude-sonnet-4-5"
+        name: "Claude Sonnet 4.5"
+        context: 200000
+        vision: true
+        reasoning: true
+      - id: "claude-sonnet-4"
+        name: "Claude Sonnet 4"
+        context: 200000
+        vision: true
+        reasoning: false
+    default_model: "claude-opus-4-6"
+    features:
+      cache_retention: true
+
+  openrouter:
+    tier: essential
+    name: "OpenRouter"
+    description: "Unified access to 100+ models"
+    env_key: "OPENROUTER_API_KEY"
+    auth_methods:
+      - id: openrouter-api-key
+        name: "API Key"
+    models:
+      - id: "auto"
+        name: "Auto (best available)"
+        context: 200000
+        vision: true
+        reasoning: true
+        recommended: true
+    default_model: "auto"
+    notes: "Routes to best available model; check openrouter.ai for full catalog"
+
+  # === POPULAR ===
+
+  zai:
+    tier: popular
+    name: "Z.AI (GLM)"
+    description: "GLM models - strong multilingual, reasoning"
+    env_key: "ZAI_API_KEY"
+    auth_methods:
+      - id: zai-api-key
+        name: "API Key"
+    models:
+      - id: "glm-5"
+        name: "GLM-5"
+        context: 128000
+        vision: false
+        reasoning: true
+        recommended: true
+      - id: "glm-4.7"
+        name: "GLM-4.7"
+        context: 128000
+        vision: false
+        reasoning: true
+    default_model: "glm-5"
+    notes: "GLM-5 is the current flagship"
+
+  venice:
+    tier: popular
+    name: "Venice AI"
+    description: "Privacy-first inference, Claude/GPT via proxy"
+    env_key: "VENICE_API_KEY"
+    auth_methods:
+      - id: venice-api-key
+        name: "API Key"
+    models:
+      # Private models
+      - id: "llama-3.3-70b"
+        name: "Llama 3.3 70B"
+        context: 131000
+        vision: false
+        reasoning: false
+      - id: "qwen3-coder-480b-a35b-instruct"
+        name: "Qwen3 Coder 480B"
+        context: 262000
+        vision: false
+        reasoning: false
+        recommended_for: coding
+      - id: "qwen3-vl-235b-a22b"
+        name: "Qwen3 VL 235B"
+        context: 262000
+        vision: true
+        reasoning: false
+        recommended_for: vision
+      - id: "deepseek-v3.2"
+        name: "DeepSeek V3.2"
+        context: 163000
+        vision: false
+        reasoning: true
+      # Anonymized (via proxy)
+      - id: "claude-opus-45"
+        name: "Claude Opus 4.5 (anon)"
+        context: 202000
+        vision: true
+        reasoning: true
+        recommended: true
+      - id: "gpt-52"
+        name: "GPT-5.2 (anon)"
+        context: 262000
+        vision: true
+        reasoning: true
+    default_model: "claude-opus-45"
+    notes: "Private models = no logging; Anonymized = via Venice proxy"
+
+  moonshot:
+    tier: popular
+    name: "Moonshot (Kimi)"
+    description: "Kimi models with large context"
+    env_key: "MOONSHOT_API_KEY"
+    auth_methods:
+      - id: moonshot-api-key
+        name: "API Key"
+    models:
+      - id: "kimi-k2.5"
+        name: "Kimi K2.5"
+        context: 256000
+        vision: false
+        reasoning: false
+        recommended: true
+      - id: "kimi-k2-thinking"
+        name: "Kimi K2 Thinking"
+        context: 256000
+        vision: false
+        reasoning: true
+      - id: "kimi-k2-thinking-turbo"
+        name: "Kimi K2 Thinking Turbo"
+        context: 256000
+        vision: false
+        reasoning: true
+    default_model: "kimi-k2.5"
+
+  mistral:
+    tier: popular
+    name: "Mistral"
+    description: "European AI with vision and transcription"
+    env_key: "MISTRAL_API_KEY"
+    auth_methods:
+      - id: mistral-api-key
+        name: "API Key"
+    models:
+      - id: "mistral-large-latest"
+        name: "Mistral Large"
+        context: 128000
+        vision: true
+        reasoning: true
+        recommended: true
+      - id: "codestral-latest"
+        name: "Codestral"
+        context: 256000
+        vision: false
+        reasoning: false
+        recommended_for: coding
+    default_model: "mistral-large-latest"
+
+  together:
+    tier: popular
+    name: "Together AI"
+    description: "Open-source models at scale"
+    env_key: "TOGETHER_API_KEY"
+    auth_methods:
+      - id: together-api-key
+        name: "API Key"
+    models:
+      - id: "glm-4.7-fp8"
+        name: "GLM 4.7 Fp8"
+        context: 200000
+        vision: false
+        reasoning: true
+        recommended: true
+      - id: "llama-3.3-70b-instruct-turbo"
+        name: "Llama 3.3 70B Turbo"
+        context: 131000
+        vision: false
+        reasoning: false
+      - id: "llama-4-scout"
+        name: "Llama 4 Scout"
+        context: 128000
+        vision: true
+        reasoning: false
+        recommended_for: vision
+      - id: "deepseek-r1"
+        name: "DeepSeek R1"
+        context: 163000
+        vision: false
+        reasoning: true
+    default_model: "glm-4.7-fp8"
+
+  # === FREE TIER ===
+
+  huggingface:
+    tier: free
+    name: "HuggingFace"
+    description: "Free tier available, many open models"
+    env_key: "HF_TOKEN"
+    auth_methods:
+      - id: huggingface-api-key
+        name: "HF Token"
+        description: "Free tier available at huggingface.co/settings/tokens"
+    models:
+      - id: "Qwen/Qwen3-8B"
+        name: "Qwen3 8B"
+        context: 128000
+        vision: false
+        reasoning: false
+        recommended: true
+        free: true
+      - id: "Qwen/Qwen2.5-7B-Instruct"
+        name: "Qwen2.5 7B"
+        context: 32000
+        vision: false
+        reasoning: false
+        free: true
+      - id: "meta-llama/Llama-3.1-8B-Instruct"
+        name: "Llama 3.1 8B"
+        context: 128000
+        vision: false
+        reasoning: false
+        free: true
+      - id: "deepseek-ai/DeepSeek-R1"
+        name: "DeepSeek R1"
+        context: 163000
+        vision: false
+        reasoning: true
+      - id: "deepseek-ai/DeepSeek-V3.2"
+        name: "DeepSeek V3.2"
+        context: 163000
+        vision: false
+        reasoning: true
+      - id: "Qwen/Qwen2-VL-7B-Instruct"
+        name: "Qwen2-VL 7B"
+        context: 32768
+        vision: true
+        reasoning: false
+        free: true
+        recommended_for: vision
+    default_model: "Qwen/Qwen3-8B"
+    notes: "Free tier with rate limits; use :cheapest or :fastest suffix"
+
+  # === OPTIONAL ===
+
+  litellm:
+    tier: optional
+    name: "LiteLLM"
+    description: "Self-hosted gateway for all providers"
+    env_key: "LITELLM_API_KEY"
+    auth_methods:
+      - id: litellm-api-key
+        name: "API Key"
+    models:
+      - id: "claude-opus-4-6"
+        name: "Claude Opus 4.6 (via LiteLLM)"
+        context: 200000
+        vision: true
+        reasoning: true
+    default_model: "claude-opus-4-6"
+    notes: "Requires self-hosted LiteLLM server"
+
+  ollama:
+    tier: optional
+    name: "Ollama"
+    description: "Local models, no API key needed"
+    env_key: "OLLAMA_API_KEY"
+    env_default: "ollama-local"
+    auth_methods:
+      - id: ollama
+        name: "Local"
+        description: "Connects to localhost:11434"
+    models:
+      - id: "auto"
+        name: "Auto-discover"
+        context: 0
+        vision: false
+        reasoning: false
+    default_model: "auto"
+    notes: "Models auto-discovered from local Ollama instance"
+
+  bedrock:
+    tier: optional
+    name: "Amazon Bedrock"
+    description: "AWS managed models including Claude"
+    env_key: "AWS credentials"
+    auth_methods:
+      - id: bedrock
+        name: "AWS Profile"
+    models:
+      - id: "anthropic.claude-3-5-sonnet"
+        name: "Claude 3.5 Sonnet (Bedrock)"
+        context: 200000
+        vision: true
+        reasoning: true
+    default_model: "anthropic.claude-3-5-sonnet"
+    notes: "Uses AWS credentials chain"
+
+# Vision model defaults when primary model doesn't support images
+# Used when imageModel is not explicitly set
+vision_defaults:
+  openai: "gpt-4o"
+  anthropic: "claude-opus-4-6"
+  openrouter: "auto"
+  venice: "qwen3-vl-235b-a22b"
+  mistral: "mistral-large-latest"
+  together: "llama-4-scout"
+  huggingface: "Qwen/Qwen2-VL-7B-Instruct"
+  # zai/moonshot don't have vision - use free fallback
+  fallback: "huggingface/Qwen/Qwen2-VL-7B-Instruct"
+
+# Template defaults
+# HuggingFace is default because it has a free tier - no API key required to try
+defaults:
+  provider: huggingface
+  model: "Qwen/Qwen3-8B"
+  imageModel: "Qwen/Qwen2-VL-7B-Instruct"  # Free vision model

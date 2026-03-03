@@ -1,0 +1,36 @@
+# OpenClaw Agent Container
+# Full OpenClaw instance with built-in AndOR Bridge chat
+
+FROM node:20-slim
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install OpenClaw
+RUN npm install -g openclaw
+
+# Create agent workspace
+WORKDIR /agent
+
+# Workspace structure
+RUN mkdir -p /agent/memory /agent/.openclaw
+
+# Copy workspace files (mounted at runtime, but provide defaults)
+COPY workspace/ /agent/
+
+# Environment
+ENV OPENCLAW_WORKSPACE=/agent
+ENV NODE_ENV=production
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:18789/health || exit 1
+
+# Expose OpenClaw gateway port
+EXPOSE 18789
+
+# Start OpenClaw gateway
+CMD ["openclaw", "gateway", "start", "--workspace", "/agent"]
