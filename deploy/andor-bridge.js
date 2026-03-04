@@ -22,7 +22,7 @@ const { URL } = require('url');
 // Config
 const PORT = process.env.PORT || 3456;
 const OPENCLAW_URL = process.env.OPENCLAW_GATEWAY_URL || 'http://127.0.0.1:18789';
-const OPENCLAW_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || 'ec2f73e5d4c0aa44b37349b35135a530d58903558d379ff5';
+const OPENCLAW_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || '';
 const ANDOR_URL = process.env.ANDOR_SERVER_URL || 'https://aesir.tailb0b4db.ts.net:8080';
 const BRIDGE_NAME = process.env.BRIDGE_NAME || 'Codi';
 

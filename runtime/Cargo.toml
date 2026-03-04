@@ -1,0 +1,8 @@
+[package]
+name = "claw-pen-runtime"
+version.workspace = true
+edition.workspace = true
+
+# TODO: Jer's container runtime - placeholder for workspace structure
+
+[dependencies]

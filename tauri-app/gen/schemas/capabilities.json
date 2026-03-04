@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Default capabilities for Claw Pen","local":true,"windows":["*"],"permissions":["core:default","core:event:default","core:event:allow-listen","core:event:allow-emit","shell:default","http:default"]}}

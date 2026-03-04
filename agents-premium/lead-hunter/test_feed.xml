@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Test Ontario Construction Leads</title>
+    <link>https://example.com/test-feed</link>
+    <description>Sample RSS feed for testing Lead Hunter RSS parser</description>
+    <language>en-ca</language>
+    
+    <item>
+      <title>BCIN Building Permit Application - New Residential Construction in Sudbury</title>
+      <link>https://example.com/permits/sudbury-001</link>
+      <description>Building permit application for a new 3-bedroom residential home in Sudbury, Ontario. BCIN certified project requiring general contractor services.</description>
+      <pubDate>Mon, 24 Feb 2025 10:00:00 -0500</pubDate>
+      <category>BCIN Permit</category>
+    </item>
+    
+    <item>
+      <title>Home Renovation Project - Kitchen and Bathroom Remodel in North Bay</title>
+      <link>https://example.com/renovations/northbay-002</link>
+      <description>Full kitchen and bathroom renovation project in North Bay. Seeking licensed contractors with BCIN certification for structural modifications.</description>
+      <pubDate>Tue, 25 Feb 2025 14:30:00 -0500</pubDate>
+      <category>Renovation</category>
+    </item>
+    
+    <item>
+      <title>Commercial Construction Tender - Retail Space Build-out Sudbury Downtown</title>
+      <link>https://example.com/commercial/sudbury-003</link>
+      <description>Commercial construction tender for retail space renovation in downtown Sudbury. BCIN permit required for electrical and plumbing work.</description>
+      <pubDate>Wed, 26 Feb 2025 09:15:00 -0500</pubDate>
+      <category>Construction</category>
+    </item>
+    
+    <item>
+      <title>Basement Finishing Job - Sudbury Family Home</title>
+      <link>https://example.com/renovations/sudbury-004</link>
+      <description>Basement finishing project in Sudbury. Requires building permit and BCIN-qualified contractor for proper code compliance.</description>
+      <pubDate>Wed, 26 Feb 2025 11:45:00 -0500</pubDate>
+      <category>Renovation</category>
+    </item>
+    
+    <item>
+      <title>Deck and Fence Construction - North Bay Residential Property</title>
+      <link>https://example.com/outdoor/northbay-005</link>
+      <description>Deck and fence construction project in North Bay. BCIN certification preferred for permit acquisition assistance.</description>
+      <pubDate>Thu, 27 Feb 2025 08:00:00 -0500</pubDate>
+      <category>Construction</category>
+    </item>
+    
+  </channel>
+</rss>

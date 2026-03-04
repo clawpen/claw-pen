@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Claw Pen</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            background: #1a1a2e; 
+            color: #eee; 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            min-height: 100vh;
+            display: flex;
+        }
+        
+        #sidebar {
+            width: 320px;
+            background: #0f0f1a;
+            border-right: 1px solid #2a2a4a;
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            height: 100vh;
+        }
+        
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid #2a2a4a;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        
+        .sidebar-header h1 { color: #e94560; font-size: 24px; }
+        
+        .system-stats {
+            padding: 16px 20px;
+            background: #16162a;
+            border-bottom: 1px solid #2a2a4a;
+            flex-shrink: 0;
+        }
+        
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+        
+        .stat-label { color: #888; }
+        .stat-value { color: #22c55e; font-weight: 500; }
+        .stat-value.warning { color: #f59e0b; }
+        .stat-value.danger { color: #ef4444; }
+        
+        .stat-bar {
+            height: 4px;
+            background: #2a2a4a;
+            border-radius: 2px;
+            margin-top: 4px;
+            overflow: hidden;
+        }
+        
+        .stat-bar-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.5s, background 0.3s;
+        }
+        
+        .stat-bar-fill.ok { background: #22c55e; }
+        .stat-bar-fill.warning { background: #f59e0b; }
+        .stat-bar-fill.danger { background: #ef4444; }
+        
+        .stat-section { margin-bottom: 16px; }
+        .stat-section:last-child { margin-bottom: 0; }
+        
+        .create-agent-btn {
+            margin: 16px 20px;
+            padding: 12px;
+            background: #e94560;
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+        
+        .create-agent-btn:hover { background: #d63050; }
+        
+        .agent-list-header {
+            padding: 12px 20px;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #666;
+            border-bottom: 1px solid #2a2a4a;
+            flex-shrink: 0;
+        }
+        
+        #agent-list { 
+            flex: 1; 
+            overflow-y: auto;
+            min-height: 0;
+        }
+        
+        .agent-card {
+            padding: 16px 20px;
+            border-bottom: 1px solid #2a2a4a;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .agent-card:hover { background: #1a1a2e; }
+        .agent-card.selected { background: #1a1a2e; border-left: 3px solid #e94560; }
+        
+        .agent-name { font-weight: 500; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+        
+        .agent-status {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+        
+        .agent-status.running { background: #22c55e33; color: #22c55e; }
+        .agent-status.stopped { background: #66666633; color: #888; }
+        
+        .agent-model { font-size: 12px; color: #888; margin-bottom: 8px; }
+        .agent-resources { display: flex; gap: 16px; font-size: 11px; color: #666; }
+        
+        .agent-actions { margin-top: 8px; display: flex; gap: 8px; }
+        .agent-actions button { padding: 4px 10px; font-size: 11px; border: none; border-radius: 4px; cursor: pointer; }
+        .btn-start { background: #22c55e33; color: #22c55e; }
+        .btn-stop { background: #ef444433; color: #ef4444; }
+        .btn-delete { background: #66666633; color: #888; }
+        .agent-actions button:hover { opacity: 0.8; }
+        
+        #main { flex: 1; display: flex; flex-direction: column; padding: 20px; height: 100vh; }
+        
+        .chat-header { margin-bottom: 16px; flex-shrink: 0; }
+        .chat-header h2 { font-size: 18px; color: #eee; }
+        
+        .status { 
+            padding: 8px 12px; 
+            background: #0f0f1a; 
+            border-radius: 6px;
+            font-size: 14px;
+            display: inline-block;
+        }
+        .status.connected { color: #22c55e; }
+        .status.connecting { color: #f59e0b; }
+        .status.error { color: #ef4444; }
+        
+        #chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #0f0f1a;
+            border-radius: 12px;
+            overflow: hidden;
+            min-height: 0;
+        }
+        
+        #messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            min-height: 0;
+        }
+        
+        .message {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 16px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .message.user { align-self: flex-end; background: #e94560; color: white; border-bottom-right-radius: 4px; }
+        .message.assistant { align-self: flex-start; background: #2a2a4a; color: #eee; border-bottom-left-radius: 4px; }
+        .message.system { align-self: center; background: transparent; color: #666; font-size: 12px; }
+        .message.streaming { opacity: 0.9; }
+        .message.streaming::after { content: '▋'; animation: blink 1s infinite; }
+        @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+        
+        #input-area {
+            display: flex;
+            gap: 10px;
+            padding: 16px;
+            background: #16162a;
+            border-top: 1px solid #2a2a4a;
+            flex-shrink: 0;
+        }
+        
+        #message-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: none;
+            border-radius: 24px;
+            background: #1a1a2e;
+            color: white;
+            font-size: 14px;
+            outline: none;
+        }
+        #message-input:focus { box-shadow: 0 0 0 2px #e94560; }
+        
+        #send-btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 24px;
+            background: #e94560;
+            color: white;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        #send-btn:hover { background: #d63050; }
+        #send-btn:disabled { background: #444; cursor: not-allowed; }
+        
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+        
+        .modal-overlay.active { display: flex; }
+        
+        .modal {
+            background: #1a1a2e;
+            border-radius: 12px;
+            padding: 24px;
+            width: 450px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        
+        .modal h3 { margin-bottom: 20px; color: #e94560; }
+        
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; font-size: 12px; color: #888; margin-bottom: 6px; }
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #2a2a4a;
+            border-radius: 6px;
+            background: #0f0f1a;
+            color: #eee;
+            font-size: 14px;
+        }
+        .form-group input:focus, .form-group select:focus { outline: none; border-color: #e94560; }
+        
+        .modal-actions { display: flex; gap: 12px; margin-top: 20px; }
+        .btn { flex: 1; padding: 10px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
+        .btn-primary { background: #e94560; color: white; }
+        .btn-secondary { background: #2a2a4a; color: #eee; }
+        .btn:hover { opacity: 0.9; }
+        
+        .api-key-hint { font-size: 11px; color: #666; margin-top: 4px; }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <div class="sidebar-header">
+            <h1>🦞 Claw Pen</h1>
+        </div>
+        
+        <div class="system-stats">
+            <div class="stat-section">
+                <div class="stat-row">
+                    <span class="stat-label">💾 RAM</span>
+                    <span class="stat-value" id="ram-value">-- / --</span>
+                </div>
+                <div class="stat-bar"><div class="stat-bar-fill" id="ram-bar" style="width:0%"></div></div>
+            </div>
+            
+            <div class="stat-section">
+                <div class="stat-row">
+                    <span class="stat-label">⚡ CPU</span>
+                    <span class="stat-value" id="cpu-value">-- cores</span>
+                </div>
+                <div class="stat-bar"><div class="stat-bar-fill" id="cpu-bar" style="width:0%"></div></div>
+            </div>
+            
+            <div class="stat-row" style="margin-top:12px">
+                <span class="stat-label">Agents</span>
+                <span class="stat-value" id="agent-count">0 / 0</span>
+            </div>
+        </div>
+        
+        <button class="create-agent-btn" onclick="showCreateModal()">+ Create Agent</button>
+        
+        <div class="agent-list-header">Your Agents</div>
+        <div id="agent-list"></div>
+    </div>
+    
+    <div id="main">
+        <div class="chat-header">
+            <h2 id="chat-title">Select an agent</h2>
+            <div class="status" id="status">Not connected</div>
+        </div>
+        
+        <div id="chat-container">
+            <div id="messages"></div>
+            <div id="input-area">
+                <input type="text" id="message-input" placeholder="Type a message..." disabled>
+                <button id="send-btn" disabled>Send</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="modal-overlay" id="create-modal">
+        <div class="modal">
+            <h3>Create Agent</h3>
+            <div class="form-group">
+                <label>Name</label>
+                <input type="text" id="new-agent-name" placeholder="my-agent">
+            </div>
+            <div class="form-group">
+                <label>Provider</label>
+                <select id="new-agent-provider" onchange="updateModelOptions()">
+                    <option value="zai">Z.AI</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="kimi">Kimi</option>
+                    <option value="kimi-code">Kimi Code</option>
+                    <option value="google">Google</option>
+                    <option value="access">Access</option>
+                    <option value="huggingface">Hugging Face</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Model</label>
+                <select id="new-agent-model"></select>
+            </div>
+            <div class="form-group">
+                <label>API Key</label>
+                <input type="password" id="new-agent-apikey" placeholder="Your API key for this provider">
+                <div class="api-key-hint" id="apikey-hint">Key is stored per-agent, not shared</div>
+            </div>
+            <div class="form-group">
+                <label>Memory (MB)</label>
+                <input type="number" id="new-agent-memory" value="2048">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="hideCreateModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="createAgent()">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let agents = [], selectedAgent = null, isConnected = false, currentStreamEl = null, chatHistory = {};
+        const ORCHESTRATOR_URL = 'http://localhost:3000';
+        
+        const providerModels = {
+            zai: [{ value: 'glm-5', label: 'GLM-5' }],
+            anthropic: [{ value: 'claude-sonnet-4-5', label: 'Sonnet 4.5' }],
+            openai: [{ value: 'gpt-4.1', label: 'GPT-4.1' }],
+            kimi: [{ value: 'kimi-k2.5', label: 'Kimi K2.5' }, { value: 'moonshot-v1-128k', label: 'Moonshot 128K' }, { value: 'moonshot-v1-32k', label: 'Moonshot 32K' }],
+            'kimi-code': [{ value: 'kimi-code', label: 'Kimi Code' }],
+            google: [{ value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' }],
+            access: [{ value: 'access-standard', label: 'Access Standard' }],
+            huggingface: [{ value: 'meta-llama/Llama-3.3-70B-Instruct', label: 'Llama 3.3 70B' }]
+        };
+        
+        const providerKeyNames = {
+            zai: 'Z.AI',
+            anthropic: 'Anthropic',
+            openai: 'OpenAI',
+            kimi: 'Kimi',
+            'kimi-code': 'Kimi Code',
+            google: 'Google',
+            access: 'Access',
+            huggingface: 'Hugging Face'
+        };
+        
+        const statusEl = document.getElementById('status');
+        const messagesEl = document.getElementById('messages');
+        const inputEl = document.getElementById('message-input');
+        const sendBtn = document.getElementById('send-btn');
+        
+        async function fetchSystemStats() {
+            try {
+                const res = await fetch(`${ORCHESTRATOR_URL}/api/system/stats`);
+                const stats = await res.json();
+                
+                const ramPercent = (stats.used_memory_mb / stats.total_memory_mb * 100).toFixed(0);
+                document.getElementById('ram-value').textContent = 
+                    `${(stats.used_memory_mb / 1024).toFixed(1)} / ${(stats.total_memory_mb / 1024).toFixed(1)} GB`;
+                const ramBar = document.getElementById('ram-bar');
+                ramBar.style.width = ramPercent + '%';
+                ramBar.className = 'stat-bar-fill ' + (ramPercent > 80 ? 'danger' : ramPercent > 60 ? 'warning' : 'ok');
+                
+                const cpuPercent = (stats.agent_memory_mb / 1024 / (stats.total_memory_mb / 1024) * 100).toFixed(0);
+                document.getElementById('cpu-value').textContent = `${stats.total_cpu_cores.toFixed(0)} cores`;
+                const cpuBar = document.getElementById('cpu-bar');
+                cpuBar.style.width = Math.min(cpuPercent, 100) + '%';
+                cpuBar.className = 'stat-bar-fill ' + (cpuPercent > 80 ? 'danger' : cpuPercent > 60 ? 'warning' : 'ok');
+                
+                document.getElementById('agent-count').textContent = `${stats.running_agents} / ${stats.agent_count}`;
+            } catch (e) {}
+        }
+        
+        function updateModelOptions() {
+            const provider = document.getElementById('new-agent-provider').value;
+            document.getElementById('new-agent-model').innerHTML = 
+                providerModels[provider].map(m => `<option value="${m.value}">${m.label}</option>`).join('');
+            document.getElementById('apikey-hint').textContent = 
+                `Enter your ${providerKeyNames[provider]} API key`;
+        }
+        
+        async function fetchAgents() {
+            try {
+                const res = await fetch(`${ORCHESTRATOR_URL}/api/agents`);
+                agents = await res.json();
+                renderAgents();
+            } catch (e) {}
+        }
+        
+        function renderAgents() {
+            document.getElementById('agent-list').innerHTML = agents.map(a => `
+                <div class="agent-card${selectedAgent?.id === a.id ? ' selected' : ''}" onclick="selectAgent(agents.find(x => x.id === '${a.id}'))">
+                    <div class="agent-name">${a.name} <span class="agent-status ${a.status}">${a.status}</span></div>
+                    <div class="agent-model">${a.config?.llm_provider}/${a.config?.llm_model}</div>
+                    <div class="agent-resources"><span>💾 ${(a.config?.memory_mb / 1024 || 2).toFixed(1)} GB</span></div>
+                    <div class="agent-actions">
+                        ${a.status === 'running' 
+                            ? `<button class="btn-stop" onclick="event.stopPropagation();stopAgent('${a.id}')">Stop</button>`
+                            : `<button class="btn-start" onclick="event.stopPropagation();startAgent('${a.id}')">Start</button>`}
+                        <button class="btn-delete" onclick="event.stopPropagation();deleteAgent('${a.id}','${a.name}')">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        async function startAgent(id) {
+            await fetch(`${ORCHESTRATOR_URL}/api/agents/${id}/start`, { method: 'POST' });
+            setTimeout(() => { fetchAgents(); fetchSystemStats(); }, 2000);
+        }
+        
+        async function stopAgent(id) {
+            await fetch(`${ORCHESTRATOR_URL}/api/agents/${id}/stop`, { method: 'POST' });
+            fetchAgents();
+            fetchSystemStats();
+        }
+        
+        async function deleteAgent(id, name) {
+            if (!confirm(`Delete "${name}"?`)) return;
+            await fetch(`${ORCHESTRATOR_URL}/api/agents/${id}`, { method: 'DELETE' });
+            delete chatHistory[name];
+            fetchAgents();
+            fetchSystemStats();
+            if (selectedAgent?.id === id) {
+                selectedAgent = null;
+                document.getElementById('chat-title').textContent = 'Select an agent';
+                messagesEl.innerHTML = '';
+                inputEl.disabled = sendBtn.disabled = true;
+                setStatus('Not connected', '');
+            }
+        }
+        
+        function selectAgent(agent) {
+            if (selectedAgent && messagesEl.children.length) chatHistory[selectedAgent.name] = messagesEl.innerHTML;
+            selectedAgent = agent;
+            document.getElementById('chat-title').textContent = agent.name;
+            renderAgents();
+            messagesEl.innerHTML = chatHistory[agent.name] || '<div class="message system">Connecting...</div>';
+            if (chatHistory[agent.name]) messagesEl.scrollTop = messagesEl.scrollHeight;
+            if (agent.status === 'running') connectToAgent(agent);
+            else { setStatus('Stopped', 'error'); inputEl.disabled = sendBtn.disabled = true; }
+        }
+        
+        async function connectToAgent(agent) {
+            setStatus('Connecting...', 'connecting');
+            const port = agent.config?.env_vars?.PORT || '18790';
+            try {
+                if (window.__TAURI__) {
+                    await window.__TAURI__.core.invoke('connect_websocket', { url: `ws://localhost:${port}/ws` });
+                }
+            } catch (e) { setStatus('Error: ' + e, 'error'); }
+        }
+        
+        function showCreateModal() { updateModelOptions(); document.getElementById('create-modal').classList.add('active'); }
+        function hideCreateModal() { document.getElementById('create-modal').classList.remove('active'); }
+        
+        async function createAgent() {
+            const name = document.getElementById('new-agent-name').value.trim();
+            const provider = document.getElementById('new-agent-provider').value;
+            const model = document.getElementById('new-agent-model').value;
+            const apiKey = document.getElementById('new-agent-apikey').value.trim();
+            const memory = parseInt(document.getElementById('new-agent-memory').value);
+            
+            if (!name) { alert('Enter a name'); return; }
+            if (!apiKey) { alert('Enter an API key'); return; }
+            
+            try {
+                const res = await fetch(`${ORCHESTRATOR_URL}/api/agents`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        name, 
+                        template: 'openclaw-agent', 
+                        config: { 
+                            llm_provider: provider, 
+                            llm_model: model, 
+                            memory_mb: memory,
+                            api_key: apiKey
+                        } 
+                    })
+                });
+                if (res.ok) { 
+                    hideCreateModal(); 
+                    document.getElementById('new-agent-apikey').value = '';
+                    fetchAgents(); 
+                    fetchSystemStats(); 
+                }
+                else alert('Failed: ' + await res.text());
+            } catch (e) { alert('Error: ' + e); }
+        }
+        
+        function setStatus(text, state) { statusEl.textContent = text; statusEl.className = 'status ' + state; }
+        function setConnected(c) { isConnected = c; inputEl.disabled = sendBtn.disabled = !c; if (c) setStatus('Connected', 'connected'); }
+        
+        function addMessage(text, type = 'system') {
+            const div = document.createElement('div');
+            div.className = 'message ' + type;
+            div.textContent = text;
+            messagesEl.appendChild(div);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+            return div;
+        }
+        
+        function appendToStream(text) {
+            if (!currentStreamEl) currentStreamEl = addMessage('', 'assistant streaming');
+            currentStreamEl.textContent += text;
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+        
+        function finalizeStream(text) {
+            if (currentStreamEl) {
+                if (text) currentStreamEl.textContent = text;
+                currentStreamEl.classList.remove('streaming');
+            } else if (text) addMessage(text, 'assistant');
+            currentStreamEl = null;
+        }
+        
+        async function sendMessage() {
+            const text = inputEl.value.trim();
+            if (!text || !isConnected) return;
+            addMessage(text, 'user');
+            inputEl.value = '';
+            try {
+                await window.__TAURI__.core.invoke('send_chat_message', { text });
+            } catch (e) { addMessage('Error: ' + e, 'system'); }
+        }
+        
+        sendBtn.addEventListener('click', sendMessage);
+        inputEl.addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(); });
+        
+        function extractText(msg) {
+            if (typeof msg === 'string') return msg;
+            if (msg.text) return msg.text;
+            if (msg.content) {
+                if (typeof msg.content === 'string') return msg.content;
+                if (Array.isArray(msg.content)) return msg.content.filter(c => c.type === 'text').map(c => c.text).join('');
+            }
+            return '';
+        }
+        
+        async function init() {
+            await fetchAgents();
+            await fetchSystemStats();
+            setInterval(fetchAgents, 5000);
+            setInterval(fetchSystemStats, 3000);
+            
+            if (window.__TAURI__) {
+                await window.__TAURI__.event.listen('ws-connected', e => { if (e.payload) setConnected(true); });
+                await window.__TAURI__.event.listen('ws-authenticated', () => setConnected(true));
+                await window.__TAURI__.event.listen('ws-message', event => {
+                    try {
+                        const data = JSON.parse(event.payload);
+                        if (data.type === 'event' && data.event === 'chat') {
+                            const p = data.payload;
+                            const text = extractText(p.message);
+                            if (p.state === 'delta' && text) appendToStream(text);
+                            else if (p.state === 'final') finalizeStream(text);
+                            else if (p.state === 'error') { finalizeStream(); addMessage('Error: ' + (p.errorMessage || 'Unknown'), 'system'); }
+                        }
+                    } catch (e) {}
+                });
+            }
+        }
+        
+        init();
+    </script>
+</body>
+</html>

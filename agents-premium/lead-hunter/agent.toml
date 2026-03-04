@@ -1,0 +1,137 @@
+[agent]
+name = "lead-hunter"
+org = "andor-design"
+version = "1.0.0"
+
+[search]
+# Northern Ontario cities for And or Design
+locations = ["Sudbury", "North Bay", "Timmins", "Sault Ste Marie"]
+
+# Keywords to find HOMEOWNERS seeking permit services
+# Focus on "need help" and "wanted" phrasing
+keywords = [
+    # Direct "I need" / "help me" phrases
+    "need permit help",
+    "need building permit",
+    "help with permit",
+    "permit application help",
+    "permit questions",
+
+    # Wanted/seeking
+    "wanted BCIN",
+    "wanted permit designer",
+    "wanted architectural",
+    "looking for BCIN",
+    "seeking permit",
+
+    # Distress signals (homeowners in trouble)
+    "city rejected permit",
+    "permit denied",
+    "failed inspection",
+    "need plans fast",
+    "rushed permit",
+    "expired permit",
+
+    # Project-specific homeowner needs
+    "basement apartment legalization",
+    "legalize basement",
+    "second suite help",
+    "deck permit questions",
+    "garage permit questions",
+]
+
+# Words that indicate SERVICE ADS (businesses offering services) - filter these OUT
+exclude_service_keywords = [
+    # Service ad indicators
+    "we provide",
+    "we offer",
+    "professional services",
+    "licensed & insured",
+    "free quote",
+    "call us",
+    "contact us today",
+    "serving",
+    "fast & affordable",
+    "quality work",
+    "years of experience",
+    "competitive rates",
+
+    # Business listing patterns
+    "& co",
+    "inc.",
+    "ltd.",
+    "company",
+    "studio",
+    "agency",
+]
+
+# Words that indicate JOB POSTINGS (hiring workers) - filter these OUT
+exclude_keywords = [
+    "hiring",
+    "now hiring",
+    "we are hiring",
+    "job",
+    "employment",
+    "career",
+    "salary",
+    "full-time",
+    "part-time",
+    "$/hr",
+    "$20",
+    "$25",
+    "driver",
+    "labourer",
+    "laborer",
+    "delivery",
+    "warehouse",
+]
+
+max_results_per_query = 20
+
+[notifications]
+whatsapp = true
+channel = "webchat"
+recipient = "Jer"
+
+[schedule]
+# Weekly on Monday at 9 AM EST
+cron = "0 9 * * 1"
+
+[storage]
+# Shared memory namespace for deduplication
+namespace = "andor-design"
+lead_type = "lead"
+# Days to keep seen leads in memory for dedup
+dedup_retention_days = 30
+
+[logging]
+level = "INFO"
+file = "lead-hunter.log"
+
+[search.kijiji]
+# Kijiji-specific settings to find leads, not competitors
+# Search in Jobs/Gigs instead of Services to find people seeking help
+category = "jobs"  # or "gigs-services" for gig postings
+# Avoid "services" category which contains contractors advertising
+exclude_categories = ["services"]
+# Kijiji location IDs for Northern Ontario cities
+location_ids = [
+    "1700218",  # Sudbury
+    "1700231",  # North Bay
+    "1700226",  # Timmins
+    "1700223",  # Sault Ste Marie
+]
+
+[rss]
+# RSS feed URLs for lead sources (e.g., Google Alerts)
+# Add feed URLs here after setting up Google Alerts
+feeds = [
+    # Google Alerts will provide these URLs once created
+    # Format: "https://www.google.com/alerts/feeds/USER_ID/ALERT_ID"
+    # Example:
+    # "https://www.google.com/alerts/feeds/1234567890abcdef/1234567890123",
+]
+# Maximum entries to fetch per feed
+max_entries_per_feed = 50
+# Keywords for filtering (inherits from [search].keywords if not specified)
+# keywords = ["permit", "BCIN", "architect", "renovation"]

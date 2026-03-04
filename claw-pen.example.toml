@@ -1,0 +1,45 @@
+# Claw Pen Configuration
+# Copy this to one of these locations (in order of priority):
+#   ./claw-pen.toml
+#   ~/.config/claw-pen/claw-pen.toml
+#   /etc/claw-pen/claw-pen.toml
+
+# Deployment mode: "windows-wsl", "linux-native", or "all-windows"
+deployment-mode = "linux-native"
+
+# Network backend: "tailscale", "wireguard", "zerotier", "headscale", or "local"
+network-backend = "tailscale"
+
+# Container runtime socket path
+runtime-socket = "/var/run/claw-pen.sock"
+
+# Container runtime: "docker" (default) or "exo"
+# Docker is the default for backward compatibility
+# Exo is an agent-first container runtime designed for AI agents
+container-runtime = "docker"
+
+# Custom path to exo binary (optional, defaults to "exo" in PATH)
+# Only used when container-runtime = "exo"
+# exo-path = "/usr/local/bin/exo"
+
+# Tailscale auth key (optional, for auto-joining agents to tailnet)
+# tailscale-auth-key = "tskey-auth-xxxxx"
+
+# Headscale configuration (if using headscale backend)
+# headscale-url = "https://mesh.yourcompany.com"
+# headscale-auth-key = "xxxxx"
+# headscale-namespace = "claw-pen"
+
+# AndOR Bridge configuration (optional)
+# [andor-bridge]
+# url = "http://localhost:8080"
+# register-on-create = true
+
+# Model servers (optional, for local LLM support)
+# [model-servers.ollama]
+# endpoint = "http://localhost:11434"
+# default-model = "llama3"
+
+# [model-servers.llama-cpp]
+# endpoint = "http://localhost:8080"
+# default-model = "default"

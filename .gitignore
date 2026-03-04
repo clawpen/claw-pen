@@ -1,0 +1,40 @@
+/target
+**/*.rs.bk
+.env
+*.wasm
+node_modules/
+dist/
+
+# Agent logs and runtime data
+agents/*/logs/
+agents/*/memory/
+agents/*/notifications/
+*.log
+*.json.bak
+images/openclaw-agent/openclaw-bundle.tar.gz
+data/
+
+# Secrets and sensitive files
+docs/SECRETS.md
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Runtime data
+.openclaw/
+notifications/
+agents-premium/*/memory/
+agents-premium/*/notifications/
+
+# Pitch/deck files (separate repo)
+pitch*.md
+PITCH*.md
+*.deck.md
+
+# Tools logs
+tools/*.log
+

@@ -1,0 +1,65 @@
+# Example Team Configuration Template
+# Copy this file and customize for your team
+
+[team]
+# Team display name
+name = "My Agent Team"
+# Brief description of what this team handles
+description = "Description of the team's purpose"
+version = "1.0.0"
+
+[router]
+# Router agent name
+name = "my-team-router"
+# Classification mode:
+#   "keyword" - Simple keyword matching (fast, no LLM calls)
+#   "llm"     - Use LLM to classify intent (accurate, costs tokens)
+#   "hybrid"  - Try keywords first, fall back to LLM if low confidence
+mode = "hybrid"
+# Minimum confidence to route without asking
+confidence_threshold = 0.7
+# Ask user for clarification if confidence is below threshold
+clarify_on_low_confidence = true
+
+# Specialist agents
+# Map intent names to agent configurations
+[agents]
+# intent_name = { agent = "agent-id", description = "What this agent handles" }
+
+# Example:
+# support = { agent = "support-bot", description = "Customer support and FAQs" }
+# sales = { agent = "sales-assistant", description = "Product info and pricing" }
+
+# Routing rules per intent
+# Each intent can have keywords and examples for classification
+[routing.intent_name]
+keywords = ["keyword1", "keyword2"]
+examples = [
+    "Example user message 1",
+    "Example user message 2",
+]
+
+# [routing.support]
+# keywords = ["help", "issue", "problem", "broken", "not working"]
+# examples = [
+#     "I need help with my account",
+#     "Something is broken",
+# ]
+
+[clarification]
+# Prompts shown when intent is unclear
+prompts = [
+    "I'm not sure what you need. Are you asking about:",
+    "Could you clarify? This could be:",
+]
+# Format string for clarification options
+# {intent} and {description} are replaced
+options_format = "• {intent}: {description}"
+
+[responses]
+# Acknowledgment when routing
+routing_ack = "Let me pass this to {agent_name}..."
+# When asking for clarification
+clarification_needed = "I need a bit more info to help you best."
+# Prefix for agent responses (optional)
+agent_response_prefix = "[{agent_name}] "

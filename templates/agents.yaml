@@ -1,0 +1,115 @@
+# Claw Pen Agent Templates
+# Sensible defaults - override at creation time
+
+templates:
+  coding-assistant:
+    name: "Coding Assistant"
+    description: "General-purpose coding helper"
+    config:
+      llm_provider: openai
+      llm_model: gpt-4o
+      memory_mb: 1024
+      cpu_cores: 1.0
+    env:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+
+  code-reviewer:
+    name: "Code Reviewer"
+    description: "Reviews code for quality and security"
+    config:
+      llm_provider: anthropic
+      llm_model: claude-3-5-sonnet-20241022
+      memory_mb: 1024
+      cpu_cores: 1.0
+    env:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+
+  local-assistant:
+    name: "Local Assistant"
+    description: "Runs locally with Ollama"
+    config:
+      llm_provider: ollama
+      llm_model: llama3.2
+      memory_mb: 2048
+      cpu_cores: 2.0
+
+  lm-studio:
+    name: "LM Studio"
+    description: "Runs locally with LM Studio"
+    config:
+      llm_provider: lmstudio
+      llm_model: ""
+      memory_mb: 2048
+      cpu_cores: 2.0
+
+  researcher:
+    name: "Research Assistant"
+    description: "Web search and summarization"
+    config:
+      llm_provider: openai
+      llm_model: gpt-4o
+      memory_mb: 1024
+      cpu_cores: 1.0
+    env:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+
+  devops:
+    name: "DevOps Helper"
+    description: "Infrastructure and deployment"
+    config:
+      llm_provider: openai
+      llm_model: gpt-4o
+      memory_mb: 1536
+      cpu_cores: 1.5
+    env:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+
+  kimi:
+    name: "Kimi (Moonshot AI)"
+    description: "Long-context Chinese/English assistant (OAuth)"
+    config:
+      llm_provider: kimi
+      llm_model: moonshot-v1-128k
+      memory_mb: 2048
+      cpu_cores: 1.0
+    # OAuth-based - tokens managed by OpenClaw gateway
+    # Configure via: openclaw configure or OAuth flow
+
+  zai:
+    name: "z.ai"
+    description: "z.ai powered assistant (OAuth)"
+    config:
+      llm_provider: zai
+      llm_model: ""
+      memory_mb: 1024
+      cpu_cores: 1.0
+    # OAuth-based - tokens managed by OpenClaw gateway
+
+  openclaw-agent:
+    name: "OpenClaw Agent"
+    description: "Full OpenClaw instance with built-in AndOR Bridge chat"
+    config:
+      llm_provider: zai
+      llm_model: glm-5
+      memory_mb: 1024
+      cpu_cores: 1.0
+      # Uses AndOR Bridge - no third-party channels needed
+      channels:
+        - type: andor
+      ports:
+        - 18789
+    # OAuth-based - tokens managed by OpenClaw gateway
+    # Built-in AndOR Bridge chat - no API keys required
+
+  tutor-box:
+    name: "Tutor Box"
+    description: "Learn anything - patient, adaptive teaching companion"
+    config:
+      llm_provider: zai
+      llm_model: glm-5
+      memory_mb: 1024
+      cpu_cores: 1.0
+      channels:
+        - type: webchat
+      ports:
+        - 18789
