@@ -364,10 +364,11 @@ impl DockerClient {
         env.push(format!("LLM_PROVIDER={:?}", config.llm_provider));
         if let Some(ref model) = config.llm_model {
             env.push(format!("LLM_MODEL={}", model));
-        
-        // Agent port (default 18790)
-        env.push("PORT=18790".to_string());
         }
+
+        // Agent port - get from env_vars if set, otherwise use default
+        let port = config.env_vars.get("PORT").cloned().unwrap_or_else(|| "18790".to_string());
+        env.push(format!("PORT={}", port));
 
         // Pass all custom env vars
         for (key, value) in &config.env_vars {
@@ -542,6 +543,7 @@ impl ContainerRuntime for DockerClient {
                     restart_policy: Default::default(),
                     health_status: None,
                     runtime: Some("docker".to_string()),
+                    gateway_port: crate::types::default_gateway_port(),
                 });
             }
         }
@@ -587,6 +589,19 @@ impl ContainerRuntime for DockerClient {
             HashMap::from([(format!("{}/tcp", AGENT_INTERNAL_PORT), HashMap::new())]);
 
         // Container configuration with bridge network (isolated from host)
+        // Build volume binds from config
+        let binds = if !config.volumes.is_empty() {
+            Some(config.volumes.iter().map(|v| {
+                if v.read_only {
+                    format!("{}:{}:ro", v.source, v.target)
+                } else {
+                    format!("{}:{}", v.source, v.target)
+                }
+            }).collect::<Vec<_>>())
+        } else {
+            None
+        };
+
         let container_config = Config {
             image: Some(image.to_string()),
             env: Some(env),
@@ -598,6 +613,8 @@ impl ContainerRuntime for DockerClient {
                 // Use bridge mode for network isolation instead of host mode
                 network_mode: Some("host".to_string()),
                 port_bindings: Some(port_bindings),
+                // Volume mounts
+                binds,
                 // Security options
                 security_opt: Some(vec!["no-new-privileges:true".to_string()]),
                 // Prevent privilege escalation
@@ -890,6 +907,7 @@ impl ContainerRuntime for ExoClient {
                     restart_policy: Default::default(),
                     health_status: None,
                     runtime: Some("exo".to_string()),
+                    gateway_port: crate::types::default_gateway_port(),
                 });
             }
         }

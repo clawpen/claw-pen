@@ -98,6 +98,7 @@ impl ContainmentClient {
                     restart_policy: Default::default(),
                     health_status: None,
                     runtime: Some("containment".to_string()),
+                    gateway_port: crate::types::default_gateway_port(),
                 });
             }
         }

@@ -24,6 +24,13 @@ pub struct AgentContainer {
     /// Runtime used for this container (docker or exo)
     #[serde(default)]
     pub runtime: Option<String>,
+    /// Gateway port for this agent (default 18790)
+    #[serde(default = "default_gateway_port")]
+    pub gateway_port: u16,
+}
+
+pub fn default_gateway_port() -> u16 {
+    18790
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -508,4 +515,74 @@ pub struct RoutedMessage {
     pub target_agent: Option<String>,
     pub agent_response: Option<String>,
     pub timestamp: String,
+}
+
+// === Volume Management ===
+
+/// A named volume that can be mounted to multiple agents
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Volume {
+    /// Unique volume ID
+    pub id: String,
+    /// Human-readable name
+    pub name: String,
+    /// Description of what this volume is for
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Path on host (for bind mounts) or None for managed volumes
+    #[serde(default)]
+    pub host_path: Option<String>,
+    /// Default mount point inside containers
+    pub default_target: String,
+    /// Whether volume is read-only by default
+    #[serde(default)]
+    pub read_only: bool,
+    /// Size in MB (for managed volumes, 0 = unlimited)
+    #[serde(default)]
+    pub size_mb: u32,
+    /// Tags for organization
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Created timestamp
+    pub created_at: String,
+    /// Agents currently using this volume
+    #[serde(default)]
+    pub attached_agents: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateVolumeRequest {
+    /// Human-readable name
+    pub name: String,
+    /// Description
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Host path for bind mount (if None, creates managed volume)
+    #[serde(default)]
+    pub host_path: Option<String>,
+    /// Default mount point inside containers
+    #[serde(default = "default_volume_target")]
+    pub default_target: String,
+    /// Read-only by default
+    #[serde(default)]
+    pub read_only: bool,
+    /// Size limit in MB (0 = unlimited)
+    #[serde(default)]
+    pub size_mb: u32,
+    /// Tags
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+fn default_volume_target() -> String {
+    "/data".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateVolumeRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub default_target: Option<String>,
+    pub read_only: Option<bool>,
+    pub tags: Option<Vec<String>>,
 }

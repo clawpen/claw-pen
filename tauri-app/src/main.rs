@@ -1,5 +1,5 @@
 // Claw Pen Desktop - Tauri App with Rust WebSockets
-// With Ed25519 device identity
+// With Ed25519 device identity and floating window support
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -13,12 +13,14 @@ use rand::rngs::OsRng;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::mpsc::{channel, Sender};
+use tokio_util::sync::CancellationToken;
 use tokio_tungstenite::connect_async_with_config;
 use tungstenite::handshake::client::generate_key;
 
@@ -41,6 +43,20 @@ impl Default for AppConfig {
 
 pub struct AppState {
     pub ws_sender: Arc<tokio::sync::Mutex<Option<Sender<String>>>>,
+    pub cancel_token: Arc<tokio::sync::Mutex<Option<CancellationToken>>>,
+}
+
+// Per-window state for floating windows
+pub struct FloatingWindowState {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub port: u16,
+    pub ws_sender: Arc<tokio::sync::Mutex<Option<Sender<String>>>>,
+    pub cancel_token: Arc<tokio::sync::Mutex<Option<CancellationToken>>>,
+}
+
+pub struct WindowManager {
+    pub floating_windows: Arc<tokio::sync::Mutex<HashMap<String, FloatingWindowState>>>,
 }
 
 fn get_device_keys_path() -> PathBuf {
@@ -161,6 +177,23 @@ async fn connect_websocket(
     state: State<'_, AppState>,
     url: String,
 ) -> Result<(), String> {
+    // Cancel any existing connection
+    {
+        let mut token_guard = state.cancel_token.lock().await;
+        if let Some(token) = token_guard.take() {
+            eprintln!("[WS] Canceling previous connection");
+            token.cancel();
+        }
+    }
+
+    // Create new cancellation token
+    let cancel_token = CancellationToken::new();
+    let cancel_token_clone = cancel_token.clone();
+    {
+        let mut token_guard = state.cancel_token.lock().await;
+        *token_guard = Some(cancel_token.clone());
+    }
+
     let app_handle = app.clone();
 
     let device_keys =
@@ -177,6 +210,12 @@ async fn connect_websocket(
 
     tokio::spawn(async move {
         loop {
+            // Check if cancelled
+            if cancel_token_clone.is_cancelled() {
+                eprintln!("[WS] Connection cancelled, exiting");
+                break;
+            }
+
             eprintln!("[WS] Attempting connection to {}", url);
 
             let request = Request::builder()
@@ -207,6 +246,11 @@ async fn connect_websocket(
 
                     loop {
                         tokio::select! {
+                            // Check for cancellation
+                            _ = cancel_token_clone.cancelled() => {
+                                eprintln!("[WS] Connection cancelled during loop");
+                                break;
+                            }
                             // Timeout for no-auth mode: if no challenge after 2s, assume auth disabled
                             _ = tokio::time::sleep(std::time::Duration::from_secs(2)), if !connect_sent && !authenticated => {
                                 eprintln!("[WS] No challenge received - assuming no-auth mode");
@@ -340,19 +384,252 @@ async fn send_chat_message(state: State<'_, AppState>, text: String) -> Result<(
     }
 }
 
+#[tauri::command]
+async fn pop_out_agent(
+    app: AppHandle,
+    window_manager: State<'_, WindowManager>,
+    agent_id: String,
+    agent_name: String,
+    port: u16,
+) -> Result<String, String> {
+    let window_label = format!("agent-{}", agent_id);
+    
+    // Check if window already exists
+    if app.get_webview_window(&window_label).is_some() {
+        // Focus existing window
+        if let Some(win) = app.get_webview_window(&window_label) {
+            win.set_focus().map_err(|e| e.to_string())?;
+        }
+        return Ok(window_label);
+    }
+    
+    eprintln!("[PopOut] Creating floating window for {} on port {}", agent_name, port);
+    
+    // Create floating window
+    let url = format!("/dist/index.html?floating=1&agent_id={}&agent_name={}&port={}", 
+        agent_id, 
+        urlencoding::encode(&agent_name),
+        port
+    );
+    
+    WebviewWindowBuilder::new(
+        &app,
+        &window_label,
+        WebviewUrl::App(url.into())
+    )
+    .title(format!("{} - Claw Pen", agent_name))
+    .inner_size(600.0, 700.0)
+    .min_inner_size(400.0, 500.0)
+    .build()
+    .map_err(|e| e.to_string())?;
+    
+    // Store state for this window
+    let state = FloatingWindowState {
+        agent_id: agent_id.clone(),
+        agent_name: agent_name.clone(),
+        port,
+        ws_sender: Arc::new(tokio::sync::Mutex::new(None)),
+        cancel_token: Arc::new(tokio::sync::Mutex::new(None)),
+    };
+    
+    window_manager.floating_windows.lock().await.insert(window_label.clone(), state);
+    
+    Ok(window_label)
+}
+
+#[tauri::command]
+async fn connect_floating_window(
+    app: AppHandle,
+    window_manager: State<'_, WindowManager>,
+    window_label: String,
+) -> Result<(), String> {
+    // Extract the values we need from state before spawning
+    let (port, agent_name) = {
+        let mut windows = window_manager.floating_windows.lock().await;
+        let state = windows.get_mut(&window_label)
+            .ok_or_else(|| format!("Window {} not found", window_label))?;
+        
+        // Cancel existing connection if any
+        if let Some(token) = state.cancel_token.lock().await.take() {
+            token.cancel();
+        }
+        
+        (state.port, state.agent_name.clone())
+    };
+    
+    let url = format!("ws://localhost:{}/ws", port);
+    
+    // Get sender from state
+    let ws_sender = {
+        let windows = window_manager.floating_windows.lock().await;
+        let state = windows.get(&window_label).unwrap();
+        state.ws_sender.clone()
+    };
+    
+    let cancel_token = CancellationToken::new();
+    let cancel_clone = cancel_token.clone();
+    
+    // Store cancel token
+    {
+        let windows = window_manager.floating_windows.lock().await;
+        let state = windows.get(&window_label).unwrap();
+        *state.cancel_token.lock().await = Some(cancel_token);
+    }
+    
+    let (tx, mut rx) = channel::<String>(100);
+    *ws_sender.lock().await = Some(tx);
+    
+    let app_handle = app.clone();
+    let window_label_clone = window_label.clone();
+    
+    let device_keys = load_or_create_device_keys()
+        .map_err(|e| format!("Failed to load device keys: {}", e))?;
+    let signing_key_bytes = device_keys.signing_key.to_bytes();
+    let device_id = device_keys.device_id;
+    
+    tokio::spawn(async move {
+        let request = Request::builder()
+            .uri(&url)
+            .header("Host", format!("localhost:{}", port))
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", generate_key())
+            .header("Origin", format!("http://localhost:{}", port))
+            .body(())
+            .unwrap();
+            
+        match connect_async_with_config(request, None, false).await {
+            Ok((ws_stream, _)) => {
+                eprintln!("[Floating:{}] Connected", agent_name);
+                let _ = app_handle.emit_to(&window_label_clone, "ws-connected", true);
+                
+                let (mut write, mut read) = ws_stream.split();
+                let mut authenticated = false;
+                let mut connect_sent = false;
+                
+                let signing_key = SigningKey::from_bytes(&signing_key_bytes);
+                let dk = DeviceKeys { signing_key, device_id };
+                
+                loop {
+                    tokio::select! {
+                        _ = cancel_clone.cancelled() => break,
+                        
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(2)), if !connect_sent && !authenticated => {
+                            authenticated = true;
+                            connect_sent = true;
+                            let _ = app_handle.emit_to(&window_label_clone, "ws-authenticated", true);
+                        }
+                        
+                        msg = read.next() => {
+                            match msg {
+                                Some(Ok(m)) if m.is_text() => {
+                                    let text = m.to_string();
+                                    if !connect_sent && text.contains("\"event\":\"connect.challenge\"") {
+                                        let nonce = extract_nonce(&text).unwrap_or("");
+                                        let id = REQUEST_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+                                        let response = build_connect_request(&format!("fp-{}", id), nonce, &dk);
+                                        let _ = write.send(tungstenite::Message::Text(response)).await;
+                                        connect_sent = true;
+                                    } else if text.contains("\"ok\":true") && text.contains("\"id\":\"fp-") {
+                                        authenticated = true;
+                                        let _ = app_handle.emit_to(&window_label_clone, "ws-authenticated", true);
+                                    } else if authenticated {
+                                        let _ = app_handle.emit_to(&window_label_clone, "ws-message", &text);
+                                    }
+                                }
+                                Some(Ok(_)) | None => break,
+                                Some(Err(_)) => break,
+                            }
+                        }
+                        
+                        msg = rx.recv() => {
+                            if let Some(text) = msg {
+                                if authenticated {
+                                    let _ = write.send(tungstenite::Message::Text(text)).await;
+                                }
+                            }
+                        }
+                    }
+                }
+                let _ = app_handle.emit_to(&window_label_clone, "ws-connected", false);
+            }
+            Err(e) => {
+                eprintln!("[Floating:{}] Connection failed: {}", agent_name, e);
+                let _ = app_handle.emit_to(&window_label_clone, "ws-error", format!("Connection failed: {}", e));
+            }
+        }
+    });
+    
+    Ok(())
+}
+
+#[tauri::command]
+async fn send_floating_message(
+    window_manager: State<'_, WindowManager>,
+    window_label: String,
+    text: String,
+) -> Result<(), String> {
+    // Get sender reference from state
+    let ws_sender = {
+        let windows = window_manager.floating_windows.lock().await;
+        let state = windows.get(&window_label)
+            .ok_or_else(|| format!("Window {} not found", window_label))?;
+        state.ws_sender.clone()
+    };
+    
+    let sender = ws_sender.lock().await;
+    if let Some(tx) = sender.as_ref() {
+        let id = REQUEST_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let msg = serde_json::json!({
+            "type": "req",
+            "id": format!("msg-{}", id),
+            "method": "chat.send",
+            "params": {
+                "sessionKey": "main",
+                "message": text,
+                "deliver": false,
+                "idempotencyKey": uuid()
+            }
+        })
+        .to_string();
+        
+        tx.send(msg).await.map_err(|e| e.to_string())?;
+        Ok(())
+    } else {
+        Err("WebSocket not connected".to_string())
+    }
+}
+
+// URL encoding for query params
+mod urlencoding {
+    pub fn encode(s: &str) -> String {
+        url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+    }
+}
+
 fn main() {
     let state = AppState {
         ws_sender: Arc::new(tokio::sync::Mutex::new(None)),
+        cancel_token: Arc::new(tokio::sync::Mutex::new(None)),
+    };
+    
+    let window_manager = WindowManager {
+        floating_windows: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
     };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
         .manage(state)
+        .manage(window_manager)
         .invoke_handler(tauri::generate_handler![
             get_config,
             connect_websocket,
             send_chat_message,
+            pop_out_agent,
+            connect_floating_window,
+            send_floating_message,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

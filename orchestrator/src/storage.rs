@@ -26,6 +26,9 @@ pub struct StoredAgent {
     /// Container runtime: "docker" or "exo"
     #[serde(default)]
     pub runtime: Option<String>,
+    /// Gateway port for this agent
+    #[serde(default)]
+    pub gateway_port: Option<u16>,
 }
 
 /// Load all persisted agents from disk
@@ -100,6 +103,7 @@ impl From<StoredAgent> for crate::types::AgentContainer {
             restart_policy: Default::default(),
             health_status: None,
             runtime: stored.runtime,
+            gateway_port: stored.gateway_port.unwrap_or_else(crate::types::default_gateway_port),
         }
     }
 }
@@ -115,6 +119,7 @@ pub fn to_stored_agent(container: &crate::types::AgentContainer) -> StoredAgent 
         created_at: now.clone(), // In production, track original creation time
         updated_at: now,
         runtime: container.runtime.clone(),
+        gateway_port: Some(container.gateway_port),
     }
 }
 

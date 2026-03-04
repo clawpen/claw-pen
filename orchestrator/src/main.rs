@@ -44,6 +44,8 @@ pub struct AppState {
     pub api_keys: RwLock<HashMap<String, String>>,
     pub data_dir: std::path::PathBuf,
     pub auth: RwLock<AuthManager>,
+    /// Named volumes that can be attached to agents
+    pub volumes: RwLock<Vec<types::Volume>>,
 }
 
 fn load_api_keys(data_dir: &std::path::Path) -> HashMap<String, String> {
@@ -56,6 +58,27 @@ fn load_api_keys(data_dir: &std::path::Path) -> HashMap<String, String> {
         }
     }
     HashMap::new()
+}
+
+fn load_volumes(data_dir: &std::path::PathBuf) -> Vec<types::Volume> {
+    let volumes_path = data_dir.join("volumes.json");
+    if volumes_path.exists() {
+        if let Ok(contents) = std::fs::read_to_string(&volumes_path) {
+            if let Ok(volumes) = serde_json::from_str(&contents) {
+                return volumes;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn save_volumes(data_dir: &std::path::PathBuf, volumes: &[types::Volume]) {
+    let volumes_path = data_dir.join("volumes.json");
+    if let Ok(contents) = serde_json::to_string_pretty(volumes) {
+        if let Err(e) = std::fs::write(&volumes_path, contents) {
+            tracing::error!("Failed to save volumes: {}", e);
+        }
+    }
 }
 
 #[tokio::main]
@@ -169,6 +192,7 @@ async fn main() -> anyhow::Result<()> {
             restart_policy: Default::default(),
             health_status: None,
             runtime: stored.runtime,
+            gateway_port: stored.gateway_port.unwrap_or_else(crate::types::default_gateway_port),
         });
     }
 
@@ -194,6 +218,10 @@ async fn main() -> anyhow::Result<()> {
     let teams_count = teams.load_all().await?;
     tracing::info!("Loaded {} teams", teams_count);
 
+    // Load volumes
+    let volumes = load_volumes(&data_dir);
+    tracing::info!("Loaded {} volumes", volumes.len());
+
     let state = Arc::new(AppState {
         config,
         containers: RwLock::new(merged_agents),
@@ -207,6 +235,7 @@ async fn main() -> anyhow::Result<()> {
         api_keys: RwLock::new(load_api_keys(&data_dir)),
         data_dir,
         auth: RwLock::new(auth_manager),
+        volumes: RwLock::new(volumes),
     });
 
     // Create the protected API routes with auth middleware
@@ -256,6 +285,9 @@ async fn main() -> anyhow::Result<()> {
         // API Keys
         .route("/api/keys", get(api::list_api_keys).post(api::set_api_key))
         .route("/api/keys/:provider", delete(api::delete_api_key))
+        // Volumes
+        .route("/api/volumes", get(api::list_volumes).post(api::create_volume))
+        .route("/api/volumes/:id", get(api::get_volume).put(api::update_volume).delete(api::delete_volume))
         // Projects
         .route(
             "/api/projects",

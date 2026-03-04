@@ -42,6 +42,35 @@ use crate::container::ContainerRuntime;
 use crate::types::*;
 use crate::AppState;
 
+/// Base port for agent gateways
+const BASE_AGENT_PORT: u16 = 18790;
+/// Maximum port to allocate (gives us 10 agents: 18790-18799)
+const MAX_AGENT_PORT: u16 = 18799;
+
+/// Find the next available port for a new agent
+fn allocate_port(existing_agents: &[AgentContainer]) -> u16 {
+    let used_ports: std::collections::HashSet<u16> = existing_agents
+        .iter()
+        .map(|a| a.gateway_port)
+        .collect();
+
+    for port in BASE_AGENT_PORT..=MAX_AGENT_PORT {
+        if !used_ports.contains(&port) {
+            return port;
+        }
+    }
+
+    // If all ports in range are used, extend beyond (shouldn't happen often)
+    for port in (MAX_AGENT_PORT + 1)..=(MAX_AGENT_PORT + 100) {
+        if !used_ports.contains(&port) {
+            return port;
+        }
+    }
+
+    // Fallback (should never reach here)
+    MAX_AGENT_PORT + 1
+}
+
 // === Health ===
 
 pub async fn health() -> &'static str {
@@ -237,6 +266,14 @@ pub async fn create_agent(
 
     // Create container
 
+    // Allocate a port for this agent
+    let containers = state.containers.read().await;
+    let gateway_port = allocate_port(&containers);
+    drop(containers); // Release lock before continuing
+
+    // Add port to environment variables
+    config.env_vars.insert("PORT".to_string(), gateway_port.to_string());
+
     // Inject API key from agent config, or from global stored keys
     let key_var = match config.llm_provider {
         LlmProvider::Zai => "ZAI_API_KEY",
@@ -315,6 +352,7 @@ pub async fn create_agent(
         restart_policy: AgentConfig::default().restart_policy,
         health_status: None,
         runtime: agent_runtime,
+        gateway_port,
     };
 
     // Register with AndOR Bridge if configured
@@ -503,6 +541,10 @@ pub async fn start_agent(
         if let Some(key) = api_key {
             agent.config.env_vars.insert(key_var.to_string(), key);
         }
+
+        // Ensure the gateway port is set in env vars
+        agent.config.env_vars.insert("PORT".to_string(), agent.gateway_port.to_string());
+
         let new_id = runtime
             .create_container(&agent.name, &agent.config)
             .await
@@ -1168,7 +1210,7 @@ pub async fn export_agent(
 
 pub async fn import_agent(
     State(state): State<Arc<AppState>>,
-    Json(agent): Json<AgentContainer>,
+    Json(mut agent): Json<AgentContainer>,
 ) -> Result<Json<AgentContainer>, (StatusCode, String)> {
     // Choose runtime based on imported agent's runtime setting
     let runtime: &dyn ContainerRuntime = if agent.runtime.as_deref() == Some("exo") {
@@ -1177,13 +1219,15 @@ pub async fn import_agent(
         &state.runtime
     };
 
+    // Ensure gateway port is set in env vars
+    agent.config.env_vars.insert("PORT".to_string(), agent.gateway_port.to_string());
+
     // Create the container
     let id = runtime
         .create_container(&agent.name, &agent.config)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let mut agent = agent;
     agent.id = id;
 
     // Add to state
@@ -1505,4 +1549,162 @@ async fn handle_team_chat_stream(
             _ => {}
         }
     }
+}
+
+// === Volume Management ===
+
+pub async fn list_volumes(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<Volume>> {
+    let volumes = state.volumes.read().await;
+    Json(volumes.clone())
+}
+
+pub async fn get_volume(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Volume>, (StatusCode, String)> {
+    let volumes = state.volumes.read().await;
+    volumes
+        .iter()
+        .find(|v| v.id == id)
+        .map(|v| Json(v.clone()))
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Volume not found".to_string()))
+}
+
+pub async fn create_volume(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateVolumeRequest>,
+) -> Result<Json<Volume>, (StatusCode, String)> {
+    // Validate name
+    if let Err(e) = validation::validate_container_name(&req.name) {
+        return Err((StatusCode::BAD_REQUEST, format!("Invalid volume name: {}", e)));
+    }
+
+    let mut volumes = state.volumes.write().await;
+
+    // Check for duplicate name
+    if volumes.iter().any(|v| v.name == req.name) {
+        return Err((StatusCode::CONFLICT, "Volume with this name already exists".to_string()));
+    }
+
+    // Generate ID
+    let id = format!("vol-{}", uuid::Uuid::new_v4());
+
+    // Determine host path
+    let host_path = if let Some(ref path) = req.host_path {
+        // Validate the path exists
+        if !std::path::Path::new(path).exists() {
+            return Err((StatusCode::BAD_REQUEST, format!("Host path does not exist: {}", path)));
+        }
+        Some(path.clone())
+    } else {
+        // Create managed volume directory
+        let vol_dir = state.data_dir.join("volumes").join(&id);
+        if let Err(e) = std::fs::create_dir_all(&vol_dir) {
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create volume directory: {}", e)));
+        }
+        Some(vol_dir.to_string_lossy().to_string())
+    };
+
+    let volume = Volume {
+        id: id.clone(),
+        name: req.name,
+        description: req.description,
+        host_path,
+        default_target: req.default_target,
+        read_only: req.read_only,
+        size_mb: req.size_mb,
+        tags: req.tags,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        attached_agents: vec![],
+    };
+
+    volumes.push(volume.clone());
+    crate::save_volumes(&state.data_dir, &volumes);
+
+    tracing::info!("Created volume {} ({})", volume.name, volume.id);
+    Ok(Json(volume))
+}
+
+pub async fn update_volume(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateVolumeRequest>,
+) -> Result<Json<Volume>, (StatusCode, String)> {
+    let mut volumes = state.volumes.write().await;
+
+    // Check for duplicate name first if name is being updated
+    if let Some(ref name) = req.name {
+        if volumes.iter().any(|v| v.id != id && v.name == *name) {
+            return Err((StatusCode::CONFLICT, "Volume with this name already exists".to_string()));
+        }
+        if let Err(e) = validation::validate_container_name(name) {
+            return Err((StatusCode::BAD_REQUEST, format!("Invalid volume name: {}", e)));
+        }
+    }
+
+    let volume = volumes
+        .iter_mut()
+        .find(|v| v.id == id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Volume not found".to_string()))?;
+
+    if let Some(name) = req.name {
+        volume.name = name;
+    }
+    if let Some(desc) = req.description {
+        volume.description = Some(desc);
+    }
+    if let Some(target) = req.default_target {
+        volume.default_target = target;
+    }
+    if let Some(ro) = req.read_only {
+        volume.read_only = ro;
+    }
+    if let Some(tags) = req.tags {
+        volume.tags = tags;
+    }
+
+    let updated = volume.clone();
+    crate::save_volumes(&state.data_dir, &volumes);
+
+    Ok(Json(updated))
+}
+
+pub async fn delete_volume(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let mut volumes = state.volumes.write().await;
+
+    let volume = volumes
+        .iter()
+        .find(|v| v.id == id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Volume not found".to_string()))?;
+
+    // Check if volume is attached to any agents
+    if !volume.attached_agents.is_empty() {
+        return Err((
+            StatusCode::CONFLICT,
+            format!("Volume is attached to agents: {:?}", volume.attached_agents),
+        ));
+    }
+
+    let idx = volumes.iter().position(|v| v.id == id).unwrap();
+    let removed = volumes.remove(idx);
+
+    crate::save_volumes(&state.data_dir, &volumes);
+
+    // Optionally delete managed volume directory
+    if let Some(ref path) = removed.host_path {
+        if path.starts_with(&state.data_dir.to_string_lossy().to_string()) {
+            // This is a managed volume, delete the directory
+            if let Err(e) = std::fs::remove_dir_all(path) {
+                tracing::warn!("Failed to delete volume directory: {}", e);
+            }
+        }
+    }
+
+    tracing::info!("Deleted volume {}", id);
+    Ok(StatusCode::NO_CONTENT)
 }
