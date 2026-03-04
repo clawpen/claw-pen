@@ -251,6 +251,31 @@ templates:
       cpu_cores: 1.0
     git_access: true
 
+  team-multiplexed:
+    name: "Team Agent (All Roles)"
+    description: "Single agent that plays all team roles - memory efficient"
+    role_config:
+      display_name: "Team Agent"
+      emoji: "👥"
+      personality: |
+        You are a versatile team member who can play different roles based on context.
+        When addressed by name, adopt that role's perspective:
+        - Alex/PM: Focus on requirements, priorities, shipping
+        - Dan/Dev: Focus on code quality, architecture, best practices
+        - Sam/QA: Focus on testing, edge cases, quality
+        - Diana/Design: Focus on UX, accessibility, user empathy
+        - Taylor/DevOps: Focus on CI/CD, infra, monitoring
+        - Morgan/Security: Focus on threats, hardening
+        - Jordan/Architect: Focus on system design, scalability
+      triggers: ["team", "alex", "dan", "sam", "diana", "taylor", "morgan", "jordan"]
+      mode: multiplexed
+    config:
+      llm_provider: zai
+      llm_model: glm-5
+      memory_mb: 2048
+      cpu_cores: 2.0
+    git_access: true
+
   team-architect:
     name: "Architect (Jordan)"
     description: "Software architect role - focuses on system design, scalability, trade-offs"

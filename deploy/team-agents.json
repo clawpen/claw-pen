@@ -1,4 +1,6 @@
 {
+  "_mode": "isolated",
+  "_comment": "mode: 'isolated' = one container per role | 'multiplexed' = one container, role switching",
   "pm": {
     "agentId": "agent-alex-pm",
     "displayName": "Alex (PM)",
@@ -61,5 +63,15 @@
     "password": "jordan-architect-secret",
     "role": "architect",
     "description": "Software architect - system design, scalability, trade-offs"
+  },
+
+  "_multiplexed": {
+    "_comment": "When mode=multiplexed, use this single agent for all roles",
+    "agentId": "team-multi",
+    "displayName": "Team Agent",
+    "triggers": ["team", "alex", "dan", "sam", "diana", "taylor", "morgan", "jordan"],
+    "emoji": "👥",
+    "role": "multiplexed",
+    "description": "Single agent that plays all team roles"
   }
 }

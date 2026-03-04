@@ -2,7 +2,61 @@
 
 Connect containerized AI agents to AndOR Hub as team members with both chat and git access.
 
+## Two Modes
+
+### Multiplexed Mode (Recommended for 16GB or less)
+
+```
+┌─────────────────────────────────────────────┐
+│  Single OpenClaw Container (~2GB)           │
+│  ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐            │
+│  │ PM  │ │ Dev │ │ QA  │ │ ... │  roles     │
+│  └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘            │
+│     │       │       │       │               │
+│     └───────┴───────┴───────┘               │
+│             │                               │
+│     Role switching via                      │
+│     system prompt injection                 │
+└─────────────────────────────────────────────┘
+```
+
+**Pros**: Memory efficient (2GB total), fast role switching
+**Cons**: Shared context between roles, single point of failure
+
+### Isolated Mode (For 32GB+ or maximum separation)
+
+```
+┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐
+│ PM      │  │ Dev     │  │ QA      │  │ ...     │
+│ ~1.5GB  │  │ ~1.5GB  │  │ ~1.5GB  │  │ ~1.5GB  │
+│ Agent 1 │  │ Agent 2 │  │ Agent 3 │  │ Agent N │
+└─────────┘  └─────────┘  └─────────┘  └─────────┘
+```
+
+**Pros**: Full isolation, independent scaling, can run different models
+**Cons**: ~10.5GB for 7 roles, more containers to manage
+
+## Switching Modes
+
+Edit `deploy/team-agents.json`:
+
+```json
+{
+  "_mode": "multiplexed",  // or "isolated"
+  ...
+}
+```
+
+Then restart the bridge.
+
 ## Overview
+
+### Memory Requirements
+
+| Mode | RAM Needed | Containers | Use Case |
+|------|------------|------------|----------|
+| Multiplexed | ~2-3GB | 1 | 16GB machines, testing |
+| Isolated | ~10-12GB | 7 | 32GB+ machines, production |
 
 ```
 ┌─────────────────────────────────────────────────────────────┐

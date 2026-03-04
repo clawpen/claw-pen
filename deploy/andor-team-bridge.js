@@ -141,6 +141,12 @@ function loadAgentsConfig() {
 
 const AGENTS = loadAgentsConfig();
 
+// Detect mode: "isolated" (one container per role) or "multiplexed" (one container for all)
+const BRIDGE_MODE = AGENTS._mode || 'isolated';
+const MULTIPLEXED_AGENT = AGENTS._multiplexed;
+
+console.log(`[Bridge] Mode: ${BRIDGE_MODE}${BRIDGE_MODE === 'multiplexed' ? ' (single agent, role switching)' : ' (one container per role)'}`);
+
 // Build trigger -> agent mapping for fast lookup
 const TRIGGER_MAP = {};
 for (const [key, agent] of Object.entries(AGENTS)) {
@@ -259,7 +265,6 @@ function findAgentForMessage(content, channelName, senderName) {
  * Send a message to OpenClaw and get a response
  */
 async function askOpenClaw(message, conversationId, senderName, agentKey, agent) {
-  const agentId = agent.agentId || agentKey;
   const displayName = agent.displayName || agentKey;
   const role = agent.role || agentKey;
   
@@ -267,7 +272,22 @@ async function askOpenClaw(message, conversationId, senderName, agentKey, agent)
   const personality = ROLE_PERSONALITIES[role] || agent.personality || 
     `You are ${displayName}, a helpful AI assistant.`;
   
-  console.log(`[OpenClaw] Sending to ${displayName} (${role}) from ${senderName}`);
+  // Determine agent ID based on mode
+  let agentId;
+  let sessionKey;
+  
+  if (BRIDGE_MODE === 'multiplexed' && MULTIPLEXED_AGENT) {
+    // Single container, role switching via system prompt
+    agentId = MULTIPLEXED_AGENT.agentId || 'team-multi';
+    // Role-based session for context isolation (same agent, different memory)
+    sessionKey = `andor:${conversationId}:${role}`;
+    console.log(`[OpenClaw] [multiplexed] ${displayName} (${role}) from ${senderName}`);
+  } else {
+    // Isolated mode: one container per role
+    agentId = agent.agentId || agentKey;
+    sessionKey = `andor:${conversationId}:${role}`;
+    console.log(`[OpenClaw] [isolated] ${displayName} (${role}) from ${senderName}`);
+  }
   
   const headers = {
     'Content-Type': 'application/json'
@@ -277,9 +297,9 @@ async function askOpenClaw(message, conversationId, senderName, agentKey, agent)
     headers['Authorization'] = `Bearer ${OPENCLAW_TOKEN}`;
   }
   
-  // Set agent ID and session key (include role for context isolation)
+  // Set agent ID and session key
   headers['x-openclaw-agent-id'] = agentId;
-  headers['x-openclaw-session-key'] = `andor:${conversationId}:${role}`;
+  headers['x-openclaw-session-key'] = sessionKey;
   
   const response = await httpRequest(`${OPENCLAW_URL}/v1/chat/completions`, {
     method: 'POST',
