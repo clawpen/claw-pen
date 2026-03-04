@@ -1,0 +1,65 @@
+{
+  "pm": {
+    "agentId": "agent-alex-pm",
+    "displayName": "Alex (PM)",
+    "triggers": ["alex", "pm", "project manager"],
+    "emoji": "📋",
+    "password": "alex-pm-secret",
+    "role": "pm",
+    "description": "Project manager - requirements, priorities, timelines"
+  },
+  "developer": {
+    "agentId": "agent-dan-dev",
+    "displayName": "Dan (Dev)",
+    "triggers": ["dan", "dev", "developer"],
+    "emoji": "💻",
+    "password": "dan-dev-secret",
+    "role": "developer",
+    "description": "Senior developer - architecture, implementation, code quality"
+  },
+  "qa": {
+    "agentId": "agent-sam-qa",
+    "displayName": "Sam (QA)",
+    "triggers": ["sam", "qa", "tester"],
+    "emoji": "🔍",
+    "password": "sam-qa-secret",
+    "role": "qa",
+    "description": "QA engineer - testing, edge cases, quality assurance"
+  },
+  "designer": {
+    "agentId": "agent-diana-design",
+    "displayName": "Diana (Design)",
+    "triggers": ["diana", "design", "designer", "ux"],
+    "emoji": "🎨",
+    "password": "diana-design-secret",
+    "role": "designer",
+    "description": "UX designer - user experience, visual design, accessibility"
+  },
+  "devops": {
+    "agentId": "agent-taylor-devops",
+    "displayName": "Taylor (DevOps)",
+    "triggers": ["taylor", "devops", "infra", "sre"],
+    "emoji": "🚀",
+    "password": "taylor-devops-secret",
+    "role": "devops",
+    "description": "DevOps engineer - deployment, infrastructure, monitoring"
+  },
+  "security": {
+    "agentId": "agent-morgan-security",
+    "displayName": "Morgan (Security)",
+    "triggers": ["morgan", "security", "sec"],
+    "emoji": "🔒",
+    "password": "morgan-security-secret",
+    "role": "security",
+    "description": "Security engineer - threat modeling, hardening, compliance"
+  },
+  "architect": {
+    "agentId": "agent-jordan-architect",
+    "displayName": "Jordan (Architect)",
+    "triggers": ["jordan", "architect", "architecture"],
+    "emoji": "🏛️",
+    "password": "jordan-architect-secret",
+    "role": "architect",
+    "description": "Software architect - system design, scalability, trade-offs"
+  }
+}
