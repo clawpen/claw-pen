@@ -1,5 +1,6 @@
 use crate::api;
 use crate::components::chat::ChatPanel;
+use crate::components::settings::SettingsModal;
 use crate::types::{AgentContainer, AgentStatus};
 use yew::events::MouseEvent;
 use yew::prelude::*;
@@ -9,6 +10,7 @@ pub fn dashboard() -> Html {
     // TODO: Fetch agents from API
     let agents = use_state(Vec::new);
     let chat_agent = use_state(|| None::<AgentContainer>);
+    let show_settings = use_state(|| false);
 
     let agents_clone = agents.clone();
     use_effect(move || {
@@ -27,10 +29,25 @@ pub fn dashboard() -> Html {
         })
     };
 
+    let on_open_settings = {
+        let show_settings = show_settings.clone();
+        Callback::from(move |_| {
+            show_settings.set(true);
+        })
+    };
+
+    let on_close_settings = {
+        let show_settings = show_settings.clone();
+        Callback::from(move |()| {
+            show_settings.set(false);
+        })
+    };
+
     html! {
         <div class="dashboard">
             <div class="toolbar">
                 <button class="btn-primary">{"+ New Agent"}</button>
+                <button class="btn-settings" onclick={on_open_settings}>{"⚙️"}</button>
             </div>
 
             <div class="agents-grid">
@@ -54,6 +71,10 @@ pub fn dashboard() -> Html {
 
             if let Some(agent) = (*chat_agent).clone() {
                 <ChatPanel agent={agent} on_close={on_close_chat} />
+            }
+
+            if *show_settings {
+                <SettingsModal on_close={on_close_settings} />
             }
         </div>
     }

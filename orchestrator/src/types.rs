@@ -586,3 +586,38 @@ pub struct UpdateVolumeRequest {
     pub read_only: Option<bool>,
     pub tags: Option<Vec<String>>,
 }
+
+// === Team Settings ===
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TeamMode {
+    Multiplexed,
+    Isolated,
+}
+
+impl Default for TeamMode {
+    fn default() -> Self {
+        Self::Multiplexed
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TeamSettings {
+    #[serde(default)]
+    pub mode: TeamMode,
+    #[serde(default = "default_enabled_roles")]
+    pub enabled_roles: Vec<String>,
+}
+
+fn default_enabled_roles() -> Vec<String> {
+    vec![
+        "pm".to_string(),
+        "developer".to_string(),
+        "qa".to_string(),
+        "designer".to_string(),
+        "devops".to_string(),
+        "security".to_string(),
+        "architect".to_string(),
+    ]
+}

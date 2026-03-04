@@ -250,6 +250,210 @@
             padding: 3rem;
             color: #94a3b8;
         }
+
+        /* Settings Button */
+        .btn-settings {
+            background: transparent;
+            border: 1px solid #333;
+            color: #94a3b8;
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1.2rem;
+            margin-left: 0.5rem;
+        }
+        
+        .btn-settings:hover {
+            background: #333;
+            color: #fff;
+        }
+
+        /* Modal Styles */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        
+        .modal {
+            background: #16213e;
+            border-radius: 16px;
+            width: 100%;
+            max-width: 500px;
+            max-height: 80vh;
+            overflow-y: auto;
+            border: 1px solid #0f3460;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.25rem 1.5rem;
+            border-bottom: 1px solid #0f3460;
+        }
+        
+        .modal-header h2 {
+            font-size: 1.25rem;
+        }
+        
+        .btn-close {
+            background: transparent;
+            border: none;
+            color: #94a3b8;
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0;
+            line-height: 1;
+        }
+        
+        .btn-close:hover {
+            color: #fff;
+        }
+        
+        .modal-body {
+            padding: 1.5rem;
+        }
+        
+        .modal-footer {
+            padding: 1rem 1.5rem;
+            border-top: 1px solid #0f3460;
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.75rem;
+        }
+        
+        /* Settings Sections */
+        .settings-section {
+            margin-bottom: 2rem;
+        }
+        
+        .settings-section:last-child {
+            margin-bottom: 0;
+        }
+        
+        .settings-section h3 {
+            font-size: 1rem;
+            margin-bottom: 0.5rem;
+            color: #f0f0f0;
+        }
+        
+        .settings-description {
+            color: #94a3b8;
+            font-size: 0.875rem;
+            margin-bottom: 1rem;
+        }
+        
+        /* Mode Toggle */
+        .mode-toggle {
+            background: #1a1a2e;
+            border-radius: 8px;
+            padding: 1rem;
+        }
+        
+        .toggle-option {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.75rem;
+            cursor: pointer;
+        }
+        
+        .toggle-option input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            margin-top: 2px;
+            accent-color: #e94560;
+        }
+        
+        .toggle-label {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+        
+        .toggle-label strong {
+            color: #f0f0f0;
+        }
+        
+        .toggle-desc {
+            font-size: 0.8rem;
+            color: #94a3b8;
+        }
+        
+        .mode-info {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .mode-badge {
+            padding: 0.25rem 0.75rem;
+            background: #333;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            color: #94a3b8;
+        }
+        
+        .mode-badge.active {
+            background: #22c55e;
+            color: #fff;
+        }
+        
+        .current-mode {
+            font-size: 0.875rem;
+            color: #94a3b8;
+            margin: 0;
+        }
+        
+        .current-mode strong {
+            color: #4ade80;
+        }
+        
+        .mode-desc {
+            display: block;
+            margin-top: 0.25rem;
+            font-size: 0.8rem;
+        }
+        
+        /* Roles Grid */
+        .roles-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.5rem;
+        }
+        
+        .role-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 0.75rem;
+            background: #1a1a2e;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        
+        .role-checkbox:hover {
+            background: #222;
+        }
+        
+        .role-checkbox input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: #e94560;
+        }
+        
+        .role-checkbox span {
+            font-size: 0.875rem;
+        }
     </style>
 </head>
 <body>

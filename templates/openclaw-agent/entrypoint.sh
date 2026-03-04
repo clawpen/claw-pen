@@ -5,6 +5,10 @@ MODEL="${LLM_MODEL:-glm-5}"
 PROVIDER="${LLM_PROVIDER:-zai}"
 PROVIDER=$(echo "$PROVIDER" | tr '[:upper:]' '[:lower:]')
 PORT="${PORT:-18790}"
+# BIND: "loopback" (127.0.0.1 only) or "lan" (0.0.0.0 for container access)
+BIND="${BIND:-loopback}"
+# Token for gateway auth (required for lan bind)
+GATEWAY_TOKEN="${GATEWAY_TOKEN:-}"
 BASE_URL=""
 
 case "$PROVIDER" in
@@ -26,9 +30,16 @@ case "$PROVIDER" in
   *) API_KEY="${ZAI_API_KEY:-${ANTHROPIC_API_KEY:-${OPENAI_API_KEY:-}}}" ;;
 esac
 
-echo "[entrypoint] Provider: $PROVIDER, Model: $MODEL, Port: $PORT, API Key: ${API_KEY:+set}, BaseURL: ${BASE_URL:-default}"
+echo "[entrypoint] Provider: $PROVIDER, Model: $MODEL, Port: $PORT, Bind: $BIND, API Key: ${API_KEY:+set}, BaseURL: ${BASE_URL:-default}"
 
 mkdir -p /root/.openclaw/agents/dev/agent
+
+# Build gateway auth config
+if [ -n "$GATEWAY_TOKEN" ]; then
+  GATEWAY_AUTH="{\"mode\": \"token\", \"token\": \"${GATEWAY_TOKEN}\"}"
+else
+  GATEWAY_AUTH="{\"mode\": \"none\"}"
+fi
 
 cat > /root/.openclaw/openclaw.json << CONF
 {
@@ -37,7 +48,7 @@ cat > /root/.openclaw/openclaw.json << CONF
     "defaults": {"workspace": "/root/.openclaw/workspace-dev", "skipBootstrap": true, "model": {"primary": "${PROVIDER}/${MODEL}"}},
     "list": [{"id": "dev", "default": true, "workspace": "/root/.openclaw/workspace-dev", "identity": {"name": "Agent", "emoji": "🤖"}, "model": {"primary": "${PROVIDER}/${MODEL}"}}]
   },
-  "gateway": {"mode": "local", "bind": "loopback", "auth": {"mode": "none"}, "port": ${PORT}}
+  "gateway": {"mode": "local", "bind": "${BIND}", "auth": ${GATEWAY_AUTH}, "port": ${PORT}}
 }
 CONF
 
@@ -53,4 +64,4 @@ AUTH
   fi
 fi
 
-exec node /usr/local/lib/node_modules/openclaw/openclaw.mjs gateway run --dev --auth none --allow-unconfigured
+exec node /usr/local/lib/node_modules/openclaw/openclaw.mjs gateway run --dev --allow-unconfigured
