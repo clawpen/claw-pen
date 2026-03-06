@@ -60,7 +60,7 @@ fn load_api_keys(data_dir: &std::path::Path) -> HashMap<String, String> {
     HashMap::new()
 }
 
-fn load_volumes(data_dir: &std::path::PathBuf) -> Vec<types::Volume> {
+fn load_volumes(data_dir: &std::path::Path) -> Vec<types::Volume> {
     let volumes_path = data_dir.join("volumes.json");
     if volumes_path.exists() {
         if let Ok(contents) = std::fs::read_to_string(&volumes_path) {
@@ -72,7 +72,7 @@ fn load_volumes(data_dir: &std::path::PathBuf) -> Vec<types::Volume> {
     Vec::new()
 }
 
-fn save_volumes(data_dir: &std::path::PathBuf, volumes: &[types::Volume]) {
+fn save_volumes(data_dir: &std::path::Path, volumes: &[types::Volume]) {
     let volumes_path = data_dir.join("volumes.json");
     if let Ok(contents) = serde_json::to_string_pretty(volumes) {
         if let Err(e) = std::fs::write(&volumes_path, contents) {
