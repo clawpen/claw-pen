@@ -192,7 +192,9 @@ async fn main() -> anyhow::Result<()> {
             restart_policy: Default::default(),
             health_status: None,
             runtime: stored.runtime,
-            gateway_port: stored.gateway_port.unwrap_or_else(crate::types::default_gateway_port),
+            gateway_port: stored
+                .gateway_port
+                .unwrap_or_else(crate::types::default_gateway_port),
         });
     }
 
@@ -286,8 +288,16 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/keys", get(api::list_api_keys).post(api::set_api_key))
         .route("/api/keys/:provider", delete(api::delete_api_key))
         // Volumes
-        .route("/api/volumes", get(api::list_volumes).post(api::create_volume))
-        .route("/api/volumes/:id", get(api::get_volume).put(api::update_volume).delete(api::delete_volume))
+        .route(
+            "/api/volumes",
+            get(api::list_volumes).post(api::create_volume),
+        )
+        .route(
+            "/api/volumes/:id",
+            get(api::get_volume)
+                .put(api::update_volume)
+                .delete(api::delete_volume),
+        )
         // Projects
         .route(
             "/api/projects",

@@ -103,7 +103,9 @@ impl From<StoredAgent> for crate::types::AgentContainer {
             restart_policy: Default::default(),
             health_status: None,
             runtime: stored.runtime,
-            gateway_port: stored.gateway_port.unwrap_or_else(crate::types::default_gateway_port),
+            gateway_port: stored
+                .gateway_port
+                .unwrap_or_else(crate::types::default_gateway_port),
         }
     }
 }

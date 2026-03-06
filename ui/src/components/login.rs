@@ -40,7 +40,9 @@ pub fn login(props: &LoginProps) -> Html {
     let on_password_input = {
         let password = password.clone();
         Callback::from(move |e: InputEvent| {
-            let value = e.target_unchecked_into::<web_sys::HtmlInputElement>().value();
+            let value = e
+                .target_unchecked_into::<web_sys::HtmlInputElement>()
+                .value();
             password.set(value);
         })
     };
@@ -54,7 +56,7 @@ pub fn login(props: &LoginProps) -> Html {
 
         Callback::from(move |e: SubmitEvent| {
             e.prevent_default();
-            
+
             let password = (*password).clone();
             if password.is_empty() {
                 error.set("Please enter a password".to_string());
@@ -121,11 +123,11 @@ pub fn login(props: &LoginProps) -> Html {
                                 disabled={*loading}
                             />
                         </div>
-                        
+
                         if !error.is_empty() {
                             <div class="error-message">{&*error}</div>
                         }
-                        
+
                         <button type="submit" class="btn-primary" disabled={*loading}>
                             if *loading {
                                 {"Logging in..."}

@@ -54,7 +54,10 @@ pub async fn login(password: &str) -> Result<TokenResponse, String> {
     if response.ok() {
         response.json().await.map_err(|e| e.to_string())
     } else {
-        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         Err(format!("Login failed: {}", error_text))
     }
 }
@@ -72,7 +75,10 @@ pub async fn register(password: &str) -> Result<(), String> {
     if response.ok() {
         Ok(())
     } else {
-        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         Err(format!("Registration failed: {}", error_text))
     }
 }
@@ -102,15 +108,12 @@ pub fn clear_token() {
 pub async fn fetch_agents() -> Result<Vec<AgentContainer>, String> {
     let token = get_token();
     let mut req = Request::get(&format!("{}/agents", API_BASE));
-    
+
     if let Some(ref t) = token {
         req = req.header("Authorization", &format!("Bearer {}", t));
     }
-    
-    let response = req
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+
+    let response = req.send().await.map_err(|e| e.to_string())?;
 
     if response.ok() {
         response.json().await.map_err(|e| e.to_string())
@@ -126,15 +129,12 @@ pub async fn fetch_agents() -> Result<Vec<AgentContainer>, String> {
 pub async fn start_agent(id: &str) -> Result<AgentContainer, String> {
     let token = get_token();
     let mut req = Request::post(&format!("{}/agents/{}/start", API_BASE, id));
-    
+
     if let Some(ref t) = token {
         req = req.header("Authorization", &format!("Bearer {}", t));
     }
-    
-    let response = req
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+
+    let response = req.send().await.map_err(|e| e.to_string())?;
 
     if response.ok() {
         response.json().await.map_err(|e| e.to_string())
@@ -150,15 +150,12 @@ pub async fn start_agent(id: &str) -> Result<AgentContainer, String> {
 pub async fn stop_agent(id: &str) -> Result<AgentContainer, String> {
     let token = get_token();
     let mut req = Request::post(&format!("{}/agents/{}/stop", API_BASE, id));
-    
+
     if let Some(ref t) = token {
         req = req.header("Authorization", &format!("Bearer {}", t));
     }
-    
-    let response = req
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+
+    let response = req.send().await.map_err(|e| e.to_string())?;
 
     if response.ok() {
         response.json().await.map_err(|e| e.to_string())

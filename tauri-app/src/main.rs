@@ -20,8 +20,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::mpsc::{channel, Sender};
-use tokio_util::sync::CancellationToken;
 use tokio_tungstenite::connect_async_with_config;
+use tokio_util::sync::CancellationToken;
 use tungstenite::handshake::client::generate_key;
 
 static REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -393,7 +393,7 @@ async fn pop_out_agent(
     port: u16,
 ) -> Result<String, String> {
     let window_label = format!("agent-{}", agent_id);
-    
+
     // Check if window already exists
     if app.get_webview_window(&window_label).is_some() {
         // Focus existing window
@@ -402,27 +402,27 @@ async fn pop_out_agent(
         }
         return Ok(window_label);
     }
-    
-    eprintln!("[PopOut] Creating floating window for {} on port {}", agent_name, port);
-    
+
+    eprintln!(
+        "[PopOut] Creating floating window for {} on port {}",
+        agent_name, port
+    );
+
     // Create floating window
-    let url = format!("/dist/index.html?floating=1&agent_id={}&agent_name={}&port={}", 
-        agent_id, 
+    let url = format!(
+        "/dist/index.html?floating=1&agent_id={}&agent_name={}&port={}",
+        agent_id,
         urlencoding::encode(&agent_name),
         port
     );
-    
-    WebviewWindowBuilder::new(
-        &app,
-        &window_label,
-        WebviewUrl::App(url.into())
-    )
-    .title(format!("{} - Claw Pen", agent_name))
-    .inner_size(600.0, 700.0)
-    .min_inner_size(400.0, 500.0)
-    .build()
-    .map_err(|e| e.to_string())?;
-    
+
+    WebviewWindowBuilder::new(&app, &window_label, WebviewUrl::App(url.into()))
+        .title(format!("{} - Claw Pen", agent_name))
+        .inner_size(600.0, 700.0)
+        .min_inner_size(400.0, 500.0)
+        .build()
+        .map_err(|e| e.to_string())?;
+
     // Store state for this window
     let state = FloatingWindowState {
         agent_id: agent_id.clone(),
@@ -431,9 +431,13 @@ async fn pop_out_agent(
         ws_sender: Arc::new(tokio::sync::Mutex::new(None)),
         cancel_token: Arc::new(tokio::sync::Mutex::new(None)),
     };
-    
-    window_manager.floating_windows.lock().await.insert(window_label.clone(), state);
-    
+
+    window_manager
+        .floating_windows
+        .lock()
+        .await
+        .insert(window_label.clone(), state);
+
     Ok(window_label)
 }
 
@@ -446,47 +450,48 @@ async fn connect_floating_window(
     // Extract the values we need from state before spawning
     let (port, agent_name) = {
         let mut windows = window_manager.floating_windows.lock().await;
-        let state = windows.get_mut(&window_label)
+        let state = windows
+            .get_mut(&window_label)
             .ok_or_else(|| format!("Window {} not found", window_label))?;
-        
+
         // Cancel existing connection if any
         if let Some(token) = state.cancel_token.lock().await.take() {
             token.cancel();
         }
-        
+
         (state.port, state.agent_name.clone())
     };
-    
+
     let url = format!("ws://localhost:{}/ws", port);
-    
+
     // Get sender from state
     let ws_sender = {
         let windows = window_manager.floating_windows.lock().await;
         let state = windows.get(&window_label).unwrap();
         state.ws_sender.clone()
     };
-    
+
     let cancel_token = CancellationToken::new();
     let cancel_clone = cancel_token.clone();
-    
+
     // Store cancel token
     {
         let windows = window_manager.floating_windows.lock().await;
         let state = windows.get(&window_label).unwrap();
         *state.cancel_token.lock().await = Some(cancel_token);
     }
-    
+
     let (tx, mut rx) = channel::<String>(100);
     *ws_sender.lock().await = Some(tx);
-    
+
     let app_handle = app.clone();
     let window_label_clone = window_label.clone();
-    
-    let device_keys = load_or_create_device_keys()
-        .map_err(|e| format!("Failed to load device keys: {}", e))?;
+
+    let device_keys =
+        load_or_create_device_keys().map_err(|e| format!("Failed to load device keys: {}", e))?;
     let signing_key_bytes = device_keys.signing_key.to_bytes();
     let device_id = device_keys.device_id;
-    
+
     tokio::spawn(async move {
         let request = Request::builder()
             .uri(&url)
@@ -498,29 +503,32 @@ async fn connect_floating_window(
             .header("Origin", format!("http://localhost:{}", port))
             .body(())
             .unwrap();
-            
+
         match connect_async_with_config(request, None, false).await {
             Ok((ws_stream, _)) => {
                 eprintln!("[Floating:{}] Connected", agent_name);
                 let _ = app_handle.emit_to(&window_label_clone, "ws-connected", true);
-                
+
                 let (mut write, mut read) = ws_stream.split();
                 let mut authenticated = false;
                 let mut connect_sent = false;
-                
+
                 let signing_key = SigningKey::from_bytes(&signing_key_bytes);
-                let dk = DeviceKeys { signing_key, device_id };
-                
+                let dk = DeviceKeys {
+                    signing_key,
+                    device_id,
+                };
+
                 loop {
                     tokio::select! {
                         _ = cancel_clone.cancelled() => break,
-                        
+
                         _ = tokio::time::sleep(std::time::Duration::from_secs(2)), if !connect_sent && !authenticated => {
                             authenticated = true;
                             connect_sent = true;
                             let _ = app_handle.emit_to(&window_label_clone, "ws-authenticated", true);
                         }
-                        
+
                         msg = read.next() => {
                             match msg {
                                 Some(Ok(m)) if m.is_text() => {
@@ -542,7 +550,7 @@ async fn connect_floating_window(
                                 Some(Err(_)) => break,
                             }
                         }
-                        
+
                         msg = rx.recv() => {
                             if let Some(text) = msg {
                                 if authenticated {
@@ -556,11 +564,15 @@ async fn connect_floating_window(
             }
             Err(e) => {
                 eprintln!("[Floating:{}] Connection failed: {}", agent_name, e);
-                let _ = app_handle.emit_to(&window_label_clone, "ws-error", format!("Connection failed: {}", e));
+                let _ = app_handle.emit_to(
+                    &window_label_clone,
+                    "ws-error",
+                    format!("Connection failed: {}", e),
+                );
             }
         }
     });
-    
+
     Ok(())
 }
 
@@ -573,11 +585,12 @@ async fn send_floating_message(
     // Get sender reference from state
     let ws_sender = {
         let windows = window_manager.floating_windows.lock().await;
-        let state = windows.get(&window_label)
+        let state = windows
+            .get(&window_label)
             .ok_or_else(|| format!("Window {} not found", window_label))?;
         state.ws_sender.clone()
     };
-    
+
     let sender = ws_sender.lock().await;
     if let Some(tx) = sender.as_ref() {
         let id = REQUEST_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -593,7 +606,7 @@ async fn send_floating_message(
             }
         })
         .to_string();
-        
+
         tx.send(msg).await.map_err(|e| e.to_string())?;
         Ok(())
     } else {
@@ -613,7 +626,7 @@ fn main() {
         ws_sender: Arc::new(tokio::sync::Mutex::new(None)),
         cancel_token: Arc::new(tokio::sync::Mutex::new(None)),
     };
-    
+
     let window_manager = WindowManager {
         floating_windows: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
     };

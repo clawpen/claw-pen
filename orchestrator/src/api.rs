@@ -49,10 +49,8 @@ const MAX_AGENT_PORT: u16 = 18799;
 
 /// Find the next available port for a new agent
 fn allocate_port(existing_agents: &[AgentContainer]) -> u16 {
-    let used_ports: std::collections::HashSet<u16> = existing_agents
-        .iter()
-        .map(|a| a.gateway_port)
-        .collect();
+    let used_ports: std::collections::HashSet<u16> =
+        existing_agents.iter().map(|a| a.gateway_port).collect();
 
     for port in BASE_AGENT_PORT..=MAX_AGENT_PORT {
         if !used_ports.contains(&port) {
@@ -272,7 +270,9 @@ pub async fn create_agent(
     drop(containers); // Release lock before continuing
 
     // Add port to environment variables
-    config.env_vars.insert("PORT".to_string(), gateway_port.to_string());
+    config
+        .env_vars
+        .insert("PORT".to_string(), gateway_port.to_string());
 
     // Inject API key from agent config, or from global stored keys
     let key_var = match config.llm_provider {
@@ -543,7 +543,10 @@ pub async fn start_agent(
         }
 
         // Ensure the gateway port is set in env vars
-        agent.config.env_vars.insert("PORT".to_string(), agent.gateway_port.to_string());
+        agent
+            .config
+            .env_vars
+            .insert("PORT".to_string(), agent.gateway_port.to_string());
 
         let new_id = runtime
             .create_container(&agent.name, &agent.config)
@@ -1220,7 +1223,10 @@ pub async fn import_agent(
     };
 
     // Ensure gateway port is set in env vars
-    agent.config.env_vars.insert("PORT".to_string(), agent.gateway_port.to_string());
+    agent
+        .config
+        .env_vars
+        .insert("PORT".to_string(), agent.gateway_port.to_string());
 
     // Create the container
     let id = runtime
@@ -1553,9 +1559,7 @@ async fn handle_team_chat_stream(
 
 // === Volume Management ===
 
-pub async fn list_volumes(
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<Volume>> {
+pub async fn list_volumes(State(state): State<Arc<AppState>>) -> Json<Vec<Volume>> {
     let volumes = state.volumes.read().await;
     Json(volumes.clone())
 }
@@ -1578,14 +1582,20 @@ pub async fn create_volume(
 ) -> Result<Json<Volume>, (StatusCode, String)> {
     // Validate name
     if let Err(e) = validation::validate_container_name(&req.name) {
-        return Err((StatusCode::BAD_REQUEST, format!("Invalid volume name: {}", e)));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("Invalid volume name: {}", e),
+        ));
     }
 
     let mut volumes = state.volumes.write().await;
 
     // Check for duplicate name
     if volumes.iter().any(|v| v.name == req.name) {
-        return Err((StatusCode::CONFLICT, "Volume with this name already exists".to_string()));
+        return Err((
+            StatusCode::CONFLICT,
+            "Volume with this name already exists".to_string(),
+        ));
     }
 
     // Generate ID
@@ -1595,14 +1605,20 @@ pub async fn create_volume(
     let host_path = if let Some(ref path) = req.host_path {
         // Validate the path exists
         if !std::path::Path::new(path).exists() {
-            return Err((StatusCode::BAD_REQUEST, format!("Host path does not exist: {}", path)));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Host path does not exist: {}", path),
+            ));
         }
         Some(path.clone())
     } else {
         // Create managed volume directory
         let vol_dir = state.data_dir.join("volumes").join(&id);
         if let Err(e) = std::fs::create_dir_all(&vol_dir) {
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create volume directory: {}", e)));
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to create volume directory: {}", e),
+            ));
         }
         Some(vol_dir.to_string_lossy().to_string())
     };
@@ -1637,10 +1653,16 @@ pub async fn update_volume(
     // Check for duplicate name first if name is being updated
     if let Some(ref name) = req.name {
         if volumes.iter().any(|v| v.id != id && v.name == *name) {
-            return Err((StatusCode::CONFLICT, "Volume with this name already exists".to_string()));
+            return Err((
+                StatusCode::CONFLICT,
+                "Volume with this name already exists".to_string(),
+            ));
         }
         if let Err(e) = validation::validate_container_name(name) {
-            return Err((StatusCode::BAD_REQUEST, format!("Invalid volume name: {}", e)));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Invalid volume name: {}", e),
+            ));
         }
     }
 

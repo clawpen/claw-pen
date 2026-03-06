@@ -367,7 +367,11 @@ impl DockerClient {
         }
 
         // Agent port - get from env_vars if set, otherwise use default
-        let port = config.env_vars.get("PORT").cloned().unwrap_or_else(|| "18790".to_string());
+        let port = config
+            .env_vars
+            .get("PORT")
+            .cloned()
+            .unwrap_or_else(|| "18790".to_string());
         env.push(format!("PORT={}", port));
 
         // Pass all custom env vars
@@ -591,13 +595,19 @@ impl ContainerRuntime for DockerClient {
         // Container configuration with bridge network (isolated from host)
         // Build volume binds from config
         let binds = if !config.volumes.is_empty() {
-            Some(config.volumes.iter().map(|v| {
-                if v.read_only {
-                    format!("{}:{}:ro", v.source, v.target)
-                } else {
-                    format!("{}:{}", v.source, v.target)
-                }
-            }).collect::<Vec<_>>())
+            Some(
+                config
+                    .volumes
+                    .iter()
+                    .map(|v| {
+                        if v.read_only {
+                            format!("{}:{}:ro", v.source, v.target)
+                        } else {
+                            format!("{}:{}", v.source, v.target)
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            )
         } else {
             None
         };
