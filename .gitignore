@@ -38,3 +38,20 @@ PITCH*.md
 # Tools logs
 tools/*.log
 
+# Memory and workspace (personal Claude context)
+memory/
+*.openclaw
+
+# Test and temp files
+*-TEST_PLAN.md
+*-test.sh
+gpu-prices*.md
+dashboard.html
+andor-bridge.js
+backup-agents.sh
+*.patch
+providers.yaml
+
+# Deploy artifacts
+deploy/
+
