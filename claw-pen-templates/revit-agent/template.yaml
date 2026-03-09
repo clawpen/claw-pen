@@ -1,0 +1,66 @@
+# Revit Agent Template
+# OpenClaw agent with MCP tools for Revit integration
+
+name: revit-agent
+display_name: "Revit Agent"
+description: "AI agent with Revit MCP integration - model buildings, create families, manage projects"
+
+# Container config
+container:
+  image: claw-pen/revit-agent:latest
+  build:
+    context: templates/revit-agent
+    dockerfile: Dockerfile
+  
+  # Resource limits (Revit work needs more memory)
+  memory_mb: 2048
+  cpu_cores: 2.0
+  
+  # Ports
+  ports:
+    - 18789  # OpenClaw gateway
+  
+  # Volumes (mounted at runtime)
+  volumes:
+    - /agent/memory      # Persist memory
+    - /agent/.openclaw   # Persist config
+    - /agent/projects    # Revit project exports
+
+# OpenClaw config
+openclaw:
+  # Channel config - AndOR Bridge is built-in
+  channels:
+    - type: andor
+  
+  # Default model
+  provider: zai
+  model: glm-5
+  
+  # Memory
+  memory:
+    enabled: true
+    persist: true
+
+# MCP Server connection (external - Revit runs on Windows)
+mcp:
+  # Revit MCP server endpoint (set at runtime)
+  server_url: "http://revit-host:8001"
+  # Revit direct API
+  revit_url: "http://revit-host:48884"
+  
+# AndOR Bridge registration
+andor:
+  triggers:
+    - "revit"
+    - "model"
+    - "building"
+    - "floor plan"
+    - "wall"
+    - "family"
+  emoji: "🏗️"
+
+# Environment
+env:
+  - REVITMCP_SERVER_URL
+  - REVITMCP_REVIT_URL
+  - REVITMCP_AUTH_TOKEN
