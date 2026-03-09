@@ -95,7 +95,7 @@ impl From<StoredAgent> for crate::types::AgentContainer {
             id: stored.id,
             name: stored.name,
             status,
-            config: stored.config,
+            config: stored.config.clone(),
             tailscale_ip: None,
             resource_usage: None,
             project: None,
@@ -103,6 +103,7 @@ impl From<StoredAgent> for crate::types::AgentContainer {
             restart_policy: Default::default(),
             health_status: None,
             runtime: stored.runtime,
+            agent_runtime: stored.config.agent_runtime.clone().unwrap_or_default(),
             gateway_port: stored.gateway_port.unwrap_or_else(crate::types::default_gateway_port),
         }
     }

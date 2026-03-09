@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claw Pen</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f1a; color: #e0e0e0; height: 100vh; display: flex; }
+        
+        .sidebar { width: 300px; background: #16162a; border-right: 1px solid #2a2a4a; display: flex; flex-direction: column; }
+        .sidebar-header { padding: 1rem; border-bottom: 1px solid #2a2a4a; }
+        .sidebar-header h1 { font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem; }
+        .sidebar-actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+        .btn { padding: 0.5rem 1rem; border: none; border-radius: 8px; cursor: pointer; font-size: 0.85rem; transition: all 0.2s; }
+        .btn-primary { background: #e94560; color: white; }
+        .btn-primary:hover { background: #ff5a7a; }
+        .btn-secondary { background: #2a2a5a; color: #e0e0e0; }
+        .btn-secondary:hover { background: #3a3a7a; }
+        .agents-list { flex: 1; overflow-y: auto; padding: 0.5rem; }
+        
+        .agent-card { background: #1e1e3a; border-radius: 10px; padding: 1rem; margin-bottom: 0.5rem; cursor: pointer; border: 1px solid transparent; }
+        .agent-card:hover { border-color: #3a3a6a; }
+        .agent-card.active { border-color: #e94560; }
+        .agent-name { font-weight: 600; }
+        .agent-status { font-size: 0.8rem; color: #888; margin-top: 0.25rem; }
+        .agent-status.running { color: #22c55e; }
+        .agent-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 0.25rem; font-size: 0.75rem; color: #666; margin-top: 0.5rem; }
+        .agent-meta .resource { color: #4ade80; }
+        .agent-meta .resource.high { color: #fbbf24; }
+        .agent-meta .resource.critical { color: #ef4444; }
+        .agent-actions { display: flex; gap: 0.4rem; margin-top: 0.5rem; }
+        .agent-actions .btn { flex: 1; padding: 0.35rem 0.5rem; font-size: 0.7rem; }
+        .btn-start { background: #22c55e; color: white; }
+        .btn-stop { background: #ef4444; color: white; }
+        .btn-config { background: #6b7280; color: white; }
+        
+        .main { flex: 1; display: flex; flex-direction: column; }
+        .header { padding: 1rem; border-bottom: 1px solid #2a2a4a; display: flex; align-items: center; gap: 1rem; }
+        .header h2 { font-size: 1rem; flex: 1; }
+        .status { font-size: 0.75rem; padding: 0.2rem 0.5rem; border-radius: 10px; background: #2a2a4a; }
+        .status.connected { background: #22c55e33; color: #4ade80; }
+        .status.connecting { background: #fbbf2433; color: #fbbf24; }
+        .status.disconnected { background: #ef444433; color: #ef4444; }
+        
+        .messages { flex: 1; padding: 1rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; }
+        .msg { max-width: 70%; padding: 0.75rem 1rem; border-radius: 12px; }
+        .msg.user { align-self: flex-end; background: #e94560; }
+        .msg.assistant { align-self: flex-start; background: #1e1e3a; }
+        .msg-role { font-size: 0.7rem; opacity: 0.7; margin-bottom: 0.2rem; }
+        .msg-text { white-space: pre-wrap; }
+        .input-area { padding: 1rem; border-top: 1px solid #2a2a4a; display: flex; gap: 0.5rem; }
+        .input-area textarea { flex: 1; background: #1e1e3a; border: none; border-radius: 8px; padding: 0.75rem; color: #e0e0e0; font-family: inherit; resize: none; }
+        .input-area textarea:focus { outline: none; }
+        .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #666; }
+        .empty .icon { font-size: 3rem; margin-bottom: 1rem; opacity: 0.5; }
+        
+        /* Modal */
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 100; }
+        .modal { background: #16162a; border-radius: 16px; padding: 1.5rem; width: 90%; max-width: 500px; max-height: 80vh; overflow-y: auto; border: 1px solid #2a2a4a; }
+        .modal h2 { margin-bottom: 1rem; }
+        .modal-close { position: absolute; top: 1rem; right: 1rem; background: none; border: none; color: #888; font-size: 1.5rem; cursor: pointer; }
+        .form-group { margin-bottom: 1rem; }
+        .form-group label { display: block; margin-bottom: 0.5rem; font-size: 0.9rem; color: #aaa; }
+        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 0.75rem; background: #0f0f1a; border: 1px solid #2a2a4a; border-radius: 8px; color: #e0e0e0; font-family: inherit; }
+        .form-group input:focus, .form-group select:focus { outline: none; border-color: #e94560; }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+        .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1.5rem; }
+        
+        /* Settings */
+        .settings-section { margin-bottom: 1.5rem; }
+        .settings-section h3 { font-size: 0.9rem; color: #888; margin-bottom: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; }
+        .api-key-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; background: #1e1e3a; border-radius: 8px; margin-bottom: 0.5rem; }
+        .api-key-item .provider { flex: 1; font-weight: 500; }
+        .api-key-item .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .api-key-item .status-dot.has-key { background: #22c55e; }
+        .api-key-item .status-dot.no-key { background: #6b7280; }
+        .api-key-item input { flex: 2; padding: 0.5rem; background: #0f0f1a; border: 1px solid #2a2a4a; border-radius: 6px; color: #e0e0e0; font-size: 0.85rem; }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h1>🦀 Claw Pen</h1>
+            <div class="sidebar-actions">
+                <button class="btn btn-primary" id="new-agent-btn">+ New Agent</button>
+                <button class="btn btn-secondary" id="settings-btn">⚙️</button>
+            </div>
+        </div>
+        <div class="agents-list" id="agents"></div>
+    </div>
+    
+    <div class="main">
+        <div class="header">
+            <h2 id="title">Select an agent</h2>
+            <span class="status disconnected" id="status">Disconnected</span>
+        </div>
+        <div class="messages" id="messages">
+            <div class="empty">
+                <div class="icon">💬</div>
+                <p>Select an agent to start chatting</p>
+            </div>
+        </div>
+        <div class="input-area" id="input-area" style="display:none">
+            <textarea id="input" placeholder="Type a message..." rows="2"></textarea>
+            <button class="btn btn-primary" id="send-btn">Send</button>
+        </div>
+    </div>
+
+    <script>
+        var agents = [];
+        var active = null;
+        var msgs = [];
+        var authed = false;
+        var apiKeys = {};
+
+        var agentsEl = document.getElementById('agents');
+        var titleEl = document.getElementById('title');
+        var statusEl = document.getElementById('status');
+        var messagesEl = document.getElementById('messages');
+        var inputAreaEl = document.getElementById('input-area');
+        var inputEl = document.getElementById('input');
+        var sendBtn = document.getElementById('send-btn');
+        var newAgentBtn = document.getElementById('new-agent-btn');
+        var settingsBtn = document.getElementById('settings-btn');
+
+        async function init() {
+            console.log('Claw Pen initializing...');
+            
+            // Check if we need to login first
+            try {
+                var authStatus = await window.electronAPI.checkAuth();
+                if (!authStatus.authenticated) {
+                    showLoginModal();
+                    return;
+                }
+            } catch (e) {}
+            
+            await Promise.all([loadAgents(), loadApiKeys()]);
+            setupListeners();
+            setInterval(loadAgents, 5000);
+        }
+
+        function showLoginModal() {
+            var overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+            overlay.id = 'login-overlay';
+            overlay.innerHTML = '<div class="modal">' +
+                '<h2>🔒 Login Required</h2>' +
+                '<p>Enter the orchestrator password</p>' +
+                '<div class="form-group">' +
+                    '<input type="password" id="login-password" placeholder="Password">' +
+                '</div>' +
+                '<button class="btn btn-primary" id="login-submit" style="width:100%">Login</button>' +
+            '</div>';
+            document.body.appendChild(overlay);
+            
+            document.getElementById('login-submit').onclick = doLogin;
+            document.getElementById('login-password').onkeydown = function(e) {
+                if (e.key === 'Enter') doLogin();
+            };
+        }
+
+        async function doLogin() {
+            var password = document.getElementById('login-password').value;
+            var result = await window.electronAPI.login({ password: password });
+            if (result.success) {
+                document.getElementById('login-overlay').remove();
+                await Promise.all([loadAgents(), loadApiKeys()]);
+                setupListeners();
+                setInterval(loadAgents, 5000);
+            } else {
+                alert('Login failed: ' + result.error);
+            }
+        }
+
+        async function loadAgents() {
+            try {
+                agents = await window.electronAPI.fetchAgents();
+                renderAgents();
+            } catch (e) { console.error('Load agents error:', e); }
+        }
+
+        async function loadApiKeys() {
+            try {
+                apiKeys = await window.electronAPI.fetchApiKeys();
+            } catch (e) { console.error('Load API keys error:', e); }
+        }
+
+        function renderAgents() {
+            if (!agents || agents.length === 0) {
+                agentsEl.innerHTML = '<div style="padding:1rem;text-align:center;color:#666">No agents yet<br><br>Click "+ New Agent" to create one</div>';
+                return;
+            }
+            
+            var html = '';
+            for (var i = 0; i < agents.length; i++) {
+                var a = agents[i];
+                var isActive = active && active.id === a.id;
+                var prov = (a.config && a.config.llm_provider) || 'unknown';
+                var model = (a.config && a.config.llm_model) || 'default';
+                var ram = (a.config && a.config.memory_mb) || 1024;
+                var cpu = (a.config && a.config.cpu_cores) || 1;
+                var isRunning = a.status === 'running' || a.status === 'Running';
+                
+                // Real resource usage
+                var usage = a.resource_usage;
+                var cpuUsage = usage ? usage.cpu_percent.toFixed(1) : '-';
+                var memUsage = usage ? usage.memory_mb.toFixed(0) : '-';
+                var memTotal = usage ? usage.memory_total_mb.toFixed(0) : ram;
+                
+                html += '<div class="agent-card ' + (isActive ? 'active' : '') + '">' +
+                    '<div class="agent-name" data-idx="' + i + '">' + esc(a.name) + '</div>' +
+                    '<div class="agent-status ' + a.status.toLowerCase() + '">' + a.status + '</div>' +
+                    '<div class="agent-meta">' +
+                        '<span>🤖 ' + prov + '</span>' +
+                        '<span>🧠 ' + cut(model, 10) + '</span>' +
+                        '<span class="resource ' + (cpuUsage > 80 ? 'high' : '') + '">⚡ ' + cpuUsage + '%</span>' +
+                        '<span class="resource ' + (memUsage > memTotal * 0.8 ? 'high' : '') + '">💾 ' + memUsage + '/' + memTotal + 'M</span>' +
+                    '</div>' +
+                    '<div class="agent-actions">' +
+                        (isRunning 
+                            ? '<button class="btn btn-stop" data-action="stop" data-id="' + a.id + '">Stop</button>'
+                            : '<button class="btn btn-start" data-action="start" data-id="' + a.id + '">Start</button>') +
+                        '<button class="btn btn-config" data-action="edit" data-idx="' + i + '">Edit</button>' +
+                        '<button class="btn btn-config" data-action="chat" data-idx="' + i + '">Chat</button>' +
+                    '</div>' +
+                '</div>';
+            }
+            agentsEl.innerHTML = html;
+            
+            // Click handlers for agent name (select for chat)
+            var names = agentsEl.querySelectorAll('.agent-name');
+            for (var j = 0; j < names.length; j++) {
+                names[j].onclick = function(e) {
+                    e.stopPropagation();
+                    var idx = parseInt(this.getAttribute('data-idx'));
+                    selectAgent(agents[idx]);
+                };
+            }
+            
+            // Click handlers for action buttons
+            var btns = agentsEl.querySelectorAll('.agent-actions .btn');
+            for (var k = 0; k < btns.length; k++) {
+                btns[k].onclick = function(e) {
+                    e.stopPropagation();
+                    var action = this.getAttribute('data-action');
+                    if (action === 'chat') {
+                        var idx = parseInt(this.getAttribute('data-idx'));
+                        selectAgent(agents[idx]);
+                    } else if (action === 'edit') {
+                        var idx = parseInt(this.getAttribute('data-idx'));
+                        showEditModal(agents[idx]);
+                    } else if (action === 'start') {
+                        startAgent(this.getAttribute('data-id'));
+                    } else if (action === 'stop') {
+                        stopAgent(this.getAttribute('data-id'));
+                    }
+                };
+            }
+        }
+
+        async function startAgent(id) {
+            try { await window.electronAPI.startAgent(id); setTimeout(loadAgents, 2000); }
+            catch (e) { console.error('Start error:', e); }
+        }
+
+        async function stopAgent(id) {
+            try { await window.electronAPI.stopAgent(id); setTimeout(loadAgents, 1000); }
+            catch (e) { console.error('Stop error:', e); }
+        }
+
+        function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+        function cut(s, n) { return s.length > n ? s.slice(0, n - 2) + '..' : s; }
+
+        async function selectAgent(a) {
+            active = a;
+            msgs = [];
+            renderAgents();
+            renderMsgs();
+            
+            titleEl.textContent = a.name;
+            inputAreaEl.style.display = 'flex';
+            messagesEl.innerHTML = '<div class="empty">Connecting...</div>';
+            
+            setStatus('connecting');
+            
+            var port = (a.config && a.config.env_vars && a.config.env_vars.PORT) || 18790;
+            var url = 'ws://localhost:' + port + '/ws';
+            
+            try { await window.electronAPI.connectWebSocket(url); }
+            catch (e) { console.error('Connection error:', e); setStatus('disconnected'); }
+        }
+
+        function setupListeners() {
+            window.electronAPI.onWsStatus(function(data) {
+                if (!data || !data.connected) { authed = false; setStatus('disconnected'); }
+            });
+            window.electronAPI.onWsAuthenticated(function(authenticated) {
+                authed = authenticated;
+                setStatus(authenticated ? 'connected' : 'connecting');
+                if (authenticated) renderMsgs();
+            });
+            window.electronAPI.onWsMessage(function(data) { handleMsg(data); });
+            window.electronAPI.onWsError(function(err) { console.error('WS error:', err); });
+        }
+
+        function setStatus(s) {
+            statusEl.className = 'status ' + s;
+            statusEl.textContent = s === 'connected' ? 'Connected' : s === 'connecting' ? 'Connecting...' : 'Disconnected';
+        }
+
+        function handleMsg(d) {
+            if (!d) return;
+            if (d.event === 'agent' && d.payload) {
+                var p = d.payload;
+                if (p.stream === 'content' && p.data) {
+                    var txt = p.data.delta || p.data.content || '';
+                    if (txt) {
+                        var last = msgs[msgs.length - 1];
+                        if (last && last.role === 'assistant' && !last.done) last.content += txt;
+                        else msgs.push({role: 'assistant', content: txt, done: false});
+                        renderMsgs();
+                    }
+                } else if (p.stream === 'lifecycle' && p.data) {
+                    if (p.data.phase === 'end' || p.data.phase === 'error') {
+                        var last = msgs[msgs.length - 1];
+                        if (last) last.done = true;
+                        if (p.data.phase === 'error') {
+                            msgs.push({role: 'assistant', content: '⚠️ ' + (p.data.error || 'Error'), done: true});
+                            renderMsgs();
+                        }
+                    }
+                }
+                return;
+            }
+            if (d.event === 'chat.message' && d.params && d.params.content) {
+                msgs.push({role: d.params.role || 'assistant', content: d.params.content, done: true});
+                renderMsgs();
+            }
+        }
+
+        function renderMsgs() {
+            if (msgs.length === 0) { messagesEl.innerHTML = '<div class="empty">Start a conversation</div>'; return; }
+            var html = '';
+            for (var i = 0; i < msgs.length; i++) {
+                var m = msgs[i];
+                html += '<div class="msg ' + m.role + '">' +
+                    '<div class="msg-role">' + (m.role === 'user' ? 'You' : (active ? active.name : 'Agent')) + '</div>' +
+                    '<div class="msg-text">' + esc(m.content) + '</div>' +
+                '</div>';
+            }
+            messagesEl.innerHTML = html;
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        async function send() {
+            var txt = inputEl.value.trim();
+            if (!txt || !authed) return;
+            msgs.push({role: 'user', content: txt, done: true});
+            renderMsgs();
+            inputEl.value = '';
+            try { await window.electronAPI.sendMessage(txt); }
+            catch (e) { console.error('Send error:', e); }
+        }
+
+        sendBtn.onclick = send;
+        inputEl.onkeydown = function(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } };
+
+        // New Agent Modal
+        newAgentBtn.onclick = function() { showModal('new-agent'); };
+        settingsBtn.onclick = function() { showModal('settings'); };
+
+        function showModal(type) {
+            var overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+            overlay.id = 'modal-overlay';
+            
+            var content = '';
+            if (type === 'new-agent') {
+                content = '<div class="modal">' +
+                    '<h2>Create New Agent</h2>' +
+                    '<div class="form-group">' +
+                        '<label>Agent Name</label>' +
+                        '<input type="text" id="agent-name" placeholder="my-agent">' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group">' +
+                            '<label>LLM Provider</label>' +
+                            '<select id="agent-provider">' +
+                                '<option value="zai">Zhipu (GLM)</option>' +
+                                '<option value="openai">OpenAI</option>' +
+                                '<option value="anthropic">Anthropic</option>' +
+                                '<option value="ollama">Ollama (Local)</option>' +
+                                '<option value="lmstudio">LM Studio (Local)</option>' +
+                            '</select>' +
+                        '</div>' +
+                        '<div class="form-group">' +
+                            '<label>Model</label>' +
+                            '<input type="text" id="agent-model" placeholder="glm-5">' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group">' +
+                            '<label>Memory (MB)</label>' +
+                            '<input type="number" id="agent-ram" value="1024">' +
+                        '</div>' +
+                        '<div class="form-group">' +
+                            '<label>CPU Cores</label>' +
+                            '<input type="number" id="agent-cpu" value="1" step="0.5">' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="modal-actions">' +
+                        '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>' +
+                        '<button class="btn btn-primary" onclick="createAgent()">Create Agent</button>' +
+                    '</div>' +
+                '</div>';
+            } else if (type === 'settings') {
+                var providers = ['zai', 'openai', 'anthropic', 'google', 'kimi'];
+                var keyItems = '';
+                for (var i = 0; i < providers.length; i++) {
+                    var p = providers[i];
+                    var hasKey = apiKeys && apiKeys.some(function(k) { return k.provider === p && k.has_key; });
+                    keyItems += '<div class="api-key-item">' +
+                        '<span class="status-dot ' + (hasKey ? 'has-key' : 'no-key') + '"></span>' +
+                        '<span class="provider">' + p.toUpperCase() + '</span>' +
+                        '<input type="password" id="key-' + p + '" placeholder="' + (hasKey ? '••••••••' : 'API Key') + '">' +
+                    '</div>';
+                }
+                content = '<div class="modal">' +
+                    '<h2>Settings</h2>' +
+                    '<div class="settings-section">' +
+                        '<h3>API Keys</h3>' +
+                        keyItems +
+                    '</div>' +
+                    '<div class="modal-actions">' +
+                        '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>' +
+                        '<button class="btn btn-primary" onclick="saveSettings()">Save Keys</button>' +
+                    '</div>' +
+                '</div>';
+            }
+            
+            overlay.innerHTML = content;
+            overlay.onclick = function(e) { if (e.target === overlay) closeModal(); };
+            document.body.appendChild(overlay);
+        }
+
+        window.closeModal = function() {
+            var overlay = document.getElementById('modal-overlay');
+            if (overlay) overlay.remove();
+        };
+
+        window.showEditModal = function(agent) {
+            var prov = (agent.config && agent.config.llm_provider) || 'zai';
+            var model = (agent.config && agent.config.llm_model) || '';
+            var ram = (agent.config && agent.config.memory_mb) || 1024;
+            var cpu = (agent.config && agent.config.cpu_cores) || 1;
+            var currentKey = (agent.config && agent.config.env_vars && agent.config.env_vars.ZAI_API_KEY) ? '••••••••' : '';
+            
+            var providers = ['zai', 'openai', 'anthropic', 'ollama', 'lmstudio'];
+            var provOptions = '';
+            for (var i = 0; i < providers.length; i++) {
+                provOptions += '<option value="' + providers[i] + '"' + (providers[i] === prov ? ' selected' : '') + '>' + providers[i].toUpperCase() + '</option>';
+            }
+            
+            var content = '<div class="modal">' +
+                '<h2>Edit Agent: ' + esc(agent.name) + '</h2>' +
+                '<div class="form-group">' +
+                    '<label>LLM Provider</label>' +
+                    '<select id="edit-provider">' + provOptions + '</select>' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Model</label>' +
+                    '<input type="text" id="edit-model" value="' + esc(model) + '">' +
+                '</div>' +
+                '<div class="form-row">' +
+                    '<div class="form-group">' +
+                        '<label>Memory (MB)</label>' +
+                        '<input type="number" id="edit-ram" value="' + ram + '">' +
+                    '</div>' +
+                    '<div class="form-group">' +
+                        '<label>CPU Cores</label>' +
+                        '<input type="number" id="edit-cpu" value="' + cpu + '" step="0.5">' +
+                    '</div>' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>API Key (leave blank to keep current)</label>' +
+                    '<input type="password" id="edit-api-key" placeholder="' + (currentKey ? '•••••••• (current)' : 'Enter new key') + '">' +
+                '</div>' +
+                '<div class="modal-actions">' +
+                    '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>' +
+                    '<button class="btn btn-primary" onclick="saveAgent(\'' + agent.id + '\')">Save Changes</button>' +
+                '</div>' +
+            '</div>';
+            
+            var overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+            overlay.id = 'modal-overlay';
+            overlay.innerHTML = content;
+            overlay.onclick = function(e) { if (e.target === overlay) closeModal(); };
+            document.body.appendChild(overlay);
+        };
+
+        window.saveAgent = async function(agentId) {
+            var provider = document.getElementById('edit-provider').value;
+            var model = document.getElementById('edit-model').value.trim();
+            var ram = parseInt(document.getElementById('edit-ram').value) || 1024;
+            var cpu = parseFloat(document.getElementById('edit-cpu').value) || 1;
+            var apiKey = document.getElementById('edit-api-key').value.trim();
+            
+            try {
+                await window.electronAPI.updateAgent({
+                    id: agentId,
+                    provider: provider,
+                    model: model,
+                    memory_mb: ram,
+                    cpu_cores: cpu,
+                    api_key: apiKey
+                });
+                closeModal();
+                
+                // Show restart prompt if API key was changed
+                if (apiKey) {
+                    var shouldRestart = confirm('API key updated. Restart the agent to apply changes?');
+                    if (shouldRestart) {
+                        await window.electronAPI.stopAgent(agentId);
+                        await new Promise(r => setTimeout(r, 2000));
+                        await window.electronAPI.startAgent(agentId);
+                    }
+                }
+                
+                setTimeout(loadAgents, 1000);
+            } catch (e) {
+                alert('Failed to update agent: ' + e.message);
+            }
+        };
+
+        window.createAgent = async function() {
+            var name = document.getElementById('agent-name').value.trim();
+            var provider = document.getElementById('agent-provider').value;
+            var model = document.getElementById('agent-model').value.trim() || 'glm-5';
+            var ram = parseInt(document.getElementById('agent-ram').value) || 1024;
+            var cpu = parseFloat(document.getElementById('agent-cpu').value) || 1;
+            
+            if (!name) { alert('Please enter an agent name'); return; }
+            
+            try {
+                await window.electronAPI.createAgent({name: name, provider: provider, model: model, memory_mb: ram, cpu_cores: cpu});
+                closeModal();
+                setTimeout(loadAgents, 1000);
+            } catch (e) {
+                alert('Failed to create agent: ' + e.message);
+            }
+        };
+
+        window.saveSettings = async function() {
+            var providers = ['zai', 'openai', 'anthropic', 'google', 'kimi'];
+            for (var i = 0; i < providers.length; i++) {
+                var p = providers[i];
+                var input = document.getElementById('key-' + p);
+                if (input && input.value.trim()) {
+                    try {
+                        await window.electronAPI.setApiKey({provider: p, key: input.value.trim()});
+                    } catch (e) {
+                        console.error('Failed to save key for', p, e);
+                    }
+                }
+            }
+            await loadApiKeys();
+            closeModal();
+        };
+
+        init();
+    </script>
+</body>
+</html>

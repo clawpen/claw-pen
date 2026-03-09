@@ -24,9 +24,34 @@ pub struct AgentContainer {
     /// Runtime used for this container (docker or exo)
     #[serde(default)]
     pub runtime: Option<String>,
+    /// Agent runtime inside container (openclaw or exo-native)
+    #[serde(default = "default_agent_runtime")]
+    pub agent_runtime: AgentRuntime,
     /// Gateway port for this agent (default 18790)
     #[serde(default = "default_gateway_port")]
     pub gateway_port: u16,
+}
+
+/// Agent runtime type
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentRuntime {
+    #[default]
+    Openclaw,
+    ExoNative,
+}
+
+impl std::fmt::Display for AgentRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentRuntime::Openclaw => write!(f, "openclaw"),
+            AgentRuntime::ExoNative => write!(f, "exo-native"),
+        }
+    }
+}
+
+fn default_agent_runtime() -> AgentRuntime {
+    AgentRuntime::default()
 }
 
 pub fn default_gateway_port() -> u16 {
@@ -73,6 +98,9 @@ pub struct AgentConfig {
     /// API key for the LLM provider (stored encrypted)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// Agent runtime (openclaw or exo-native)
+    #[serde(default)]
+    pub agent_runtime: Option<AgentRuntime>,
 }
 
 fn default_memory() -> u32 {
@@ -216,6 +244,9 @@ pub struct CreateAgentRequest {
     /// Container runtime to use: "docker" or "exo" (defaults to global config)
     #[serde(default)]
     pub runtime: Option<String>,
+    /// Agent runtime: "openclaw" or "exo-native" (defaults to "openclaw")
+    #[serde(default)]
+    pub agent_runtime: Option<AgentRuntime>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,6 +269,8 @@ pub struct PartialAgentConfig {
     pub restart_policy: Option<RestartPolicy>,
     pub health_check: Option<HealthCheck>,
     pub volumes: Option<Vec<VolumeMount>>,
+    /// Agent runtime: "openclaw" or "exo-native"
+    pub agent_runtime: Option<AgentRuntime>,
 }
 
 // === Project/Group Management ===
@@ -336,6 +369,9 @@ impl AgentConfig {
         }
         if let Some(ref volumes) = partial.volumes {
             self.volumes = volumes.clone();
+        }
+        if let Some(ref agent_runtime) = partial.agent_runtime {
+            self.agent_runtime = Some(agent_runtime.clone());
         }
     }
 }

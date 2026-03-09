@@ -1,5 +1,6 @@
 mod api;
 mod components;
+mod tauri;
 mod types;
 
 use components::dashboard::Dashboard;

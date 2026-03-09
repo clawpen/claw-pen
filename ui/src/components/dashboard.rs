@@ -1,5 +1,5 @@
 use crate::api;
-use crate::components::chat::ChatPanel;
+use crate::components::tabbed_chat::TabbedChat;
 use crate::components::settings::SettingsModal;
 use crate::types::{AgentContainer, AgentStatus};
 use yew::events::MouseEvent;
@@ -9,7 +9,7 @@ use yew::prelude::*;
 pub fn dashboard() -> Html {
     // TODO: Fetch agents from API
     let agents = use_state(Vec::new);
-    let chat_agent = use_state(|| None::<AgentContainer>);
+    let open_chats = use_state(Vec::<AgentContainer>::new);
     let show_settings = use_state(|| false);
 
     let agents_clone = agents.clone();
@@ -22,10 +22,12 @@ pub fn dashboard() -> Html {
         || ()
     });
 
-    let on_close_chat = {
-        let chat_agent = chat_agent.clone();
-        Callback::from(move |()| {
-            chat_agent.set(None);
+    let on_close_tab = {
+        let open_chats = open_chats.clone();
+        Callback::from(move |agent_id: String| {
+            let mut chats = (*open_chats).clone();
+            chats.retain(|a| a.id != agent_id);
+            open_chats.set(chats);
         })
     };
 
@@ -58,10 +60,15 @@ pub fn dashboard() -> Html {
                 } else {
                     {for agents.iter().map(|agent| {
                         let open_chat = {
-                            let chat_agent = chat_agent.clone();
+                            let open_chats = open_chats.clone();
                             let agent = agent.clone();
                             Callback::from(move |()| {
-                                chat_agent.set(Some(agent.clone()));
+                                let mut chats = (*open_chats).clone();
+                                // Only add if not already open
+                                if !chats.iter().any(|a| a.id == agent.id) {
+                                    chats.push(agent.clone());
+                                    open_chats.set(chats);
+                                }
                             })
                         };
                         html! { <AgentCard agent={agent.clone()} on_chat={open_chat} /> }
@@ -69,8 +76,8 @@ pub fn dashboard() -> Html {
                 }
             </div>
 
-            if let Some(agent) = (*chat_agent).clone() {
-                <ChatPanel agent={agent} on_close={on_close_chat} />
+            if !(*open_chats).is_empty() {
+                <TabbedChat open_agents={(*open_chats).clone()} on_close_tab={on_close_tab} />
             }
 
             if *show_settings {

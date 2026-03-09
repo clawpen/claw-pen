@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use crate::container::ContainerRuntime;
 use crate::types::{
-    AgentConfig, AgentContainer, AgentStatus, LlmProvider, LogEntry, ResourceUsage, VolumeMount,
+    AgentConfig, AgentContainer, AgentStatus, AgentRuntime, LlmProvider, LogEntry, ResourceUsage, VolumeMount,
 };
 
 #[derive(Clone)]
@@ -98,6 +98,7 @@ impl ContainmentClient {
                     restart_policy: Default::default(),
                     health_status: None,
                     runtime: Some("containment".to_string()),
+                    agent_runtime: AgentRuntime::default(),
                     gateway_port: crate::types::default_gateway_port(),
                 });
             }
@@ -426,6 +427,11 @@ impl ContainerRuntime for ContainmentClient {
 
     async fn delete_container(&self, id: &str) -> Result<()> {
         self.delete_container_internal(id).await
+    }
+
+    async fn delete_container_by_name(&self, name: &str) -> Result<()> {
+        // Try to delete by name - for containment, name is the ID
+        self.delete_container_internal(name).await
     }
 
     async fn get_stats(&self, id: &str) -> Result<Option<ResourceUsage>> {

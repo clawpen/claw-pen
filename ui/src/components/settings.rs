@@ -144,7 +144,7 @@ pub fn settings_modal(props: &SettingsModalProps) -> Html {
 
     html! {
         <div class="modal-overlay" onclick={on_close_click.clone()}>
-            <div class="modal" onclick={|e: Event| e.stop_propagation()}>
+            <div class="modal" onclick={|e: MouseEvent| e.stop_propagation()}>
                 <div class="modal-header">
                     <h2>{"⚙️ Settings"}</h2>
                     <button class="btn-close" onclick={on_close_click}>{"×"}</button>

@@ -1,0 +1,23 @@
+{
+  "name": "claw-pen-desktop",
+  "version": "1.0.0",
+  "description": "Claw Pen Desktop - Agent Management UI",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "dev": "electron . --dev"
+  },
+  "keywords": [],
+  "author": "Claw Pen",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^40.8.0",
+    "electron-builder": "^25.0.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "tweetnacl": "^1.0.3",
+    "ws": "^8.19.0"
+  }
+}

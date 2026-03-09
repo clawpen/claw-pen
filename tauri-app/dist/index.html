@@ -1,1507 +1,431 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Claw Pen</title>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
-            background: #1a1a2e; 
-            color: #eee; 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Color Emoji', sans-serif;
-            min-height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0f0f1a; 
+            color: #e0e0e0; 
+            height: 100vh;
             display: flex;
         }
-        
-        #sidebar {
-            width: 320px;
-            background: #0f0f1a;
+        .sidebar {
+            width: 280px;
+            background: #16162a;
             border-right: 1px solid #2a2a4a;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+        .sidebar h1 {
+            font-size: 1.2rem;
+            margin-bottom: 1rem;
+        }
+        .agent-card {
+            background: #1e1e3a;
+            border-radius: 10px;
+            padding: 1rem;
+            margin-bottom: 0.75rem;
+            cursor: pointer;
+            border: 1px solid transparent;
+        }
+        .agent-card:hover { border-color: #3a3a6a; }
+        .agent-card.active { border-color: #e94560; }
+        .agent-name { font-weight: 600; margin-bottom: 0.25rem; }
+        .agent-status { font-size: 0.8rem; color: #888; }
+        .agent-status.running { color: #22c55e; }
+        .agent-meta {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.25rem;
+            font-size: 0.75rem;
+            color: #666;
+            margin-top: 0.5rem;
+        }
+        .main {
+            flex: 1;
             display: flex;
             flex-direction: column;
-            flex-shrink: 0;
-            height: 100vh;
         }
-        
-        .sidebar-header {
-            padding: 20px;
+        .header {
+            padding: 1rem;
             border-bottom: 1px solid #2a2a4a;
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            flex-shrink: 0;
+            gap: 1rem;
         }
-        
-        .sidebar-header h1 { color: #e94560; font-size: 24px; margin: 0; }
-        .sidebar-header { display: flex; align-items: center; justify-content: space-between; }
-        
-        .system-stats {
-            padding: 16px 20px;
-            background: #16162a;
-            border-bottom: 1px solid #2a2a4a;
-            flex-shrink: 0;
-        }
-        
-        .stat-row {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 8px;
-            font-size: 13px;
-        }
-        
-        .stat-label { color: #888; }
-        .stat-value { color: #22c55e; font-weight: 500; }
-        .stat-value.warning { color: #f59e0b; }
-        .stat-value.danger { color: #ef4444; }
-        
-        .stat-bar {
-            height: 4px;
+        .header h2 { font-size: 1rem; }
+        .status-badge {
+            font-size: 0.75rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 10px;
             background: #2a2a4a;
-            border-radius: 2px;
-            margin-top: 4px;
-            overflow: hidden;
         }
-        
-        .stat-bar-fill {
-            height: 100%;
-            border-radius: 2px;
-            transition: width 0.5s, background 0.3s;
+        .status-badge.connected { background: #22c55e33; color: #4ade80; }
+        .status-badge.connecting { background: #fbbf2433; color: #fbbf24; }
+        .status-badge.disconnected { background: #ef444433; color: #ef4444; }
+        .messages {
+            flex: 1;
+            padding: 1rem;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
         }
-        
-        .stat-bar-fill.ok { background: #22c55e; }
-        .stat-bar-fill.warning { background: #f59e0b; }
-        .stat-bar-fill.danger { background: #ef4444; }
-        
-        .stat-section { margin-bottom: 16px; }
-        .stat-section:last-child { margin-bottom: 0; }
-        
-        .create-agent-btn {
-            margin: 16px 20px;
-            padding: 12px;
-            background: #e94560;
+        .msg {
+            max-width: 70%;
+            padding: 0.75rem 1rem;
+            border-radius: 12px;
+        }
+        .msg.user { align-self: flex-end; background: #e94560; }
+        .msg.assistant { align-self: flex-start; background: #1e1e3a; }
+        .msg-role { font-size: 0.7rem; opacity: 0.7; margin-bottom: 0.2rem; }
+        .msg-text { white-space: pre-wrap; }
+        .input-area {
+            padding: 1rem;
+            border-top: 1px solid #2a2a4a;
+            display: flex;
+            gap: 0.5rem;
+        }
+        .input-area textarea {
+            flex: 1;
+            background: #1e1e3a;
             border: none;
             border-radius: 8px;
-            color: white;
-            font-size: 14px;
-            font-weight: 500;
+            padding: 0.75rem;
+            color: #e0e0e0;
+            font-family: inherit;
+            resize: none;
+        }
+        .input-area textarea:focus { outline: none; }
+        .btn {
+            padding: 0.75rem 1rem;
+            border: none;
+            border-radius: 8px;
             cursor: pointer;
+            font-size: 0.9rem;
+        }
+        .btn-send { background: #e94560; color: white; }
+        .btn-send:disabled { opacity: 0.5; cursor: not-allowed; }
+        .empty {
+            flex: 1;
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 8px;
-            flex-shrink: 0;
-        }
-        
-        .create-agent-btn:hover { background: #d63050; }
-        
-        .agent-list-header {
-            padding: 12px 20px;
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: #666;
-            border-bottom: 1px solid #2a2a4a;
-            flex-shrink: 0;
-        }
-        
-        #agent-list { 
-            flex: 1; 
-            overflow-y: auto;
-            min-height: 0;
-        }
-        
-        .agent-card {
-            padding: 16px 20px;
-            border-bottom: 1px solid #2a2a4a;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-        
-        .agent-card:hover { background: #1a1a2e; }
-        .agent-card.selected { background: #1a1a2e; border-left: 3px solid #e94560; }
-        
-        .agent-name { font-weight: 500; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
-        
-        .agent-status {
-            font-size: 10px;
-            padding: 2px 6px;
-            border-radius: 4px;
-            text-transform: uppercase;
-        }
-        
-        .agent-status.running { background: #22c55e33; color: #22c55e; }
-        .agent-status.stopped { background: #66666633; color: #888; }
-        
-        .agent-model { font-size: 12px; color: #888; margin-bottom: 8px; }
-        .agent-resources { display: flex; gap: 16px; font-size: 11px; color: #666; }
-        
-        .agent-actions { margin-top: 8px; display: flex; gap: 8px; }
-        .agent-actions button { padding: 4px 10px; font-size: 11px; border: none; border-radius: 4px; cursor: pointer; }
-        .btn-start { background: #22c55e33; color: #22c55e; }
-        .btn-stop { background: #ef444433; color: #ef4444; }
-        .btn-delete { background: #66666633; color: #888; }
-        .agent-actions button:hover { opacity: 0.8; }
-        
-        /* Volume section styles */
-        .volume-section {
-            padding: 12px 20px;
-            border-bottom: 1px solid #2a2a4a;
-            flex-shrink: 0;
-        }
-        .volume-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 8px;
-        }
-        .volume-header h3 {
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
             color: #666;
         }
-        .btn-add-volume {
-            background: transparent;
-            border: 1px solid #2a2a4a;
-            color: #888;
-            font-size: 18px;
-            cursor: pointer;
-            padding: 2px 8px;
-            border-radius: 4px;
-        }
-        .btn-add-volume:hover { background: #2a2a4a; color: #e94560; }
-        
-        .volume-list { max-height: 150px; overflow-y: auto; }
-        .volume-item {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 6px 8px;
-            border-radius: 4px;
-            margin-bottom: 4px;
-            background: #16162a;
-        }
-        .volume-item:hover { background: #1a1a2e; }
-        .volume-name { font-size: 12px; color: #ccc; }
-        .volume-target { font-size: 10px; color: #666; }
-        .volume-actions button {
-            background: transparent;
-            border: none;
-            color: #666;
-            cursor: pointer;
-            padding: 2px 4px;
-            font-size: 12px;
-        }
-        .volume-actions button:hover { color: #e94560; }
-        
-        /* Tab bar styles */
-        .tab-bar {
-            display: flex;
-            align-items: center;
-            background: #0f0f1a;
-            border-bottom: 1px solid #2a2a4a;
-            padding: 0 12px;
-            min-height: 40px;
-            gap: 4px;
-            overflow-x: auto;
-            flex-shrink: 0;
-        }
-        .tab-bar.hidden { display: none; }
-        
-        .tab {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 12px;
-            background: transparent;
-            border: none;
-            border-radius: 6px 6px 0 0;
-            color: #888;
-            font-size: 13px;
-            cursor: pointer;
-            white-space: nowrap;
-            transition: all 0.2s;
-        }
-        .tab:hover { background: #1a1a2e; color: #ccc; }
-        .tab.active { background: #1a1a2e; color: #eee; border-bottom: 2px solid #e94560; }
-        
-        .tab-status {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #666;
-        }
-        .tab-status.connected { background: #22c55e; }
-        .tab-status.connecting { background: #f59e0b; animation: pulse 1s infinite; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-        
-        .tab-popout {
-            padding: 2px 4px;
-            background: transparent;
-            border: none;
-            color: #666;
-            cursor: pointer;
-            border-radius: 4px;
-            font-size: 12px;
-            opacity: 0;
-            transition: opacity 0.2s;
-        }
-        .tab:hover .tab-popout { opacity: 1; }
-        .tab-popout:hover { background: #2a2a4a; color: #e94560; }
-        
-        /* Floating window mode */
-        body.floating-mode #sidebar { display: none; }
-        body.floating-mode #main { padding: 12px; }
-        body.floating-mode .chat-header { margin-bottom: 12px; }
-        body.floating-mode .tab-bar { display: none; }
-        
-        #main { flex: 1; display: flex; flex-direction: column; padding: 20px; height: 100vh; }
-        
-        .chat-header { margin-bottom: 16px; flex-shrink: 0; }
-        .chat-header h2 { font-size: 18px; color: #eee; }
-        
-        .status { 
-            padding: 8px 12px; 
-            background: #0f0f1a; 
-            border-radius: 6px;
-            font-size: 14px;
-            display: inline-block;
-        }
-        .btn-refresh {
-            background: #0f0f1a;
-            border: 1px solid #2a2a4a;
-            border-radius: 6px;
-            padding: 6px 10px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        .btn-refresh:hover {
-            background: #1a1a2e;
-            border-color: #3a3a5a;
-        }
-        .status.connected { color: #22c55e; }
-        .status.connecting { color: #f59e0b; }
-        .status.error { color: #ef4444; }
-        
-        #chat-container {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            background: #0f0f1a;
-            border-radius: 12px;
-            overflow: hidden;
-            min-height: 0;
-        }
-        
-        #messages {
-            flex: 1;
-            overflow-y: auto;
-            padding: 16px;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            min-height: 0;
-        }
-        
-        .message {
-            max-width: 80%;
-            padding: 12px 16px;
-            border-radius: 16px;
-            line-height: 1.5;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-        }
-        .message.user { align-self: flex-end; background: #e94560; color: white; border-bottom-right-radius: 4px; }
-        .message.assistant { align-self: flex-start; background: #2a2a4a; color: #eee; border-bottom-left-radius: 4px; }
-        .message.system { align-self: center; background: transparent; color: #666; font-size: 12px; }
-        .message.streaming { opacity: 0.9; }
-        .message.streaming::after { content: '▋'; animation: blink 1s infinite; }
-        @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
-        
-        .replying-indicator {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 12px 16px;
-            background: #2a2a4a;
-            border-radius: 16px;
-            border-bottom-left-radius: 4px;
-            align-self: flex-start;
-            color: #888;
-            font-size: 14px;
-        }
-        .replying-indicator.hidden { display: none; }
-        .typing-dots {
-            display: flex;
-            gap: 4px;
-        }
-        .typing-dots span {
-            width: 6px;
-            height: 6px;
-            background: #e94560;
-            border-radius: 50%;
-            animation: typing-bounce 1.4s infinite ease-in-out;
-        }
-        .typing-dots span:nth-child(1) { animation-delay: -0.32s; }
-        .typing-dots span:nth-child(2) { animation-delay: -0.16s; }
-        @keyframes typing-bounce {
-            0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
-            40% { transform: scale(1); opacity: 1; }
-        }
-        
-        #input-area {
-            display: flex;
-            gap: 10px;
-            padding: 16px;
-            background: #16162a;
-            border-top: 1px solid #2a2a4a;
-            flex-shrink: 0;
-        }
-        
-        #message-input {
-            flex: 1;
-            padding: 12px 16px;
-            border: none;
-            border-radius: 24px;
-            background: #1a1a2e;
-            color: white;
-            font-size: 14px;
-            outline: none;
-        }
-        #message-input:focus { box-shadow: 0 0 0 2px #e94560; }
-        
-        #send-btn {
-            padding: 12px 24px;
-            border: none;
-            border-radius: 24px;
-            background: #e94560;
-            color: white;
-            font-size: 14px;
-            cursor: pointer;
-        }
-        #send-btn:hover { background: #d63050; }
-        #send-btn:disabled { background: #444; cursor: not-allowed; }
-        
-        .modal-overlay {
+        .login-overlay {
             position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.7);
-            display: none;
+            inset: 0;
+            background: rgba(0,0,0,0.8);
+            display: flex;
             align-items: center;
             justify-content: center;
             z-index: 100;
         }
-        
-        .modal-overlay.active { display: flex; }
-        
-        .modal {
-            background: #1a1a2e;
-            border-radius: 12px;
-            padding: 24px;
-            width: 450px;
-            max-height: 80vh;
-            overflow-y: auto;
+        .login-box {
+            background: #16162a;
+            padding: 2rem;
+            border-radius: 16px;
+            width: 350px;
         }
-        
-        .modal h3 { margin-bottom: 20px; color: #e94560; }
-        
-        .form-group { margin-bottom: 16px; }
-        .form-group label { display: block; font-size: 12px; color: #888; margin-bottom: 6px; }
-        .form-group input, .form-group select {
+        .login-box h2 { text-align: center; margin-bottom: 0.5rem; }
+        .login-box p { text-align: center; color: #888; margin-bottom: 1rem; }
+        .login-box input {
             width: 100%;
-            padding: 10px 12px;
-            border: 1px solid #2a2a4a;
-            border-radius: 6px;
+            padding: 0.75rem;
             background: #0f0f1a;
-            color: #eee;
-            font-size: 14px;
+            border: 1px solid #2a2a4a;
+            border-radius: 8px;
+            color: #e0e0e0;
+            margin-bottom: 1rem;
         }
-        .form-group input:focus, .form-group select:focus { outline: none; border-color: #e94560; }
-        
-        .modal-actions { display: flex; gap: 12px; margin-top: 20px; }
-        .btn { flex: 1; padding: 10px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
-        .btn-primary { background: #e94560; color: white; }
-        .btn-secondary { background: #2a2a4a; color: #eee; }
-        .btn:hover { opacity: 0.9; }
-        
-        .api-key-hint { font-size: 11px; color: #666; margin-top: 4px; }
-    
-.settings-btn {
-    background: transparent;
-    border: none;
-    color: #888;
-    font-size: 20px;
-    cursor: pointer;
-    padding: 8px;
-    border-radius: 6px;
-    transition: all 0.2s;
-}
-.settings-btn:hover {
-    background: #2a2a4a;
-    color: #e94560;
-}
-
-/* Settings Modal */
-#settings-modal .modal-content {
-    max-width: 500px;
-}
-.api-key-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 16px;
-}
-.api-key-row label {
-    width: 100px;
-    font-size: 14px;
-    color: #aaa;
-}
-.api-key-row input {
-    flex: 1;
-    padding: 10px 12px;
-    background: #1a1a2e;
-    border: 1px solid #2a2a4a;
-    border-radius: 6px;
-    color: #eee;
-    font-family: monospace;
-    font-size: 13px;
-}
-.api-key-row input:focus {
-    outline: none;
-    border-color: #e94560;
-}
-.api-key-row .status {
-    width: 24px;
-    text-align: center;
-}
-.api-key-row .status.has-key { color: #22c55e; }
-.api-key-row .status.no-key { color: #666; }
-
-/* Login Modal */
-.login-overlay {
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0, 0, 0, 0.8);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 2000;
-}
-.login-overlay.hidden { display: none; }
-.login-box {
-    background: #16213e;
-    border-radius: 16px;
-    padding: 2.5rem;
-    width: 100%;
-    max-width: 400px;
-    border: 1px solid #0f3460;
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
-    text-align: center;
-}
-.login-box h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
-.login-box h2 { color: #94a3b8; font-size: 1.2rem; margin-bottom: 1.5rem; }
-.login-setup h2 { color: #e94560; margin-bottom: 0.5rem; }
-.login-setup p { color: #94a3b8; margin-bottom: 1.5rem; }
-.login-error {
-    background: #7f1d1d;
-    color: #fecaca;
-    padding: 0.75rem;
-    border-radius: 6px;
-    margin-bottom: 1rem;
-    font-size: 0.9rem;
-}
-.login-box input {
-    width: 100%;
-    padding: 0.875rem 1rem;
-    border: 1px solid #0f3460;
-    border-radius: 8px;
-    background: #1a1a2e;
-    color: #eee;
-    font-size: 1rem;
-    margin-bottom: 1rem;
-}
-.login-box input:focus { outline: none; border-color: #e94560; }
-.login-box input::placeholder { color: #6b7280; }
-.login-box button {
-    width: 100%;
-    padding: 0.875rem;
-    background: #e94560;
-    border: none;
-    border-radius: 8px;
-    color: white;
-    font-size: 1rem;
-    font-weight: 500;
-    cursor: pointer;
-}
-.login-box button:hover { background: #d63050; }
-.login-box button:disabled { background: #4a4a5e; cursor: not-allowed; }
-
-        /* Emoji support */
-        @font-face {
-            font-family: 'Emoji';
-            src: local('Noto Color Emoji'), local('Apple Color Emoji'), local('Segoe UI Emoji');
-        }
-        .emoji, .sidebar-header h1, .btn-refresh {
-            font-family: 'Emoji', 'Noto Color Emoji', -apple-system, BlinkMacSystemFont, sans-serif;
-        }
-</style>
-
-
+        .login-box input:focus { outline: none; border-color: #e94560; }
+        .login-box .btn { width: 100%; background: #e94560; color: white; }
+        .error-msg { color: #ef4444; font-size: 0.85rem; margin-bottom: 1rem; }
+    </style>
 </head>
 <body>
-    <!-- Login Modal -->
-    <div class="login-overlay hidden" id="login-modal">
+    <div class="sidebar">
+        <h1>🦀 Claw Pen</h1>
+        <div id="agents"></div>
+    </div>
+    <div class="main">
+        <div class="header">
+            <h2 id="title">Select an agent</h2>
+            <span class="status-badge disconnected" id="status">Disconnected</span>
+        </div>
+        <div class="messages" id="messages">
+            <div class="empty">Select an agent to start chatting</div>
+        </div>
+        <div class="input-area" id="input-area" style="display:none">
+            <textarea id="input" placeholder="Type a message..." rows="2"></textarea>
+            <button class="btn btn-send" id="send-btn">Send</button>
+        </div>
+    </div>
+    <div class="login-overlay" id="login" style="display:none">
         <div class="login-box">
-            <h1>🦀 Claw Pen</h1>
-            <div id="login-setup" class="login-setup hidden">
-                <h2>Welcome!</h2>
-                <p>Create an admin password to get started.</p>
-            </div>
-            <h2 id="login-title">Login</h2>
-            <div id="login-error" class="login-error hidden"></div>
-            <form id="login-form">
-                <input type="password" id="login-password" placeholder="Password" autocomplete="current-password" />
-                <button type="submit" id="login-btn">Login</button>
-            </form>
-        </div>
-    </div>
-
-    <div id="sidebar">
-        <div class="sidebar-header">
-            <h1>🦀 Claw Pen</h1>
-            <button class="settings-btn" onclick="showSettingsModal()" title="Settings">⚙️</button>
-        </div>
-        
-        <div class="system-stats">
-            <div class="stat-section">
-                <div class="stat-row">
-                    <span class="stat-label">💾 RAM</span>
-                    <span class="stat-value" id="ram-value">-- / --</span>
-                </div>
-                <div class="stat-bar"><div class="stat-bar-fill" id="ram-bar" style="width:0%"></div></div>
-            </div>
-            
-            <div class="stat-section">
-                <div class="stat-row">
-                    <span class="stat-label">⚡ CPU</span>
-                    <span class="stat-value" id="cpu-value">-- cores</span>
-                </div>
-                <div class="stat-bar"><div class="stat-bar-fill" id="cpu-bar" style="width:0%"></div></div>
-            </div>
-            
-            <div class="stat-row" style="margin-top:12px">
-                <span class="stat-label">Agents</span>
-                <span class="stat-value" id="agent-count">0 / 0</span>
-            </div>
-        </div>
-        
-        <button class="create-agent-btn" onclick="showCreateModal()">+ Create Agent</button>
-        
-        <div class="volume-section">
-            <div class="volume-header">
-                <h3>Volumes</h3>
-                <button class="btn-add-volume" onclick="showVolumeModal()" title="Create volume">+</button>
-            </div>
-            <div class="volume-list" id="volume-list"></div>
-        </div>
-        
-        <div class="agent-list-header">Your Agents</div>
-        <div id="agent-list"></div>
-    </div>
-    
-
-    <div class="modal-overlay" id="settings-modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>⚙️ Settings</h3>
-                <button class="modal-close" onclick="hideSettingsModal()">×</button>
-            </div>
-            <div class="modal-body">
-                <h4 style="margin-bottom: 16px; color: #aaa;">API Keys</h4>
-                <p style="font-size: 13px; color: #666; margin-bottom: 20px;">
-                    Keys are stored encrypted and only used for agent LLM calls.
-                </p>
-                
-                <div class="api-key-row">
-                    <label>Z.AI</label>
-                    <input type="password" id="key-zai" placeholder="sk-..." />
-                    <span class="status" id="status-zai"></span>
-                </div>
-                
-                <div class="api-key-row">
-                    <label>Kimi</label>
-                    <input type="password" id="key-kimi" placeholder="sk-..." />
-                    <span class="status" id="status-kimi"></span>
-                </div>
-                
-                <div class="api-key-row">
-                    <label>Anthropic</label>
-                    <input type="password" id="key-anthropic" placeholder="sk-ant-..." />
-                    <span class="status" id="status-anthropic"></span>
-                </div>
-                
-                <div class="api-key-row">
-                    <label>OpenAI</label>
-                    <input type="password" id="key-openai" placeholder="sk-..." />
-                    <span class="status" id="status-openai"></span>
-                </div>
-                
-                <div class="api-key-row">
-                    <label>Google</label>
-                    <input type="password" id="key-google" placeholder="AIza..." />
-                    <span class="status" id="status-google"></span>
-                </div>
-                
-                <div style="margin-top: 24px; display: flex; gap: 12px;">
-                    <button class="btn-primary" onclick="saveApiKeys()">Save Keys</button>
-                    <button class="btn-secondary" onclick="hideSettingsModal()">Cancel</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div id="main">
-        <div class="tab-bar" id="tab-bar"></div>
-        <div class="chat-header">
-            <h2 id="chat-title">Select an agent</h2>
-            <div style="display: flex; gap: 10px; align-items: center;">
-                <div class="status" id="status">Not connected</div>
-                <button class="btn-refresh" onclick="refreshConnection()" title="Reconnect">🔄</button>
-            </div>
-        </div>
-        
-        <div id="chat-container">
-            <div id="messages"></div>
-            <div class="replying-indicator hidden" id="replying-indicator">
-                <div class="typing-dots"><span></span><span></span><span></span></div>
-                <span>Replying...</span>
-            </div>
-            <div id="input-area">
-                <input type="text" id="message-input" placeholder="Type a message..." disabled>
-                <button id="send-btn" disabled>Send</button>
-            </div>
-        </div>
-    </div>
-    
-    <div class="modal-overlay" id="create-modal">
-        <div class="modal">
-            <h3>Create Agent</h3>
-            <div class="form-group">
-                <label>Name</label>
-                <input type="text" id="new-agent-name" placeholder="my-agent">
-            </div>
-            <div class="form-group">
-                <label>Provider</label>
-                <select id="new-agent-provider" onchange="updateModelOptions()">
-                    <option value="zai">Z.AI</option>
-                    <option value="anthropic">Anthropic</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="kimi">Kimi</option>
-                    <option value="kimi-code">Kimi Code</option>
-                    <option value="google">Google</option>
-                    <option value="access">Access</option>
-                    <option value="huggingface">Hugging Face</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Model</label>
-                <select id="new-agent-model"></select>
-            </div>
-            <div class="form-group">
-                <label>API Key</label>
-                <input type="password" id="new-agent-apikey" placeholder="Your API key for this provider">
-                <div class="api-key-hint" id="apikey-hint">Key is stored per-agent, not shared</div>
-            </div>
-            <div class="form-group">
-                <label>Memory (MB)</label>
-                <input type="number" id="new-agent-memory" value="2048">
-            </div>
-            <div class="form-group">
-                <label>Volumes</label>
-                <div id="volume-checkboxes" style="max-height: 100px; overflow-y: auto; background: #0f0f1a; border-radius: 6px; padding: 8px;">
-                    <div style="color: #666; font-size: 12px;">No volumes available</div>
-                </div>
-            </div>
-            <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="hideCreateModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="createAgent()">Create</button>
-            </div>
-        </div>
-    </div>
-    
-    <!-- Volume Modal -->
-    <div class="modal-overlay" id="volume-modal">
-        <div class="modal">
-            <h3>Create Volume</h3>
-            <div class="form-group">
-                <label>Name</label>
-                <input type="text" id="new-volume-name" placeholder="my-data">
-            </div>
-            <div class="form-group">
-                <label>Host Path (leave empty for managed volume)</label>
-                <input type="text" id="new-volume-path" placeholder="/home/user/projects/myapp">
-                <div class="api-key-hint">Managed volumes are stored in ~/.claw-pen/volumes/</div>
-            </div>
-            <div class="form-group">
-                <label>Mount Point in Container</label>
-                <input type="text" id="new-volume-target" value="/data">
-            </div>
-            <div class="form-group">
-                <label style="display: flex; align-items: center; gap: 8px;">
-                    <input type="checkbox" id="new-volume-readonly">
-                    <span>Read Only</span>
-                </label>
-            </div>
-            <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="hideVolumeModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="createVolume()">Create</button>
-            </div>
+            <h2>🦀 Claw Pen</h2>
+            <p>Enter password</p>
+            <div class="error-msg" id="login-err" style="display:none"></div>
+            <input type="password" id="pwd" placeholder="Password">
+            <button class="btn" id="login-btn">Login</button>
         </div>
     </div>
 
     <script>
-        let agents = [], selectedAgent = null, isConnected = false, currentStreamEl = null, chatHistory = {};
-        let volumes = [];  // Volume list
-        const ORCHESTRATOR_URL = 'http://localhost:8081';
-        let authToken = localStorage.getItem('clawpen_token');
-        let globalKeys = {};  // Store global API key status
-        let intervalsSet = false;  // Track if we've started polling
-        let listenersRegistered = false;  // Track if Tauri listeners are registered
-        
-        // Floating window mode
-        let isFloatingMode = false;
-        let floatingAgentId = null;
-        let floatingAgentName = null;
-        let floatingPort = null;
-        let windowLabel = null;
-        
-        function checkFloatingMode() {
-            const params = new URLSearchParams(window.location.search);
-            isFloatingMode = params.get('floating') === '1';
-            floatingAgentId = params.get('agent_id');
-            floatingAgentName = params.get('agent_name');
-            floatingPort = parseInt(params.get('port') || '18790');
-            
-            if (isFloatingMode) {
-                document.body.classList.add('floating-mode');
-                document.getElementById('chat-title').textContent = floatingAgentName || 'Agent';
-                console.log('[Floating] Mode enabled for', floatingAgentName, 'on port', floatingPort);
-            }
-        }
-        
-        // Tab bar rendering
-        function renderTabs() {
-            if (isFloatingMode) return;
-            
-            const tabBar = document.getElementById('tab-bar');
-            const runningAgents = agents.filter(a => a.status === 'running');
-            
-            if (runningAgents.length === 0) {
-                tabBar.classList.add('hidden');
-                return;
-            }
-            
-            tabBar.classList.remove('hidden');
-            tabBar.innerHTML = runningAgents.map(a => {
-                const isActive = selectedAgent?.id === a.id;
-                const port = a.config?.env_vars?.PORT || '18790';
-                return `
-                    <button class="tab ${isActive ? 'active' : ''}" onclick="selectAgent(agents.find(x => x.id === '${a.id}'))">
-                        <span class="tab-status ${isActive && isConnected ? 'connected' : isActive ? 'connecting' : ''}"></span>
-                        <span>${a.name}</span>
-                        <button class="tab-popout" onclick="event.stopPropagation(); popOutAgent('${a.id}', '${a.name}', ${port})" title="Pop out to window">⬚</button>
-                    </button>
-                `;
-            }).join('');
-        }
-        
-        async function popOutAgent(agentId, agentName, port) {
-            console.log('[PopOut] Creating floating window for', agentName);
+        const API = 'http://localhost:8081';
+        var agents = [];
+        var active = null;
+        var msgs = [];
+        var connected = false;
+        var authed = false;
+        var hasTauri = typeof window.__TAURI__ !== 'undefined';
+
+        // DOM refs
+        var agentsEl = document.getElementById('agents');
+        var titleEl = document.getElementById('title');
+        var statusEl = document.getElementById('status');
+        var messagesEl = document.getElementById('messages');
+        var inputAreaEl = document.getElementById('input-area');
+        var inputEl = document.getElementById('input');
+        var sendBtn = document.getElementById('send-btn');
+        var loginEl = document.getElementById('login');
+        var pwdEl = document.getElementById('pwd');
+        var loginBtn = document.getElementById('login-btn');
+        var loginErrEl = document.getElementById('login-err');
+
+        // Init
+        async function init() {
             try {
-                if (window.__TAURI__) {
-                    const label = await window.__TAURI__.core.invoke('pop_out_agent', { 
-                        agentId, 
-                        agentName, 
-                        port 
-                    });
-                    console.log('[PopOut] Created window:', label);
-                }
-            } catch (e) {
-                console.error('[PopOut] Failed:', e);
-                alert('Failed to pop out: ' + e);
-            }
-        }
-        
-        async function authFetch(url, options = {}) {
-            console.log('[authFetch]', url, authToken ? 'with token' : 'no token');
-            if (authToken) {
-                options.headers = options.headers || {};
-                options.headers['Authorization'] = `Bearer ${authToken}`;
-            }
-            const res = await fetch(url, options);
-            if (res.status === 401) {
-                authToken = null;
-                localStorage.removeItem('clawpen_token');
-                checkAuthAndShowModal();
-            }
-            return res;
-        }
-        
-        let authStatus = null;
-        
-        function showLoginModal(isSetup = false) {
-            document.getElementById('login-modal').classList.remove('hidden');
-            document.getElementById('login-setup').classList.toggle('hidden', !isSetup);
-            document.getElementById('login-title').classList.toggle('hidden', isSetup);
-            document.getElementById('login-password').placeholder = isSetup ? 'Create password (min 8 chars)' : 'Password';
-            document.getElementById('login-btn').textContent = isSetup ? 'Create Account' : 'Login';
-            document.getElementById('login-password').focus();
-        }
-        
-        function hideLoginModal() {
-            document.getElementById('login-modal').classList.add('hidden');
-            // Now fetch data after successful login
-            fetchAgents();
-            fetchSystemStats();
-            if (!intervalsSet) {
-                setInterval(fetchAgents, 5000);
-                setInterval(fetchSystemStats, 3000);
-                intervalsSet = true;
-            }
-        }
-        
-        function showLoginError(msg) {
-            const el = document.getElementById('login-error');
-            el.textContent = msg;
-            el.classList.remove('hidden');
-        }
-        
-        function hideLoginError() {
-            document.getElementById('login-error').classList.add('hidden');
-        }
-        
-        async function checkAuthStatus() {
-            try {
-                const res = await fetch(`${ORCHESTRATOR_URL}/auth/status`);
-                authStatus = await res.json();
-                console.log('[auth] status:', authStatus);
-                return authStatus;
-            } catch (e) {
-                console.error('[auth] failed to check status:', e);
-                return null;
-            }
-        }
-        
-        async function login(password) {
-            console.log('[login] attempting login...');
-            hideLoginError();
-            
-            // If first-time setup, register first
-            if (authStatus && !authStatus.has_admin) {
-                const regRes = await fetch(`${ORCHESTRATOR_URL}/auth/register`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password })
-                });
-                if (!regRes.ok) {
-                    const err = await regRes.text();
-                    showLoginError('Registration failed: ' + err);
-                    return false;
-                }
-            }
-            
-            try {
-                const res = await fetch(`${ORCHESTRATOR_URL}/auth/login`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password })
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    authToken = data.access_token;
-                    console.log('[login] success');
-                    localStorage.setItem('clawpen_token', authToken);
-                    hideLoginModal();
-                    return true;
-                } else {
-                    const err = await res.text();
-                    showLoginError('Invalid password');
-                }
-            } catch (e) {
-                console.error('Login failed:', e);
-                showLoginError('Connection failed');
-            }
-            return false;
-        }
-        
-        document.getElementById('login-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const password = document.getElementById('login-password').value;
-            if (password.length < 8) {
-                showLoginError('Password must be at least 8 characters');
-                return;
-            }
-            document.getElementById('login-btn').disabled = true;
-            document.getElementById('login-btn').textContent = 'Please wait...';
-            await login(password);
-            document.getElementById('login-btn').disabled = false;
-            document.getElementById('login-btn').textContent = authStatus && !authStatus.has_admin ? 'Create Account' : 'Login';
-        });
-        
-        async function checkAuthAndShowModal() {
-            console.log('[auth] checking...');
-            const status = await checkAuthStatus();
-            if (!status) {
-                showLoginError('Cannot connect to server');
-                showLoginModal();
-                return false;
-            }
-            
-            // Auth disabled - proceed
-            if (!status.auth_enabled) {
-                console.log('[login] auth disabled');
-                return true;
-            }
-            
-            // Already have a token - try it
-            if (authToken) {
-                console.log('[login] have token, testing...');
-                return true;
-            }
-            
-            // Need to login
-            showLoginModal(!status.has_admin);
-            return false;
-        }
-        
-        const providerModels = {
-            zai: [{ value: 'glm-5', label: 'GLM-5' }],
-            anthropic: [{ value: 'claude-sonnet-4-5', label: 'Sonnet 4.5' }],
-            openai: [{ value: 'gpt-4.1', label: 'GPT-4.1' }],
-            kimi: [{ value: 'kimi-k2.5', label: 'Kimi K2.5' }, { value: 'moonshot-v1-128k', label: 'Moonshot 128K' }, { value: 'moonshot-v1-32k', label: 'Moonshot 32K' }],
-            'kimi-code': [{ value: 'kimi-code', label: 'Kimi Code' }],
-            google: [{ value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' }],
-            access: [{ value: 'access-standard', label: 'Access Standard' }],
-            huggingface: [{ value: 'meta-llama/Llama-3.3-70B-Instruct', label: 'Llama 3.3 70B' }]
-        };
-        
-        const providerKeyNames = {
-            zai: 'Z.AI',
-            anthropic: 'Anthropic',
-            openai: 'OpenAI',
-            kimi: 'Kimi',
-            'kimi-code': 'Kimi Code',
-            google: 'Google',
-            access: 'Access',
-            huggingface: 'Hugging Face'
-        };
-        
-        const statusEl = document.getElementById('status');
-        const messagesEl = document.getElementById('messages');
-        const inputEl = document.getElementById('message-input');
-        const sendBtn = document.getElementById('send-btn');
-        
-        async function fetchSystemStats() {
-            try {
-                const res = await authFetch(`${ORCHESTRATOR_URL}/api/system/stats`);
-                const stats = await res.json();
-                
-                const ramPercent = (stats.used_memory_mb / stats.total_memory_mb * 100).toFixed(0);
-                document.getElementById('ram-value').textContent = 
-                    `${(stats.used_memory_mb / 1024).toFixed(1)} / ${(stats.total_memory_mb / 1024).toFixed(1)} GB`;
-                const ramBar = document.getElementById('ram-bar');
-                ramBar.style.width = ramPercent + '%';
-                ramBar.className = 'stat-bar-fill ' + (ramPercent > 80 ? 'danger' : ramPercent > 60 ? 'warning' : 'ok');
-                
-                const cpuPercent = (stats.agent_memory_mb / 1024 / (stats.total_memory_mb / 1024) * 100).toFixed(0);
-                document.getElementById('cpu-value').textContent = `${stats.total_cpu_cores.toFixed(0)} cores`;
-                const cpuBar = document.getElementById('cpu-bar');
-                cpuBar.style.width = Math.min(cpuPercent, 100) + '%';
-                cpuBar.className = 'stat-bar-fill ' + (cpuPercent > 80 ? 'danger' : cpuPercent > 60 ? 'warning' : 'ok');
-                
-                document.getElementById('agent-count').textContent = `${stats.running_agents} / ${stats.agent_count}`;
-            } catch (e) {}
-        }
-        
-        async function loadGlobalKeys() {
-            try {
-                const res = await authFetch(`${ORCHESTRATOR_URL}/api/keys`);
-                const keys = await res.json();
-                globalKeys = {};
-                keys.forEach(k => { if (k.has_key) globalKeys[k.provider] = true; });
-            } catch (e) { console.error('Failed to load global keys:', e); }
-        }
-        
-        // === Volume Management ===
-        async function fetchVolumes() {
-            try {
-                const res = await authFetch(`${ORCHESTRATOR_URL}/api/volumes`);
-                volumes = await res.json();
-                renderVolumes();
-                updateVolumeCheckboxes();
-            } catch (e) { console.error('Failed to fetch volumes:', e); }
-        }
-        
-        function renderVolumes() {
-            if (isFloatingMode) return;
-            const list = document.getElementById('volume-list');
-            if (volumes.length === 0) {
-                list.innerHTML = '<div style="color: #666; font-size: 12px; padding: 8px;">No volumes</div>';
-                return;
-            }
-            list.innerHTML = volumes.map(v => `
-                <div class="volume-item">
-                    <div>
-                        <div class="volume-name">${v.name}</div>
-                        <div class="volume-target">→ ${v.default_target}</div>
-                    </div>
-                    <div class="volume-actions">
-                        <button onclick="deleteVolume('${v.id}', '${v.name}')" title="Delete">🗑️</button>
-                    </div>
-                </div>
-            `).join('');
-        }
-        
-        function updateVolumeCheckboxes() {
-            const container = document.getElementById('volume-checkboxes');
-            if (volumes.length === 0) {
-                container.innerHTML = '<div style="color: #666; font-size: 12px;">No volumes available. <a href="#" onclick="showVolumeModal()">Create one</a></div>';
-                return;
-            }
-            container.innerHTML = volumes.map(v => `
-                <label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px;">
-                    <input type="checkbox" data-volume-id="${v.id}" data-volume-name="${v.name}" data-volume-target="${v.default_target}" data-volume-readonly="${v.read_only}">
-                    <span>${v.name}</span>
-                    <span style="color: #666; font-size: 11px;">→ ${v.default_target}</span>
-                </label>
-            `).join('');
-        }
-        
-        function showVolumeModal() {
-            document.getElementById('volume-modal').classList.add('active');
-            document.getElementById('new-volume-name').value = '';
-            document.getElementById('new-volume-path').value = '';
-            document.getElementById('new-volume-target').value = '/data';
-            document.getElementById('new-volume-readonly').checked = false;
-        }
-        
-        function hideVolumeModal() {
-            document.getElementById('volume-modal').classList.remove('active');
-        }
-        
-        async function createVolume() {
-            const name = document.getElementById('new-volume-name').value.trim();
-            const hostPath = document.getElementById('new-volume-path').value.trim();
-            const target = document.getElementById('new-volume-target').value.trim() || '/data';
-            const readOnly = document.getElementById('new-volume-readonly').checked;
-            
-            if (!name) { alert('Enter a name'); return; }
-            
-            try {
-                const res = await authFetch(`${ORCHESTRATOR_URL}/api/volumes`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        name,
-                        host_path: hostPath || null,
-                        default_target: target,
-                        read_only: readOnly
-                    })
-                });
-                if (res.ok) {
-                    hideVolumeModal();
-                    fetchVolumes();
-                } else {
-                    alert('Failed: ' + await res.text());
-                }
-            } catch (e) { alert('Error: ' + e); }
-        }
-        
-        async function deleteVolume(id, name) {
-            if (!confirm(`Delete volume "${name}"?`)) return;
-            try {
-                const res = await authFetch(`${ORCHESTRATOR_URL}/api/volumes/${id}`, { method: 'DELETE' });
-                if (res.ok) fetchVolumes();
-                else alert('Failed: ' + await res.text());
-            } catch (e) { alert('Error: ' + e); }
-        }
-        
-        function updateModelOptions() {
-            const provider = document.getElementById('new-agent-provider').value;
-            document.getElementById('new-agent-model').innerHTML = 
-                providerModels[provider].map(m => `<option value="${m.value}">${m.label}</option>`).join('');
-            // Check if global key exists for this provider
-            const globalKeyStatus = globalKeys[provider] ? '✓ Global key available' : 'No global key';
-            document.getElementById('apikey-hint').textContent = 
-                `${providerKeyNames[provider]} API key (optional - ${globalKeyStatus})`;
-        }
-        
-        async function fetchAgents() {
-            try {
-                const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents`);
-                agents = await res.json();
-                renderAgents();
-            } catch (e) {}
-        }
-        
-        function renderAgents() {
-            if (isFloatingMode) return;  // Skip in floating mode
-            
-            document.getElementById('agent-list').innerHTML = agents.map(a => `
-                <div class="agent-card${selectedAgent?.id === a.id ? ' selected' : ''}" onclick="selectAgent(agents.find(x => x.id === '${a.id}'))">
-                    <div class="agent-name">${a.name} <span class="agent-status ${a.status}">${a.status}</span></div>
-                    <div class="agent-model">${a.config?.llm_provider}/${a.config?.llm_model}</div>
-                    <div class="agent-resources"><span>💾 ${(a.config?.memory_mb / 1024 || 2).toFixed(1)} GB</span></div>
-                    <div class="agent-actions">
-                        ${a.status === 'running' 
-                            ? `<button class="btn-stop" onclick="event.stopPropagation();stopAgent('${a.id}')">Stop</button>`
-                            : `<button class="btn-start" onclick="event.stopPropagation();startAgent('${a.id}')">Start</button>`}
-                        <button class="btn-delete" onclick="event.stopPropagation();deleteAgent('${a.id}','${a.name}')">Delete</button>
-                    </div>
-                </div>
-            `).join('');
-            
-            renderTabs();  // Update tab bar when agents change
-        }
-        
-        async function startAgent(id) {
-            console.log('[startAgent] starting', id);
-            try {
-                const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents/${id}/start`, { method: 'POST' });
-                if (!res.ok) {
-                    const err = await res.text();
-                    console.error('[startAgent] failed:', err);
-                    alert('Failed to start: ' + err);
+                var s = await fetch(API + '/auth/status').then(function(r) { return r.json(); });
+                if (s.auth_enabled && !localStorage.getItem('token')) {
+                    loginEl.style.display = 'flex';
                     return;
                 }
-                console.log('[startAgent] started successfully');
-                setTimeout(() => { fetchAgents(); fetchSystemStats(); }, 2000);
-            } catch (e) {
-                console.error('[startAgent] error:', e);
-                alert('Error: ' + e);
-            }
+            } catch(e) {}
+            await loadAgents();
+            if (hasTauri) setupEvents();
         }
-        
-        async function stopAgent(id) {
-            hideReplying();
-            await authFetch(`${ORCHESTRATOR_URL}/api/agents/${id}/stop`, { method: 'POST' });
-            fetchAgents();
-            fetchSystemStats();
-        }
-        
-        async function deleteAgent(id, name) {
-            if (!confirm(`Delete "${name}"?`)) return;
-            hideReplying();
-            await authFetch(`${ORCHESTRATOR_URL}/api/agents/${id}`, { method: 'DELETE' });
-            delete chatHistory[name];
-            fetchAgents();
-            fetchSystemStats();
-            if (selectedAgent?.id === id) {
-                selectedAgent = null;
-                document.getElementById('chat-title').textContent = 'Select an agent';
-                messagesEl.innerHTML = '';
-                inputEl.disabled = sendBtn.disabled = true;
-                setStatus('Not connected', '');
-            }
-        }
-        
-        function selectAgent(agent) {
-            hideReplying();  // Hide indicator when switching agents
-            if (selectedAgent && messagesEl.children.length) chatHistory[selectedAgent.name] = messagesEl.innerHTML;
-            selectedAgent = agent;
-            document.getElementById('chat-title').textContent = agent.name;
-            renderAgents();
-            renderTabs();  // Update tab selection
-            messagesEl.innerHTML = chatHistory[agent.name] || '<div class="message system">Connecting...</div>';
-            if (chatHistory[agent.name]) messagesEl.scrollTop = messagesEl.scrollHeight;
-            if (agent.status === 'running') connectToAgent(agent);
-            else { setStatus('Stopped', 'error'); inputEl.disabled = sendBtn.disabled = true; }
-        }
-        
-        async function connectToAgent(agent) {
-            setStatus('Connecting...', 'connecting');
-            // Connect directly to agent's WebSocket (agents use host networking on port 18790)
-            const port = agent.config?.env_vars?.PORT || '18790';
-            const wsUrl = `ws://localhost:${port}/ws`;
-            console.log('[connectToAgent] connecting to', wsUrl);
-            try {
-                if (window.__TAURI__) {
-                    await window.__TAURI__.core.invoke('connect_websocket', { url: wsUrl });
-                }
-            } catch (e) { 
-                console.error('[connectToAgent] error:', e);
-                setStatus('Error: ' + e, 'error'); 
-            }
-        }
-        
-        async function showCreateModal() { 
-            await loadGlobalKeys();
-            updateModelOptions(); 
-            document.getElementById('create-modal').classList.add('active'); 
-        }
-        function hideCreateModal() { document.getElementById('create-modal').classList.remove('active'); }
-        
-        async function createAgent() {
-            const name = document.getElementById('new-agent-name').value.trim();
-            const provider = document.getElementById('new-agent-provider').value;
-            const model = document.getElementById('new-agent-model').value;
-            const apiKey = document.getElementById('new-agent-apikey').value.trim();
-            const memory = parseInt(document.getElementById('new-agent-memory').value);
-            
-            if (!name) { alert('Enter a name'); return; }
-            // API key is optional - will use global key if available
-            
-            try {
-                const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        name, 
-                        template: 'openclaw-agent', 
-                        config: { 
-                            llm_provider: provider, 
-                            llm_model: model, 
-                            memory_mb: memory,
-                            api_key: apiKey
-                        } 
-                    })
-                });
-                if (res.ok) { 
-                    hideCreateModal(); 
-                    document.getElementById('new-agent-apikey').value = '';
-                    fetchAgents(); 
-                    fetchSystemStats(); 
-                }
-                else alert('Failed: ' + await res.text());
-            } catch (e) { alert('Error: ' + e); }
-        }
-        
-        function setStatus(text, state) { statusEl.textContent = text; statusEl.className = 'status ' + state; }
-        function setConnected(c) { isConnected = c; inputEl.disabled = sendBtn.disabled = !c; if (c) setStatus('Connected', 'connected'); }
-        
-        function refreshConnection() {
-            if (!selectedAgent) return;
-            console.log('[refresh] Reconnecting to', selectedAgent.name);
-            messagesEl.innerHTML = '<div class="message system">Reconnecting...</div>';
-            connectToAgent(selectedAgent);
-        }
-        
-        function addMessage(text, type = 'system') {
-            const div = document.createElement('div');
-            div.className = 'message ' + type;
-            div.textContent = text;
-            messagesEl.appendChild(div);
-            messagesEl.scrollTop = messagesEl.scrollHeight;
-            return div;
-        }
-        
-        function appendToStream(text) {
-            hideReplying();  // Hide indicator when response starts
-            if (!currentStreamEl) currentStreamEl = addMessage('', 'assistant streaming');
-            currentStreamEl.textContent += text;
-            messagesEl.scrollTop = messagesEl.scrollHeight;
-        }
-        
-        function finalizeStream(text) {
-            hideReplying();  // Hide indicator when done
-            if (currentStreamEl) {
-                if (text) currentStreamEl.textContent = text;
-                currentStreamEl.classList.remove('streaming');
-            } else if (text) addMessage(text, 'assistant');
-            currentStreamEl = null;
-        }
-        
-        const replyingIndicator = document.getElementById('replying-indicator');
-        
-        function showReplying() { replyingIndicator.classList.remove('hidden'); messagesEl.scrollTop = messagesEl.scrollHeight; }
-        function hideReplying() { replyingIndicator.classList.add('hidden'); }
-        
-        async function sendMessage() {
-            const text = inputEl.value.trim();
-            if (!text || !isConnected) return;
-            addMessage(text, 'user');
-            inputEl.value = '';
-            showReplying();  // Show "Replying..." indicator
-            try {
-                if (isFloatingMode && windowLabel) {
-                    await window.__TAURI__.core.invoke('send_floating_message', { windowLabel, text });
-                } else {
-                    await window.__TAURI__.core.invoke('send_chat_message', { text });
-                }
-            } catch (e) { hideReplying(); addMessage('Error: ' + e, 'system'); }
-        }
-        
-        sendBtn.addEventListener('click', sendMessage);
-        inputEl.addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(); });
-        
-        function extractText(msg) {
-            if (typeof msg === 'string') return msg;
-            if (msg.text) return msg.text;
-            if (msg.content) {
-                if (typeof msg.content === 'string') return msg.content;
-                if (Array.isArray(msg.content)) return msg.content.filter(c => c.type === 'text').map(c => c.text).join('');
-            }
-            return '';
-        }
-        
-        
-        // === Settings Modal ===
-        function showSettingsModal() {
-            loadApiKeys();
-            document.getElementById('settings-modal').classList.add('active');
-        }
-        
-        function hideSettingsModal() {
-            document.getElementById('settings-modal').classList.remove('active');
-        }
-        
-        async function loadApiKeys() {
-            try {
-                const res = await authFetch(`${ORCHESTRATOR_URL}/api/keys`);
-                const keys = await res.json();
-                
-                // Update status indicators
-                keys.forEach(k => {
-                    const status = document.getElementById(`status-${k.provider}`);
-                    if (status) {
-                        status.textContent = k.has_key ? '✓' : '—';
-                        status.className = 'status ' + (k.has_key ? 'has-key' : 'no-key');
-                    }
-                });
-            } catch (e) {
-                console.error('Failed to load API keys status:', e);
-            }
-        }
-        
-        async function saveApiKeys() {
-            const providers = ['zai', 'kimi', 'anthropic', 'openai', 'google'];
-            let saved = 0;
-            
-            for (const provider of providers) {
-                const input = document.getElementById(`key-${provider}`);
-                const value = input.value.trim();
-                
-                if (value) {
-                    try {
-                        const res = await authFetch(`${ORCHESTRATOR_URL}/api/keys`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ provider: provider, key: value })
-                        });
-                        
-                        if (res.ok) {
-                            saved++;
-                            input.value = ''; // Clear after save
-                            input.placeholder = '✓ Saved';
-                        }
-                    } catch (e) {
-                        console.error(`Failed to save ${provider} key:`, e);
-                    }
-                }
-            }
-            
-            if (saved > 0) {
-                alert(`Saved ${saved} API key(s)`);
-                loadApiKeys();
-            }
-            
-            hideSettingsModal();
-        }
-        
 
-        async function init() {
-            console.log('[init] starting...');
+        loginBtn.onclick = async function() {
+            var pwd = pwdEl.value;
+            try {
+                var r = await fetch(API + '/auth/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({password: pwd})
+                });
+                if (r.ok) {
+                    var d = await r.json();
+                    localStorage.setItem('token', d.access_token);
+                    loginEl.style.display = 'none';
+                    await loadAgents();
+                    if (hasTauri) setupEvents();
+                } else {
+                    loginErrEl.textContent = 'Invalid password';
+                    loginErrEl.style.display = 'block';
+                }
+            } catch(e) {
+                loginErrEl.textContent = 'Connection failed';
+                loginErrEl.style.display = 'block';
+            }
+        };
+
+        pwdEl.onkeydown = function(e) {
+            if (e.key === 'Enter') loginBtn.click();
+        };
+
+        async function loadAgents() {
+            var t = localStorage.getItem('token');
+            var h = t ? {'Authorization': 'Bearer ' + t} : {};
+            try {
+                var r = await fetch(API + '/api/agents', {headers: h});
+                if (r.ok) {
+                    agents = await r.json();
+                    renderAgents();
+                }
+            } catch(e) {}
+        }
+
+        function renderAgents() {
+            if (!agents.length) {
+                agentsEl.innerHTML = '<div style="color:#666;padding:1rem;text-align:center">No agents</div>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < agents.length; i++) {
+                var a = agents[i];
+                var prov = (a.config && a.config.llm_provider) || 'unknown';
+                var model = (a.config && a.config.llm_model) || 'default';
+                var ram = (a.config && a.config.memory_mb) || 1024;
+                var cpu = (a.config && a.config.cpu_cores) || 1;
+                var isActive = active && active.id === a.id;
+                html += '<div class="agent-card ' + (isActive ? 'active' : '') + '" data-idx="' + i + '">' +
+                    '<div class="agent-name">' + esc(a.name) + '</div>' +
+                    '<div class="agent-status ' + a.status.toLowerCase() + '">' + a.status + '</div>' +
+                    '<div class="agent-meta">' +
+                        '<span>🤖 ' + prov + '</span>' +
+                        '<span>🧠 ' + cut(model, 10) + '</span>' +
+                        '<span>💾 ' + (ram >= 1024 ? (ram/1024).toFixed(1) + 'G' : ram + 'M') + '</span>' +
+                        '<span>⚡ ' + cpu + 'c</span>' +
+                    '</div>' +
+                '</div>';
+            }
+            agentsEl.innerHTML = html;
             
-            // Check if we're in floating window mode
-            checkFloatingMode();
+            // Add click handlers
+            var cards = agentsEl.querySelectorAll('.agent-card');
+            for (var j = 0; j < cards.length; j++) {
+                cards[j].onclick = function() {
+                    var idx = parseInt(this.getAttribute('data-idx'));
+                    selectAgent(agents[idx]);
+                };
+            }
+        }
+
+        function esc(s) {
+            return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+
+        function cut(s, n) {
+            return s.length > n ? s.slice(0, n-2) + '..' : s;
+        }
+
+        async function selectAgent(a) {
+            active = a;
+            msgs = [];
+            renderAgents();
+            renderMessages();
+            titleEl.textContent = a.name;
+            inputAreaEl.style.display = 'flex';
             
-            if (isFloatingMode) {
-                // Floating window: skip auth, connect directly to agent
-                console.log('[init] floating mode - connecting to', floatingAgentName);
-                document.getElementById('chat-title').textContent = floatingAgentName || 'Agent';
-                
-                if (window.__TAURI__) {
-                    listenersRegistered = true;
-                    
-                    // Get window label from Tauri
-                    try {
-                        const win = window.__TAURI__.window.getCurrentWindow();
-                        windowLabel = win.label;
-                        console.log('[init] window label:', windowLabel);
-                    } catch (e) {
-                        console.error('[init] failed to get window label:', e);
+            if (!hasTauri) return;
+            
+            setStatus('connecting');
+            var port = (a.config && a.config.env_vars && a.config.env_vars.PORT) || 18790;
+            try {
+                await window.__TAURI__.core.invoke('connect_websocket', {url: 'ws://localhost:' + port + '/ws'});
+            } catch(e) {
+                setStatus('disconnected');
+            }
+        }
+
+        async function setupEvents() {
+            await window.__TAURI__.event.listen('ws-connected', function(e) {
+                connected = e.payload;
+                setStatus(connected ? 'connecting' : 'disconnected');
+            });
+            await window.__TAURI__.event.listen('ws-authenticated', function(e) {
+                authed = e.payload;
+                setStatus(authed ? 'connected' : 'disconnected');
+                renderMessages();
+            });
+            await window.__TAURI__.event.listen('ws-message', function(e) {
+                handleMsg(e.payload);
+            });
+            await window.__TAURI__.event.listen('ws-error', function(e) {
+                console.log('Error:', e.payload);
+                setStatus('disconnected');
+            });
+        }
+
+        function setStatus(s) {
+            statusEl.className = 'status-badge ' + s;
+            statusEl.textContent = s === 'connected' ? 'Connected' : s === 'connecting' ? 'Connecting...' : 'Disconnected';
+        }
+
+        function handleMsg(d) {
+            if (!d) return;
+            var m = d;
+            if (typeof d === 'string') {
+                try { m = JSON.parse(d); } catch(e) { return; }
+            }
+            
+            // Agent stream content
+            if (m.event === 'agent' && m.payload) {
+                var p = m.payload;
+                if (p.stream === 'content' && p.data) {
+                    var txt = p.data.delta || p.data.content || '';
+                    if (txt) {
+                        var last = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+                        if (last && last.role === 'assistant' && !last.done) {
+                            last.text = last.text + txt;
+                        } else {
+                            msgs.push({role: 'assistant', text: txt, done: false});
+                        }
+                        renderMessages();
                     }
-                    
-                    // Listen for events targeted at this window
-                    await window.__TAURI__.event.listen('ws-connected', e => { 
-                        if (e.payload) setConnected(true); 
-                        else { setConnected(false); hideReplying(); }
-                    });
-                    await window.__TAURI__.event.listen('ws-authenticated', () => {
-                        console.log('[Floating] Authenticated!');
-                        setConnected(true);
-                    });
-                    await window.__TAURI__.event.listen('ws-message', event => {
-                        try {
-                            const data = JSON.parse(event.payload);
-                            if (data.type === 'event' && data.event === 'chat') {
-                                const p = data.payload;
-                                const text = extractText(p.message);
-                                if (p.state === 'delta' && text) appendToStream(text);
-                                else if (p.state === 'final') finalizeStream(text);
-                                else if (p.state === 'error') { hideReplying(); finalizeStream(); addMessage('Error: ' + (p.errorMessage || 'Unknown'), 'system'); }
-                            }
-                        } catch (e) {}
-                    });
-                    await window.__TAURI__.event.listen('ws-error', event => {
-                        console.error('[Floating] WS error:', event.payload);
-                        addMessage('Error: ' + event.payload, 'system');
-                    });
-                    
-                    // Connect to the agent
-                    setStatus('Connecting...', 'connecting');
-                    await window.__TAURI__.core.invoke('connect_floating_window', { windowLabel });
+                } else if (p.stream === 'lifecycle' && p.data) {
+                    if (p.data.phase === 'end' || p.data.phase === 'error') {
+                        var last2 = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+                        if (last2) last2.done = true;
+                        if (p.data.phase === 'error' && p.data.error) {
+                            msgs.push({role: 'assistant', text: '⚠️ ' + p.data.error, done: true});
+                            renderMessages();
+                        }
+                    }
                 }
                 return;
             }
             
-            // Normal mode: check auth, fetch agents
-            const loggedIn = await checkAuthAndShowModal();
-            if (!loggedIn) {
-                console.log('[init] waiting for login...');
-                return;  // Stop here - login modal will call fetchAgents after success
+            // Chat message
+            if (m.event === 'chat.message' && m.params && m.params.content) {
+                msgs.push({role: m.params.role || 'assistant', text: m.params.content, done: true});
+                renderMessages();
+                return;
             }
-            await fetchAgents();
-            await fetchSystemStats();
-            setInterval(fetchAgents, 5000);
-            setInterval(fetchSystemStats, 3000);
             
-            if (window.__TAURI__ && !listenersRegistered) {
-                listenersRegistered = true;
-                await window.__TAURI__.event.listen('ws-connected', e => { 
-                    if (e.payload) setConnected(true); 
-                    else { setConnected(false); hideReplying(); }
-                    renderTabs();  // Update tab status
-                });
-                await window.__TAURI__.event.listen('ws-authenticated', () => {
-                    setConnected(true);
-                    renderTabs();
-                });
-                await window.__TAURI__.event.listen('ws-message', event => {
-                    try {
-                        const data = JSON.parse(event.payload);
-                        if (data.type === 'event' && data.event === 'chat') {
-                            const p = data.payload;
-                            const text = extractText(p.message);
-                            if (p.state === 'delta' && text) appendToStream(text);
-                            else if (p.state === 'final') finalizeStream(text);
-                            else if (p.state === 'error') { hideReplying(); finalizeStream(); addMessage('Error: ' + (p.errorMessage || 'Unknown'), 'system'); }
-                        }
-                    } catch (e) {}
-                });
+            // Response with content
+            if (m.result && m.result.content) {
+                msgs.push({role: m.result.role || 'assistant', text: m.result.content, done: true});
+                renderMessages();
             }
         }
-        
+
+        function renderMessages() {
+            if (!msgs.length) {
+                messagesEl.innerHTML = '<div class="empty">Start a conversation</div>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < msgs.length; i++) {
+                var msg = msgs[i];
+                html += '<div class="msg ' + msg.role + '">' +
+                    '<div class="msg-role">' + (msg.role === 'user' ? 'You' : (active ? active.name : 'Agent')) + '</div>' +
+                    '<div class="msg-text">' + esc(msg.text) + '</div>' +
+                '</div>';
+            }
+            messagesEl.innerHTML = html;
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        sendBtn.onclick = async function() {
+            var txt = inputEl.value.trim();
+            if (!txt || !authed || !hasTauri) return;
+            
+            msgs.push({role: 'user', text: txt, done: true});
+            renderMessages();
+            inputEl.value = '';
+            
+            try {
+                await window.__TAURI__.core.invoke('send_chat_message', {text: txt});
+            } catch(e) {
+                console.log('Send error:', e);
+            }
+        };
+
+        inputEl.onkeydown = function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendBtn.click();
+            }
+        };
+
+        setInterval(loadAgents, 30000);
         init();
     </script>
 </body>

@@ -23,6 +23,7 @@ use tokio::sync::mpsc::{channel, Sender};
 use tokio_util::sync::CancellationToken;
 use tokio_tungstenite::connect_async_with_config;
 use tungstenite::handshake::client::generate_key;
+use url::Url;
 
 static REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -208,6 +209,15 @@ async fn connect_websocket(
     let signing_key_bytes = device_keys.signing_key.to_bytes();
     let device_id = device_keys.device_id.clone();
 
+    // Parse URL to extract host for headers
+    let parsed_url = Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
+    let host = parsed_url.host_str().unwrap_or("127.0.0.1");
+    let port = parsed_url.port().unwrap_or(18790);
+    let host_header = format!("{}:{}", host, port);
+    let origin = format!("http://{}", host_header);
+    
+    eprintln!("[WS] Parsed URL - host: {}, port: {}, origin: {}", host, port, origin);
+
     tokio::spawn(async move {
         loop {
             // Check if cancelled
@@ -220,12 +230,12 @@ async fn connect_websocket(
 
             let request = Request::builder()
                 .uri(&url)
-                .header("Host", "127.0.0.1:18790")
+                .header("Host", &host_header)
                 .header("Connection", "Upgrade")
                 .header("Upgrade", "websocket")
                 .header("Sec-WebSocket-Version", "13")
                 .header("Sec-WebSocket-Key", generate_key())
-                .header("Origin", "http://127.0.0.1:18790")
+                .header("Origin", &origin)
                 .body(())
                 .unwrap();
 
@@ -284,12 +294,14 @@ async fn connect_websocket(
                                                 eprintln!("[WS] Authenticated!");
                                                 authenticated = true;
                                                 let _ = app_handle.emit("ws-authenticated", true);
-                                            } else if text.contains("\"error\"") {
-                                                eprintln!("[WS] Error: {}", &text[..text.len().min(200)]);
-                                                let _ = app_handle.emit("ws-error", &text);
                                             } else if authenticated {
+                                                // All events after auth go to ws-message (including errors from agent)
                                                 eprintln!("[WS] Event: {}", &text[..text.len().min(100)]);
                                                 let _ = app_handle.emit("ws-message", &text);
+                                            } else if text.contains("\"error\"") && !authenticated {
+                                                // Only emit ws-error for pre-auth errors
+                                                eprintln!("[WS] Auth Error: {}", &text[..text.len().min(200)]);
+                                                let _ = app_handle.emit("ws-error", &text);
                                             }
                                         } else if m.is_close() {
                                             eprintln!("[WS] Server closed");
@@ -320,13 +332,17 @@ async fn connect_websocket(
                     let _ = app_handle.emit("ws-connected", false);
                 }
                 Err(e) => {
-                    eprintln!("[WS] Connection failed: {}", e);
+                    eprintln!("[WS] Connection failed: {} (type: {})", e, std::any::type_name_of_val(&e));
                     let _ = app_handle.emit("ws-connected", false);
+                    let _ = app_handle.emit("ws-error", format!("Connection failed: {}", e));
                 }
             }
 
-            eprintln!("[WS] Reconnecting in 3s...");
-            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+            // Only reconnect if not cancelled
+            if !cancel_token_clone.is_cancelled() {
+                eprintln!("[WS] Reconnecting in 3s...");
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+            }
         }
     });
 
@@ -487,76 +503,114 @@ async fn connect_floating_window(
     let signing_key_bytes = device_keys.signing_key.to_bytes();
     let device_id = device_keys.device_id;
     
+    let host_header = format!("localhost:{}", port);
+    let origin = format!("http://localhost:{}", port);
+    
     tokio::spawn(async move {
-        let request = Request::builder()
-            .uri(&url)
-            .header("Host", format!("localhost:{}", port))
-            .header("Connection", "Upgrade")
-            .header("Upgrade", "websocket")
-            .header("Sec-WebSocket-Version", "13")
-            .header("Sec-WebSocket-Key", generate_key())
-            .header("Origin", format!("http://localhost:{}", port))
-            .body(())
-            .unwrap();
+        loop {
+            if cancel_clone.is_cancelled() {
+                eprintln!("[Floating:{}] Connection cancelled", agent_name);
+                break;
+            }
             
-        match connect_async_with_config(request, None, false).await {
-            Ok((ws_stream, _)) => {
-                eprintln!("[Floating:{}] Connected", agent_name);
-                let _ = app_handle.emit_to(&window_label_clone, "ws-connected", true);
+            eprintln!("[Floating:{}] Attempting connection to {}", agent_name, url);
+            
+            let request = Request::builder()
+                .uri(&url)
+                .header("Host", &host_header)
+                .header("Connection", "Upgrade")
+                .header("Upgrade", "websocket")
+                .header("Sec-WebSocket-Version", "13")
+                .header("Sec-WebSocket-Key", generate_key())
+                .header("Origin", &origin)
+                .body(())
+                .unwrap();
                 
-                let (mut write, mut read) = ws_stream.split();
-                let mut authenticated = false;
-                let mut connect_sent = false;
-                
-                let signing_key = SigningKey::from_bytes(&signing_key_bytes);
-                let dk = DeviceKeys { signing_key, device_id };
-                
-                loop {
-                    tokio::select! {
-                        _ = cancel_clone.cancelled() => break,
-                        
-                        _ = tokio::time::sleep(std::time::Duration::from_secs(2)), if !connect_sent && !authenticated => {
-                            authenticated = true;
-                            connect_sent = true;
-                            let _ = app_handle.emit_to(&window_label_clone, "ws-authenticated", true);
-                        }
-                        
-                        msg = read.next() => {
-                            match msg {
-                                Some(Ok(m)) if m.is_text() => {
-                                    let text = m.to_string();
-                                    if !connect_sent && text.contains("\"event\":\"connect.challenge\"") {
-                                        let nonce = extract_nonce(&text).unwrap_or("");
-                                        let id = REQUEST_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
-                                        let response = build_connect_request(&format!("fp-{}", id), nonce, &dk);
-                                        let _ = write.send(tungstenite::Message::Text(response)).await;
-                                        connect_sent = true;
-                                    } else if text.contains("\"ok\":true") && text.contains("\"id\":\"fp-") {
-                                        authenticated = true;
-                                        let _ = app_handle.emit_to(&window_label_clone, "ws-authenticated", true);
-                                    } else if authenticated {
-                                        let _ = app_handle.emit_to(&window_label_clone, "ws-message", &text);
+            match connect_async_with_config(request, None, false).await {
+                Ok((ws_stream, _)) => {
+                    eprintln!("[Floating:{}] Connected", agent_name);
+                    let _ = app_handle.emit_to(&window_label_clone, "ws-connected", true);
+                    
+                    let (mut write, mut read) = ws_stream.split();
+                    let mut authenticated = false;
+                    let mut connect_sent = false;
+                    
+                    let signing_key = SigningKey::from_bytes(&signing_key_bytes);
+                    let dk = DeviceKeys { signing_key, device_id: device_id.clone() };
+                    
+                    loop {
+                        tokio::select! {
+                            _ = cancel_clone.cancelled() => {
+                                eprintln!("[Floating:{}] Connection cancelled during loop", agent_name);
+                                break;
+                            }
+                            
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(2)), if !connect_sent && !authenticated => {
+                                eprintln!("[Floating:{}] No challenge - assuming no-auth mode", agent_name);
+                                authenticated = true;
+                                connect_sent = true;
+                                let _ = app_handle.emit_to(&window_label_clone, "ws-authenticated", true);
+                            }
+                            
+                            msg = read.next() => {
+                                match msg {
+                                    Some(Ok(m)) if m.is_text() => {
+                                        let text = m.to_string();
+                                        if !connect_sent && text.contains("\"event\":\"connect.challenge\"") {
+                                            let nonce = extract_nonce(&text).unwrap_or("");
+                                            eprintln!("[Floating:{}] Got challenge, nonce: {}", agent_name, nonce);
+                                            let id = REQUEST_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+                                            let response = build_connect_request(&format!("fp-{}", id), nonce, &dk);
+                                            let _ = write.send(tungstenite::Message::Text(response)).await;
+                                            connect_sent = true;
+                                        } else if text.contains("\"ok\":true") && text.contains("\"id\":\"fp-") {
+                                            eprintln!("[Floating:{}] Authenticated!", agent_name);
+                                            authenticated = true;
+                                            let _ = app_handle.emit_to(&window_label_clone, "ws-authenticated", true);
+                                        } else if text.contains("\"error\"") {
+                                            eprintln!("[Floating:{}] Error: {}", agent_name, &text[..text.len().min(200)]);
+                                            let _ = app_handle.emit_to(&window_label_clone, "ws-error", &text);
+                                        } else if authenticated {
+                                            let _ = app_handle.emit_to(&window_label_clone, "ws-message", &text);
+                                        }
+                                    }
+                                    Some(Ok(_)) | None => {
+                                        eprintln!("[Floating:{}] Stream ended", agent_name);
+                                        break;
+                                    }
+                                    Some(Err(e)) => {
+                                        eprintln!("[Floating:{}] Read error: {}", agent_name, e);
+                                        break;
                                     }
                                 }
-                                Some(Ok(_)) | None => break,
-                                Some(Err(_)) => break,
                             }
-                        }
-                        
-                        msg = rx.recv() => {
-                            if let Some(text) = msg {
-                                if authenticated {
-                                    let _ = write.send(tungstenite::Message::Text(text)).await;
+                            
+                            msg = rx.recv() => {
+                                if let Some(text) = msg {
+                                    if authenticated {
+                                        eprintln!("[Floating:{}] TX: {}", agent_name, &text[..text.len().min(100)]);
+                                        if let Err(e) = write.send(tungstenite::Message::Text(text)).await {
+                                            eprintln!("[Floating:{}] Send error: {}", agent_name, e);
+                                            break;
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
+                    let _ = app_handle.emit_to(&window_label_clone, "ws-connected", false);
                 }
-                let _ = app_handle.emit_to(&window_label_clone, "ws-connected", false);
+                Err(e) => {
+                    eprintln!("[Floating:{}] Connection failed: {} (type: {})", agent_name, e, std::any::type_name_of_val(&e));
+                    let _ = app_handle.emit_to(&window_label_clone, "ws-connected", false);
+                    let _ = app_handle.emit_to(&window_label_clone, "ws-error", format!("Connection failed: {}", e));
+                }
             }
-            Err(e) => {
-                eprintln!("[Floating:{}] Connection failed: {}", agent_name, e);
-                let _ = app_handle.emit_to(&window_label_clone, "ws-error", format!("Connection failed: {}", e));
+            
+            // Only reconnect if not cancelled
+            if !cancel_clone.is_cancelled() {
+                eprintln!("[Floating:{}] Reconnecting in 3s...", agent_name);
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             }
         }
     });

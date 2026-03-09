@@ -47,27 +47,50 @@ const BASE_AGENT_PORT: u16 = 18790;
 /// Maximum port to allocate (gives us 10 agents: 18790-18799)
 const MAX_AGENT_PORT: u16 = 18799;
 
+/// Check if a port is actually available on the system
+fn is_port_available(port: u16) -> bool {
+    use std::net::TcpListener;
+    
+    // Try binding to IPv4 loopback
+    let v4_available = TcpListener::bind(format!("127.0.0.1:{}", port)).is_ok();
+    
+    // Try binding to IPv6 loopback  
+    let v6_available = TcpListener::bind(format!("[::1]:{}", port)).is_ok();
+    
+    v4_available && v6_available
+}
+
 /// Find the next available port for a new agent
+/// Checks both tracked agents AND actual system port availability
 fn allocate_port(existing_agents: &[AgentContainer]) -> u16 {
     let used_ports: std::collections::HashSet<u16> = existing_agents
         .iter()
         .map(|a| a.gateway_port)
         .collect();
 
+    // First try the standard range, checking both tracked and system availability
     for port in BASE_AGENT_PORT..=MAX_AGENT_PORT {
-        if !used_ports.contains(&port) {
+        if !used_ports.contains(&port) && is_port_available(port) {
+            tracing::info!("Allocated available port: {}", port);
             return port;
+        }
+        if used_ports.contains(&port) {
+            tracing::debug!("Port {} already used by tracked agent", port);
+        } else if !is_port_available(port) {
+            tracing::debug!("Port {} in use by external process", port);
         }
     }
 
-    // If all ports in range are used, extend beyond (shouldn't happen often)
+    // If all ports in range are used, extend beyond
     for port in (MAX_AGENT_PORT + 1)..=(MAX_AGENT_PORT + 100) {
-        if !used_ports.contains(&port) {
+        if !used_ports.contains(&port) && is_port_available(port) {
+            tracing::info!("Allocated extended port: {}", port);
             return port;
         }
     }
 
     // Fallback (should never reach here)
+    tracing::warn!("No ports available in range, using fallback");
     MAX_AGENT_PORT + 1
 }
 
@@ -264,6 +287,11 @@ pub async fn create_agent(
         config.apply(partial);
     }
 
+    // Apply agent_runtime from request (separate from container runtime)
+    if let Some(ref agent_rt) = req.agent_runtime {
+        config.agent_runtime = Some(agent_rt.clone());
+    }
+
     // Create container
 
     // Allocate a port for this agent
@@ -352,6 +380,7 @@ pub async fn create_agent(
         restart_policy: AgentConfig::default().restart_policy,
         health_status: None,
         runtime: agent_runtime,
+        agent_runtime: req.agent_runtime.unwrap_or_default(),
         gateway_port,
     };
 
@@ -507,6 +536,11 @@ pub async fn start_agent(
 
     if !container_exists {
         // Create the container for this stored agent
+        
+        // First, delete any existing container with the same name (handles name conflicts)
+        if let Err(e) = runtime.delete_container(&agent.name).await {
+            tracing::debug!("No existing container to remove: {}", e);
+        }
 
         // Inject API key from agent config, or from global stored keys
         let key_var = match agent.config.llm_provider {
@@ -550,19 +584,18 @@ pub async fn start_agent(
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-        // Update the ID in case it changed
-        if new_id != id {
-            // ID mismatch - this shouldn't happen but handle it
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Container ID mismatch".to_string(),
-            ));
+        // Update the agent with the new container ID
+        agent.id = new_id.clone();
+        
+        // Update in storage with new ID
+        if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
+            tracing::warn!("Failed to update agent ID in storage: {}", e);
         }
     }
 
     // Start the container
     runtime
-        .start_container(&id)
+        .start_container(&agent.id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -1707,4 +1740,110 @@ pub async fn delete_volume(
 
     tracing::info!("Deleted volume {}", id);
     Ok(StatusCode::NO_CONTENT)
+}
+
+// === Port Management ===
+
+#[derive(serde::Serialize)]
+pub struct PortStatus {
+    pub port: u16,
+    pub available: bool,
+    pub used_by: Option<String>,
+    pub tracked_agent: Option<String>,
+}
+
+pub async fn port_status(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<PortStatus>>, (StatusCode, String)> {
+    let containers = state.containers.read().await;
+    let tracked: std::collections::HashMap<u16, &str> = containers
+        .iter()
+        .map(|a| (a.gateway_port, a.name.as_str()))
+        .collect();
+
+    let mut status = Vec::new();
+    
+    // Check the standard agent port range
+    for port in BASE_AGENT_PORT..=(MAX_AGENT_PORT + 10) {
+        let tracked_agent = tracked.get(&port).map(|s| s.to_string());
+        let available = is_port_available(port);
+        
+        // Try to identify what's using the port
+        let used_by = if !available {
+            // Run ss to find the process
+            if let Ok(output) = std::process::Command::new("ss")
+                .args(["-tlnp", &format!("sport = :{}", port)])
+                .output()
+            {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                // Extract process name from ss output
+                stdout.lines()
+                    .nth(1)
+                    .and_then(|line| {
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        parts.get(5).map(|s| s.to_string())
+                    })
+            } else {
+                Some("unknown".to_string())
+            }
+        } else {
+            None
+        };
+
+        status.push(PortStatus {
+            port,
+            available,
+            used_by,
+            tracked_agent,
+        });
+    }
+
+    Ok(Json(status))
+}
+
+/// Prune stopped agents that are no longer running
+pub async fn prune_agents(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<String>>, (StatusCode, String)> {
+    let mut containers = state.containers.write().await;
+    let runtime = &state.runtime;
+    
+    let mut pruned = Vec::new();
+    let mut to_remove = Vec::new();
+
+    // Find stopped agents
+    for agent in containers.iter() {
+        if agent.status == AgentStatus::Stopped {
+            // Check if container actually exists in runtime
+            match runtime.container_exists(&agent.id).await {
+                Ok(false) => {
+                    // Container doesn't exist, safe to remove
+                    to_remove.push(agent.id.clone());
+                    pruned.push(agent.name.clone());
+                }
+                Ok(true) => {
+                    // Container exists but stopped - check if we should remove it
+                    tracing::info!("Agent {} is stopped but container exists", agent.name);
+                }
+                Err(e) => {
+                    tracing::warn!("Error checking container {}: {}", agent.id, e);
+                }
+            }
+        }
+    }
+
+    // Remove pruned agents from tracking
+    containers.retain(|a| !to_remove.contains(&a.id));
+
+    // Save updated state
+    let stored: Vec<crate::storage::StoredAgent> = containers
+        .iter()
+        .map(|c| crate::storage::to_stored_agent(c))
+        .collect();
+    if let Err(e) = crate::storage::save_agents(&stored) {
+        tracing::error!("Failed to save agents after prune: {}", e);
+    }
+
+    tracing::info!("Pruned {} agents: {:?}", pruned.len(), pruned);
+    Ok(Json(pruned))
 }

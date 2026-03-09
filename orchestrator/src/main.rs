@@ -184,7 +184,7 @@ async fn main() -> anyhow::Result<()> {
             id: stored.id,
             name: stored.name,
             status,
-            config: stored.config,
+            config: stored.config.clone(),
             tailscale_ip: None,
             resource_usage: None,
             project: None,
@@ -192,6 +192,7 @@ async fn main() -> anyhow::Result<()> {
             restart_policy: Default::default(),
             health_status: None,
             runtime: stored.runtime,
+            agent_runtime: stored.config.agent_runtime.clone().unwrap_or_default(),
             gateway_port: stored.gateway_port.unwrap_or_else(crate::types::default_gateway_port),
         });
     }
@@ -302,6 +303,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/agents/import", post(api::import_agent))
         // Runtime status
         .route("/api/runtime/status", get(api::runtime_status))
+        .route("/api/ports", get(api::port_status))
+        .route("/api/agents/prune", post(api::prune_agents))
         .route("/api/auth/refresh", post(auth::refresh))
         .with_state(state.clone());
 

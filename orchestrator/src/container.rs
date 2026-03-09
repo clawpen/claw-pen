@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use crate::config::{ContainerRuntimeType, NetworkBackend};
 use crate::containment::ContainmentClient;
 use crate::types::{
-    AgentConfig, AgentContainer, AgentStatus, LlmProvider, LogEntry, ResourceUsage,
+    AgentConfig, AgentContainer, AgentStatus, AgentRuntime, LlmProvider, LogEntry, ResourceUsage,
 };
 
 /// Container runtime trait - abstracts over different backends
@@ -28,6 +28,9 @@ pub trait ContainerRuntime: Send + Sync {
 
     /// Delete a container
     async fn delete_container(&self, id: &str) -> Result<()>;
+
+    /// Delete a container by name (for cleanup)
+    async fn delete_container_by_name(&self, name: &str) -> Result<()>;
 
     /// Get resource usage for a container
     async fn get_stats(&self, id: &str) -> Result<Option<ResourceUsage>>;
@@ -190,6 +193,14 @@ impl ContainerRuntime for RuntimeClient {
             RuntimeClientInner::Docker(client) => client.delete_container(id).await,
             RuntimeClientInner::Containment(client) => client.delete_container(id).await,
             RuntimeClientInner::Exo(client) => client.delete_container(id).await,
+        }
+    }
+
+    async fn delete_container_by_name(&self, name: &str) -> Result<()> {
+        match &self.inner {
+            RuntimeClientInner::Docker(client) => client.delete_container_by_name(name).await,
+            RuntimeClientInner::Containment(client) => client.delete_container_by_name(name).await,
+            RuntimeClientInner::Exo(client) => client.delete_container_by_name(name).await,
         }
     }
 
@@ -414,7 +425,16 @@ impl DockerClient {
         env
     }
 
+    fn get_image_for_runtime(agent_runtime: &AgentRuntime) -> &'static str {
+        match agent_runtime {
+            AgentRuntime::Openclaw => "openclaw-agent:latest",
+            AgentRuntime::ExoNative => "exo-agent:latest",
+        }
+    }
+
     fn get_image_for_provider(provider: &LlmProvider) -> &'static str {
+        // Default to openclaw for backwards compatibility
+        // Call get_image_for_runtime() instead for runtime-aware image selection
         match provider {
             LlmProvider::OpenAI => "openclaw-agent:latest",
             LlmProvider::Anthropic => "openclaw-agent:latest",
@@ -543,6 +563,7 @@ impl ContainerRuntime for DockerClient {
                     restart_policy: Default::default(),
                     health_status: None,
                     runtime: Some("docker".to_string()),
+                    agent_runtime: AgentRuntime::default(),
                     gateway_port: crate::types::default_gateway_port(),
                 });
             }
@@ -562,7 +583,10 @@ impl ContainerRuntime for DockerClient {
         validation::validate_cpu_cores(config.cpu_cores)
             .map_err(|e| anyhow::anyhow!("Invalid CPU config: {}", e))?;
 
-        let image = Self::get_image_for_provider(&config.llm_provider);
+        // Select image based on agent runtime
+        let default_runtime = AgentRuntime::default();
+        let agent_runtime = config.agent_runtime.as_ref().unwrap_or(&default_runtime);
+        let image = Self::get_image_for_runtime(agent_runtime);
         let mut env = Self::build_env_vars(config);
 
         // Add Headscale environment variables if using Headscale backend
@@ -574,19 +598,26 @@ impl ContainerRuntime for DockerClient {
         // Ensure the isolated network exists
         self.ensure_network().await?;
 
-        // Build port bindings for bridge mode
-        // Agent containers expose port 8080 internally for communication
+        // Get the gateway port for this agent
+        let gateway_port: u16 = config
+            .env_vars
+            .get("PORT")
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(18790);
+
+        // Build port bindings - map container port to host localhost only
+        // Agent containers expose their gateway port internally
         let port_bindings = HashMap::from([(
-            format!("{}/tcp", AGENT_INTERNAL_PORT),
+            format!("{}/tcp", gateway_port),
             Some(vec![bollard::models::PortBinding {
                 host_ip: Some("127.0.0.1".to_string()), // Only bind to localhost for security
-                host_port: None,                        // Let Docker assign a random port
+                host_port: Some(gateway_port.to_string()),
             }]),
         )]);
 
         // Exposed ports (ports the container listens on)
         let exposed_ports =
-            HashMap::from([(format!("{}/tcp", AGENT_INTERNAL_PORT), HashMap::new())]);
+            HashMap::from([(format!("{}/tcp", gateway_port), HashMap::new())]);
 
         // Container configuration with bridge network (isolated from host)
         // Build volume binds from config
@@ -602,25 +633,36 @@ impl ContainerRuntime for DockerClient {
             None
         };
 
+        // Create tmpfs mount for secure temporary directory
+        let tmpfs: Option<HashMap<String, String>> = Some(HashMap::from([
+            ("/tmp".to_string(), "rw,size=100m,mode=1777".to_string()),
+        ]));
+
         let container_config = Config {
             image: Some(image.to_string()),
             env: Some(env),
             labels: Some(labels),
             exposed_ports: Some(exposed_ports),
+            // TODO: Run as non-root once container image supports it
+            // user: Some("1000:1000".to_string()),
             host_config: Some(bollard::models::HostConfig {
                 memory: Some((config.memory_mb * 1024 * 1024) as i64),
                 nano_cpus: Some((config.cpu_cores * 1_000_000_000.0) as i64),
-                // Use bridge mode for network isolation instead of host mode
-                network_mode: Some("host".to_string()),
+                // Use bridge mode for network isolation (fixes host mode security issue)
+                network_mode: Some("bridge".to_string()),
                 port_bindings: Some(port_bindings),
                 // Volume mounts
                 binds,
+                // Tmpfs mount for secure temporary directory
+                tmpfs,
                 // Security options
-                security_opt: Some(vec!["no-new-privileges:true".to_string()]),
+                security_opt: Some(vec![
+                    "no-new-privileges:true".to_string(),
+                ]),
                 // Prevent privilege escalation
                 privileged: Some(false),
-                // Read-only root filesystem where possible
-                readonly_rootfs: Some(false), // Some agents may need to write
+                // TODO: Enable once container image supports it
+                // readonly_rootfs: Some(true),
                 // Drop all capabilities, add only what is needed
                 cap_drop: Some(vec!["ALL".to_string()]),
                 cap_add: Some(vec!["NET_BIND_SERVICE".to_string()]),
@@ -694,6 +736,35 @@ impl ContainerRuntime for DockerClient {
             .remove_container(id, options)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to delete container: {}", e))?;
+        Ok(())
+    }
+
+    async fn delete_container_by_name(&self, name: &str) -> Result<()> {
+        use bollard::container::{ListContainersOptions, RemoveContainerOptions};
+
+        // List containers with this name
+        let filters = HashMap::from([("name".to_string(), vec![name.to_string()])]);
+        let options = Some(ListContainersOptions {
+            filters,
+            ..Default::default()
+        });
+
+        let containers = self.docker.list_containers(options).await
+            .map_err(|e| anyhow::anyhow!("Failed to list containers: {}", e))?;
+
+        // Delete any matching containers
+        for container in containers {
+            if let Some(id) = container.id {
+                let remove_options = Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                });
+                self.docker.remove_container(&id, remove_options).await
+                    .map_err(|e| anyhow::anyhow!("Failed to delete container {}: {}", id, e))?;
+                tracing::info!("Deleted container {} with name {}", id, name);
+            }
+        }
+
         Ok(())
     }
 
@@ -907,6 +978,7 @@ impl ContainerRuntime for ExoClient {
                     restart_policy: Default::default(),
                     health_status: None,
                     runtime: Some("exo".to_string()),
+                    agent_runtime: AgentRuntime::default(),
                     gateway_port: crate::types::default_gateway_port(),
                 });
             }
@@ -1012,6 +1084,20 @@ impl ContainerRuntime for ExoClient {
         }
 
         tracing::info!("Deleted exo container: {}", id);
+        Ok(())
+    }
+
+    async fn delete_container_by_name(&self, name: &str) -> Result<()> {
+        // For exo, try to delete by name directly
+        let output = Command::new(&self.exo_path)
+            .args(["rm", name])
+            .output()
+            .map_err(|e| anyhow::anyhow!("Failed to delete exo container by name: {}", e))?;
+
+        if output.status.success() {
+            tracing::info!("Deleted exo container by name: {}", name);
+        }
+        // Don't fail if container doesn't exist
         Ok(())
     }
 
