@@ -70,7 +70,7 @@ cat > /root/.openclaw/openclaw.json << CONF
     "port": ${PORT}
   },
   "browser": {
-    "chromePath": "/usr/bin/chromium",
+    "enabled": true,
     "headless": true
   }
 }

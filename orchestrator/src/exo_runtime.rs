@@ -15,6 +15,11 @@ use crate::types::{
 
 /// JSON structure for `exo list --json` output
 #[derive(Debug, serde::Deserialize)]
+struct ExoContainerList {
+    containers: Vec<ExoContainer>,
+}
+
+#[derive(Debug, serde::Deserialize)]
 struct ExoContainer {
     id: String,
     name: String,
@@ -90,15 +95,15 @@ impl ExoRuntimeClient {
         let stdout = String::from_utf8_lossy(&output.stdout);
         
         // Parse JSON output from exo
-        let exo_containers: Vec<ExoContainer> = match serde_json::from_str(&stdout) {
-            Ok(containers) => containers,
+        let exo_list: ExoContainerList = match serde_json::from_str(&stdout) {
+            Ok(list) => list,
             Err(e) => {
                 tracing::warn!("Failed to parse exo list JSON output: {}. Output: {}", e, stdout);
                 return Ok(vec![]);
             }
         };
 
-        let containers = exo_containers
+        let containers = exo_list.containers
             .into_iter()
             .map(|c| {
                 let status = match c.status.to_lowercase().as_str() {
