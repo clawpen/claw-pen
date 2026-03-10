@@ -1,5 +1,5 @@
-// Containment runtime client
-// Communicates with the Containment container runtime
+// Exo runtime client
+// Communicates with the Exo container runtime via CLI
 
 use crate::validation;
 use anyhow::Result;
@@ -13,54 +13,71 @@ use crate::types::{
     AgentConfig, AgentContainer, AgentStatus, AgentRuntime, LlmProvider, LogEntry, ResourceUsage, VolumeMount,
 };
 
-#[derive(Clone)]
-pub struct ContainmentClient {
-    /// Path to containment binary (or wsl command on Windows)
-    runtime_path: String,
-    /// WSL distro name (only used on Windows)
-    #[allow(dead_code)]
-    wsl_distro: Option<String>,
+/// JSON structure for `exo list --json` output
+#[derive(Debug, serde::Deserialize)]
+struct ExoContainer {
+    id: String,
+    name: String,
+    status: String,
+    image: Option<String>,
+    #[serde(default)]
+    ports: Vec<ExoPortMapping>,
 }
 
-impl ContainmentClient {
-    pub fn new() -> Result<Self> {
-        // Detect if we're on Windows or Linux
-        #[cfg(target_os = "windows")]
-        {
-            Ok(Self {
-                runtime_path: "wsl".to_string(),
-                wsl_distro: Some("containment".to_string()),
-            })
+#[derive(Debug, serde::Deserialize)]
+struct ExoPortMapping {
+    container_port: u16,
+    host_port: u16,
+    protocol: String,
+}
+
+#[derive(Clone)]
+pub struct ExoRuntimeClient {
+    /// Path to exo binary
+    exo_path: String,
+}
+
+impl ExoRuntimeClient {
+    /// Create a new Exo runtime client
+    ///
+    /// # Arguments
+    /// * `exo_path` - Optional custom path to exo binary. Defaults to "exo" in PATH.
+    pub fn new(exo_path: Option<String>) -> Result<Self> {
+        // Try provided path first, then check common locations
+        let paths_to_try = if let Some(ref path) = exo_path {
+            vec![path.clone()]
+        } else {
+            vec![
+                "exo".to_string(),
+                "/home/codi/Desktop/software/exo/target/release/exo".to_string(),
+            ]
+        };
+
+        for path in &paths_to_try {
+            if let Ok(output) = Command::new(path).arg("--version").output() {
+                if output.status.success() {
+                    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    tracing::info!("Connected to Exo runtime at '{}': {}", path, version);
+                    return Ok(Self { exo_path: path.clone() });
+                }
+            }
         }
 
-        #[cfg(not(target_os = "windows"))]
-        {
-            Ok(Self {
-                runtime_path: "openclaw-runtime".to_string(),
-                wsl_distro: None,
-            })
-        }
+        anyhow::bail!(
+            "exo binary not found. Tried: {}. Ensure exo is installed and in PATH.",
+            paths_to_try.join(", ")
+        )
     }
 
-    /// Build the command to run containment
-    fn build_command(&self) -> Command {
-        #[cfg(target_os = "windows")]
-        {
-            let mut cmd = Command::new(&self.runtime_path);
-            if let Some(ref distro) = self.wsl_distro {
-                cmd.args(["-d", distro, "--", "openclaw-runtime"]);
-            }
-            cmd
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            Command::new(&self.runtime_path)
-        }
+    /// Get the path to the exo binary
+    pub fn exo_path(&self) -> &str {
+        &self.exo_path
     }
 
     async fn list_containers_internal(&self) -> Result<Vec<AgentContainer>> {
-        let output = self.build_command().arg("list").output()?;
+        let output = Command::new(&self.exo_path)
+            .args(["list", "--json"])
+            .output()?;
 
         if !output.status.success() {
             tracing::warn!(
@@ -71,24 +88,29 @@ impl ContainmentClient {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut containers = Vec::new();
+        
+        // Parse JSON output from exo
+        let exo_containers: Vec<ExoContainer> = match serde_json::from_str(&stdout) {
+            Ok(containers) => containers,
+            Err(e) => {
+                tracing::warn!("Failed to parse exo list JSON output: {}. Output: {}", e, stdout);
+                return Ok(vec![]);
+            }
+        };
 
-        // Parse output (format: CONTAINER ID\tNAME\tIMAGE\t\tSTATUS)
-        for line in stdout.lines().skip(1) {
-            // Skip header
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() >= 4 {
-                let id = parts[0].to_string();
-                let name = parts[1].to_string();
-                let status = match parts[3] {
+        let containers = exo_containers
+            .into_iter()
+            .map(|c| {
+                let status = match c.status.to_lowercase().as_str() {
                     "running" => AgentStatus::Running,
                     "stopped" | "exited" => AgentStatus::Stopped,
+                    "starting" | "created" => AgentStatus::Starting,
                     _ => AgentStatus::Error,
                 };
 
-                containers.push(AgentContainer {
-                    id,
-                    name,
+                AgentContainer {
+                    id: c.id,
+                    name: c.name,
                     status,
                     config: AgentConfig::default(),
                     tailscale_ip: None,
@@ -97,18 +119,18 @@ impl ContainmentClient {
                     tags: vec![],
                     restart_policy: Default::default(),
                     health_status: None,
-                    runtime: Some("containment".to_string()),
+                    runtime: Some("exo".to_string()),
                     agent_runtime: AgentRuntime::default(),
                     gateway_port: crate::types::default_gateway_port(),
-                });
-            }
-        }
+                }
+            })
+            .collect();
 
         Ok(containers)
     }
 
     async fn create_container_internal(&self, name: &str, config: &AgentConfig) -> Result<String> {
-        // Build container spec
+        // Validate container name
         validation::validate_container_name(name)
             .map_err(|e| anyhow::anyhow!("Invalid container name: {}", e))?;
 
@@ -118,27 +140,68 @@ impl ContainmentClient {
         validation::validate_cpu_cores(config.cpu_cores)
             .map_err(|e| anyhow::anyhow!("Invalid CPU config: {}", e))?;
 
-        let spec = serde_json::json!({
-            "name": name,
-            "image": "openclaw-agent:latest",
-            "command": ["openclaw", "agent", "--local"],
-            "env": self.build_env_vars(config),
-            "resources": {
-                "memory": format!("{}M", config.memory_mb),
-                "cpu": config.cpu_cores.to_string(),
-            },
-            "namespaces": {
-                "pid": true,
-                "network": true,
-                "mount": true,
-                "uts": true,
-            },
-            "mounts": self.build_mounts(&config.volumes),
-        });
+        // Build args for exo run
+        let mut args = vec![
+            "run".to_string(),
+            "--name".to_string(),
+            name.to_string(),
+            "-d".to_string(), // detached
+        ];
 
-        let output = self
-            .build_command()
-            .args(["run", "--config", &spec.to_string(), "--id-only"])
+        // Add memory limit
+        args.push("-m".to_string());
+        args.push(format!("{}M", config.memory_mb));
+
+        // Add CPU limit (as cores)
+        args.push("--cpus".to_string());
+        args.push(format!("{}", config.cpu_cores));
+
+        // Add environment variables
+        for (key, value) in self.build_env_vars(config) {
+            args.push("-e".to_string());
+            args.push(format!("{}={}", key, value));
+        }
+
+        // Add volume mounts
+        for volume in &config.volumes {
+            if validation::validate_container_target(&volume.target).is_ok() {
+                let mount = if volume.read_only {
+                    format!("{}:{}:ro", volume.source, volume.target)
+                } else {
+                    format!("{}:{}", volume.source, volume.target)
+                };
+                args.push("-v".to_string());
+                args.push(mount);
+            }
+        }
+
+        // Get gateway port from config
+        let gateway_port: u16 = config
+            .env_vars
+            .get("PORT")
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(18790);
+
+        // Add port mapping for gateway
+        args.push("-p".to_string());
+        args.push(format!("{}:{}:{}", gateway_port, gateway_port, "tcp"));
+
+        // Select image based on agent runtime
+        let default_runtime = AgentRuntime::default();
+        let agent_runtime = config.agent_runtime.as_ref().unwrap_or(&default_runtime);
+        let image = match agent_runtime {
+            AgentRuntime::Openclaw => "openclaw-agent:latest",
+            AgentRuntime::ExoNative => "exo-agent:latest",
+        };
+        args.push(image.to_string());
+
+        // Default command for agent containers
+        args.push("openclaw".to_string());
+        args.push("agent".to_string());
+        args.push("--local".to_string());
+
+        let output = Command::new(&self.exo_path)
+            .args(&args)
             .output()?;
 
         if !output.status.success() {
@@ -154,18 +217,29 @@ impl ContainmentClient {
     }
 
     async fn start_container_internal(&self, id: &str) -> Result<()> {
-        // Containers start automatically on create in containment
-        // This could be used to restart a stopped container
-        tracing::info!("Container {} is running", id);
+        let output = Command::new(&self.exo_path)
+            .args(["start", id])
+            .output()?;
+
+        if !output.status.success() {
+            tracing::warn!(
+                "exo start returned non-zero (container may already be running): {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        tracing::info!("Started container: {}", id);
         Ok(())
     }
 
     async fn stop_container_internal(&self, id: &str) -> Result<()> {
-        let output = self.build_command().args(["stop", id]).output()?;
+        let output = Command::new(&self.exo_path)
+            .args(["stop", id])
+            .output()?;
 
         if !output.status.success() {
-            anyhow::bail!(
-                "Failed to stop container: {}",
+            tracing::warn!(
+                "exo stop returned non-zero (container may already be stopped): {}",
                 String::from_utf8_lossy(&output.stderr)
             );
         }
@@ -178,83 +252,47 @@ impl ContainmentClient {
         // First stop if running
         let _ = self.stop_container_internal(id).await;
 
-        // TODO: Add rm command to containment runtime
+        let output = Command::new(&self.exo_path)
+            .args(["remove", id])
+            .output()?;
+
+        if !output.status.success() {
+            anyhow::bail!(
+                "Failed to remove container: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
         tracing::info!("Deleted container: {}", id);
         Ok(())
     }
 
-    async fn get_stats_internal(&self, id: &str) -> Result<Option<ResourceUsage>> {
-        // Read from /sys/fs/cgroup for the container
-        let cgroup_path = format!("/sys/fs/cgroup/claw-pen/{}", id);
-
-        // Memory usage
-        let memory_current = std::fs::read_to_string(format!("{}/memory.current", cgroup_path))
-            .ok()
-            .and_then(|s| s.trim().parse::<u64>().ok())
-            .unwrap_or(0);
-
-        // CPU usage
-        let cpu_stat = std::fs::read_to_string(format!("{}/cpu.stat", cgroup_path))
-            .ok()
-            .unwrap_or_default();
-
-        // Parse usage_usec from cpu.stat
-        let cpu_usec: u64 = cpu_stat
-            .lines()
-            .find(|l| l.starts_with("usage_usec"))
-            .and_then(|l| l.split_whitespace().nth(1))
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-
-        // Convert to percentage (very rough estimate)
-        let cpu_percent = if cpu_usec > 0 {
-            (cpu_usec as f32 / 1_000_000.0) % 100.0
-        } else {
-            0.0
-        };
-
-        Ok(Some(ResourceUsage {
-            memory_mb: memory_current as f32 / (1024.0 * 1024.0),
-            cpu_percent,
-            network_rx_bytes: 0, // TODO: from /proc/net/dev
-            network_tx_bytes: 0,
-        }))
+    async fn get_stats_internal(&self, _id: &str) -> Result<Option<ResourceUsage>> {
+        // TODO: Implement stats collection via exo stats command when available
+        Ok(None)
     }
 
     async fn container_exists_internal(&self, id: &str) -> Result<bool> {
         let containers = self.list_containers_internal().await?;
-        Ok(containers.iter().any(|c| c.id == id))
+        Ok(containers.iter().any(|c| c.id == id || c.name == id))
     }
 
     pub async fn get_logs(&self, id: &str, tail: usize) -> Result<Vec<LogEntry>> {
-        let log_path = format!("/var/lib/openclaw/containers/{}/logs/container.log", id);
+        let output = Command::new(&self.exo_path)
+            .args(["logs", id, "--tail", &tail.to_string()])
+            .output()?;
 
-        if !std::path::Path::new(&log_path).exists() {
+        if !output.status.success() {
             return Ok(vec![]);
         }
 
-        let content = std::fs::read_to_string(&log_path)?;
-        let all_lines: Vec<&str> = content.lines().collect();
-        let start = all_lines.len().saturating_sub(tail);
-        let lines = &all_lines[start..];
-
-        let logs = lines
-            .iter()
-            .map(|line| {
-                // Try to parse as JSON log, otherwise treat as plain text
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                    LogEntry {
-                        timestamp: json["timestamp"].as_str().unwrap_or("").to_string(),
-                        level: json["level"].as_str().unwrap_or("info").to_string(),
-                        message: json["message"].as_str().unwrap_or(line).to_string(),
-                    }
-                } else {
-                    LogEntry {
-                        timestamp: chrono::Utc::now().to_rfc3339(),
-                        level: "info".to_string(),
-                        message: line.to_string(),
-                    }
-                }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let logs = stdout
+            .lines()
+            .map(|line| LogEntry {
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                level: "info".to_string(),
+                message: line.to_string(),
             })
             .collect();
 
@@ -263,35 +301,36 @@ impl ContainmentClient {
 
     pub async fn stream_logs(&self, id: &str) -> tokio_stream::wrappers::ReceiverStream<LogEntry> {
         let (tx, rx) = mpsc::channel(100);
-        let log_path = format!("/var/lib/openclaw/containers/{}/logs/container.log", id);
-        let _id_string = id.to_string();
+        let exo_path = self.exo_path.clone();
+        let id_string = id.to_string();
 
         tokio::spawn(async move {
-            // Simple tail -f implementation
-            let mut last_size = 0u64;
+            // Use exo logs --follow for streaming
+            let mut child = match std::process::Command::new(&exo_path)
+                .args(["logs", &id_string, "--follow"])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Failed to spawn exo logs --follow: {}", e);
+                    return;
+                }
+            };
 
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-                if let Ok(metadata) = std::fs::metadata(&log_path) {
-                    let size = metadata.len();
-
-                    if size > last_size {
-                        // Read new content
-                        if let Ok(content) = std::fs::read_to_string(&log_path) {
-                            let new_content = &content[last_size as usize..];
-                            for line in new_content.lines() {
-                                let entry = LogEntry {
-                                    timestamp: chrono::Utc::now().to_rfc3339(),
-                                    level: "info".to_string(),
-                                    message: line.to_string(),
-                                };
-                                if tx.send(entry).await.is_err() {
-                                    return;
-                                }
-                            }
-                        }
-                        last_size = size;
+            // Read from stdout
+            use std::io::{BufRead, BufReader};
+            if let Some(stdout) = child.stdout.take() {
+                let reader = BufReader::new(stdout);
+                for line in reader.lines().flatten() {
+                    let entry = LogEntry {
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                        level: "info".to_string(),
+                        message: line,
+                    };
+                    if tx.send(entry).await.is_err() {
+                        break;
                     }
                 }
             }
@@ -301,12 +340,11 @@ impl ContainmentClient {
     }
 
     pub async fn health_check(&self, id: &str) -> Result<bool> {
-        // Execute health check command in container
-        // For now, just check if container is running
+        // Check if container exists and is running
         let containers = self.list_containers_internal().await?;
         Ok(containers
             .iter()
-            .any(|c| c.id == id && c.status == AgentStatus::Running))
+            .any(|c| (c.id == id || c.name == id) && c.status == AgentStatus::Running))
     }
 
     /// Build environment variables from agent config
@@ -366,9 +404,9 @@ impl ContainmentClient {
         env
     }
 
-    /// Build mount specifications
-    /// Build mount specifications with path validation
-    fn build_mounts(&self, volumes: &[VolumeMount]) -> Vec<serde_json::Value> {
+    /// Build volume mount specifications with path validation
+    #[allow(dead_code)]
+    fn build_mounts(&self, volumes: &[VolumeMount]) -> Vec<String> {
         volumes
             .iter()
             .filter_map(|v| {
@@ -379,7 +417,6 @@ impl ContainmentClient {
                 }
 
                 // Validate source path for path traversal
-                // Note: Full canonicalization requires filesystem access
                 if v.source.contains("..") {
                     tracing::warn!("Path traversal attempt in volume source: {}", v.source);
                     return None;
@@ -397,18 +434,18 @@ impl ContainmentClient {
                     return None;
                 }
 
-                Some(serde_json::json!({
-                    "type": "bind",
-                    "source": v.source,
-                    "target": v.target,
-                    "readonly": v.read_only,
-                }))
+                if v.read_only {
+                    Some(format!("{}:{}:ro", v.source, v.target))
+                } else {
+                    Some(format!("{}:{}", v.source, v.target))
+                }
             })
             .collect()
     }
 }
+
 #[async_trait]
-impl ContainerRuntime for ContainmentClient {
+impl ContainerRuntime for ExoRuntimeClient {
     async fn list_containers(&self) -> Result<Vec<AgentContainer>> {
         self.list_containers_internal().await
     }
@@ -430,7 +467,7 @@ impl ContainerRuntime for ContainmentClient {
     }
 
     async fn delete_container_by_name(&self, name: &str) -> Result<()> {
-        // Try to delete by name - for containment, name is the ID
+        // For exo, name is the identifier
         self.delete_container_internal(name).await
     }
 
@@ -455,8 +492,8 @@ impl ContainerRuntime for ContainmentClient {
     }
 }
 
-impl Default for ContainmentClient {
+impl Default for ExoRuntimeClient {
     fn default() -> Self {
-        Self::new().expect("Failed to create ContainmentClient")
+        Self::new(None).expect("Failed to create ExoRuntimeClient")
     }
 }

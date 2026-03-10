@@ -353,7 +353,7 @@ pub async fn create_agent(
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         } else {
-            // Use default runtime (docker or containment)
+            // Use default runtime (exo)
             state
                 .runtime
                 .create_container(&req.name, &config)

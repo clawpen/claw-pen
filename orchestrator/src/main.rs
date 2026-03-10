@@ -4,7 +4,7 @@ mod api;
 mod auth;
 mod config;
 mod container;
-mod containment;
+mod exo_runtime;
 mod network;
 mod secret_manager;
 mod shared_memory;
