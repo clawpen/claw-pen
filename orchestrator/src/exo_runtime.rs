@@ -153,13 +153,12 @@ impl ExoRuntimeClient {
             "-d".to_string(), // detached
         ];
 
-        // Add memory limit
-        args.push("-m".to_string());
-        args.push(format!("{}M", config.memory_mb));
-
-        // Add CPU limit (as cores)
-        args.push("--cpus".to_string());
-        args.push(format!("{}", config.cpu_cores));
+        // Note: Memory and CPU limits not supported by exo runtime
+        // These are validated but not passed to exo CLI
+        // args.push("-m".to_string());
+        // args.push(format!("{}M", config.memory_mb));
+        // args.push("--cpus".to_string());
+        // args.push(format!("{}", config.cpu_cores));
 
         // Add environment variables
         for (key, value) in self.build_env_vars(config) {
