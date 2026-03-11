@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blog - Claw Pen</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                        },
+                    },
+                },
+            },
+        }
+    </script>
+</head>
+<body class="bg-gray-50 text-gray-900">
+    <!-- Navbar -->
+    <nav class="bg-white border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <a href="/" class="text-2xl font-bold text-primary-600">🧩 Claw Pen</a>
+                <div class="flex gap-6">
+                    <a href="/" class="text-gray-600 hover:text-primary-600">Home</a>
+                    <a href="https://github.com/clawpen/claw-pen" class="text-gray-600 hover:text-primary-600">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+    
+    <div class="max-w-3xl mx-auto px-4 py-16">
+        <h1 class="text-4xl font-bold mb-12 text-center">Blog</h1>
+        
+        <article class="bg-white rounded-xl shadow-sm border border-gray-200 p-8 mb-6">
+            <div class="text-gray-500 text-sm mb-2">March 11, 2026</div>
+            <h2 class="text-2xl font-semibold mb-3">
+                <a href="why-we-built-claw-pen.html" class="text-gray-900 hover:text-primary-600">Why We Built Claw Pen</a>
+            </h2>
+            <p class="text-gray-600 mb-4">The case for bringing your own API keys and keeping your data on your own infrastructure.</p>
+            <a href="why-we-built-claw-pen.html" class="text-primary-600 font-semibold hover:text-primary-700">
+                Read more →
+            </a>
+        </article>
+        
+    </div>
+
+    <!-- Footer -->
+    <footer class="bg-gray-100 border-t border-gray-200 py-8">
+        <div class="max-w-7xl mx-auto px-4 text-center text-gray-600">
+            <p>🧩 Claw Pen — <a href="https://clawpen.ca" class="text-primary-600 hover:underline">clawpen.ca</a></p>
+        </div>
+    </footer>
+</body>
+</html>

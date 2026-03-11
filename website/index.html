@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claw Pen - Your AI Agents. Your Infrastructure. Your Control.</title>
+    <meta name="description" content="Run AI agents on your own hardware. Deploy isolated agents with full control over your data and API keys.">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            200: '#bae6fd',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                        },
+                    },
+                },
+            },
+        }
+    </script>
+</head>
+<body class="bg-gray-50 text-gray-900">
+    <!-- Navbar -->
+    <nav class="bg-white border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <a href="/" class="text-2xl font-bold text-primary-600">🧩 Claw Pen</a>
+                <div class="flex gap-6">
+                    <a href="#how-it-works" class="text-gray-600 hover:text-primary-600">How It Works</a>
+                    <a href="#features" class="text-gray-600 hover:text-primary-600">Features</a>
+                    <a href="/blog/" class="text-gray-600 hover:text-primary-600">Blog</a>
+                    <a href="https://github.com/clawpen/claw-pen" class="text-gray-600 hover:text-primary-600">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero -->
+    <section class="bg-gradient-to-br from-primary-600 to-primary-700 text-white">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
+            <div class="text-center">
+                <h1 class="text-5xl md:text-6xl font-bold mb-6">
+                    Deploy AI Agents.
+                    <br>
+                    <span class="text-primary-100">Your Infrastructure. Your Control.</span>
+                </h1>
+                
+                <p class="text-xl md:text-2xl mb-8 text-primary-100 max-w-3xl mx-auto">
+                    Your AI agents run on YOUR hardware.
+                    <br>
+                    We just make them easy to deploy and manage.
+                </p>
+                
+                <div class="flex justify-center gap-4">
+                    <a href="https://github.com/clawpen/claw-pen" class="bg-white text-primary-600 px-8 py-3 rounded-lg font-semibold hover:bg-gray-100">
+                        Get Started Free
+                    </a>
+                    <a href="#how-it-works" class="border-2 border-white text-white px-8 py-3 rounded-lg font-semibold hover:bg-white/10">
+                        How It Works
+                    </a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- The Problem -->
+    <section class="py-16 bg-red-50">
+        <div class="max-w-4xl mx-auto px-4 text-center">
+            <h2 class="text-2xl font-bold text-gray-900 mb-4">
+                The Problem with AI Services Today
+            </h2>
+            <div class="grid md:grid-cols-2 gap-6 text-left">
+                <div class="bg-white p-6 rounded-lg border-l-4 border-red-400">
+                    <h3 class="font-semibold text-red-700 mb-2">Cloud AI Services</h3>
+                    <p class="text-gray-600">Upload your data to their servers. They see everything. You're locked into their provider and pricing.</p>
+                </div>
+                <div class="bg-white p-6 rounded-lg border-l-4 border-red-400">
+                    <h3 class="font-semibold text-red-700 mb-2">Local Agents</h3>
+                    <p class="text-gray-600">The agent has full access to your machine. One bug or bad prompt = potential disaster.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- The Solution: Pen Model -->
+    <section id="how-it-works" class="py-20">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl font-bold text-gray-900 mb-4">The Pen Model</h2>
+                <p class="text-xl text-gray-600 max-w-2xl mx-auto">
+                    A containerized agent that only sees what you explicitly give it.
+                    Bring your own API keys. When you're done, the container is destroyed.
+                </p>
+            </div>
+
+            <div class="bg-gray-900 rounded-2xl p-8 text-white mb-12 max-w-4xl mx-auto">
+                <div class="font-mono text-sm space-y-2">
+                    <div class="text-gray-400"># Deploy a code review agent</div>
+                    <div>
+                        <span class="text-green-400">$</span> pen run coder --mount ./my-project:/workspace
+                    </div>
+                    <div class="text-gray-400 mt-4"># Run analysis on a dataset</div>
+                    <div>
+                        <span class="text-green-400">$</span> pen run analyst --mount s3://data/reports:/data
+                    </div>
+                    <div class="text-gray-400 mt-4"># Mount via Tailscale (your NAS, anywhere)</div>
+                    <div>
+                        <span class="text-green-400">$</span> pen run researcher --mount tailscale://nas/docs:/docs
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid md:grid-cols-4 gap-6">
+                <div class="text-center">
+                    <div class="w-16 h-16 bg-primary-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <span class="text-2xl">📦</span>
+                    </div>
+                    <h3 class="font-semibold mb-2">1. Choose Agent</h3>
+                    <p class="text-gray-600 text-sm">Coder, Analyst, Researcher, or your custom image</p>
+                </div>
+                <div class="text-center">
+                    <div class="w-16 h-16 bg-primary-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <span class="text-2xl">🔗</span>
+                    </div>
+                    <h3 class="font-semibold mb-2">2. Mount Data</h3>
+                    <p class="text-gray-600 text-sm">Local folder, S3, Tailscale, WebDAV — your choice</p>
+                </div>
+                <div class="text-center">
+                    <div class="w-16 h-16 bg-primary-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <span class="text-2xl">⚡</span>
+                    </div>
+                    <h3 class="font-semibold mb-2">3. Work Happens</h3>
+                    <p class="text-gray-600 text-sm">Agent runs in isolated container, writes to output</p>
+                </div>
+                <div class="text-center">
+                    <div class="w-16 h-16 bg-primary-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <span class="text-2xl">🔥</span>
+                    </div>
+                    <h3 class="font-semibold mb-2">4. Destroy</h3>
+                    <p class="text-gray-600 text-sm">Container deleted. Only your output files remain.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Why Claw Pen -->
+    <section id="features" class="py-20 bg-gray-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl font-bold text-gray-900 mb-4">Why Claw Pen?</h2>
+            </div>
+
+            <div class="grid md:grid-cols-3 gap-8">
+                <div class="bg-white p-8 rounded-xl shadow-sm">
+                    <div class="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center mb-4">
+                        <span class="text-2xl">🔒</span>
+                    </div>
+                    <h3 class="text-xl font-semibold mb-2">Data Sovereignty</h3>
+                    <p class="text-gray-600">Your files never leave your machine. Process sensitive documents, code, and data without uploading to third-party clouds.</p>
+                </div>
+
+                <div class="bg-white p-8 rounded-xl shadow-sm">
+                    <div class="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mb-4">
+                        <span class="text-2xl">📦</span>
+                    </div>
+                    <h3 class="text-xl font-semibold mb-2">Container Isolation</h3>
+                    <p class="text-gray-600">Each agent runs in its own isolated container using our Exo runtime. Linux namespaces, seccomp, capability dropping. The agent can't escape even if it tries.</p>
+                </div>
+
+                <div class="bg-white p-8 rounded-xl shadow-sm">
+                    <div class="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mb-4">
+                        <span class="text-2xl">🔑</span>
+                    </div>
+                    <h3 class="text-xl font-semibold mb-2">Bring Your Own Keys</h3>
+                    <p class="text-gray-600">Use your own API keys from z.ai, OpenAI, Anthropic, or any provider. You own the relationship — no vendor lock-in.</p>
+                </div>
+
+                <div class="bg-white p-8 rounded-xl shadow-sm">
+                    <div class="w-12 h-12 bg-yellow-100 rounded-lg flex items-center justify-center mb-4">
+                        <span class="text-2xl">👥</span>
+                    </div>
+                    <h3 class="text-xl font-semibold mb-2">Multi-Agent Teams</h3>
+                    <p class="text-gray-600">Deploy specialized agents that work together. Code reviewers, researchers, writers — all orchestrated from one dashboard.</p>
+                </div>
+
+                <div class="bg-white p-8 rounded-xl shadow-sm">
+                    <div class="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center mb-4">
+                        <span class="text-2xl">⚡</span>
+                    </div>
+                    <h3 class="text-xl font-semibold mb-2">Fast & Light</h3>
+                    <p class="text-gray-600">Containers start in &lt;1 second. No VM overhead. Run on your laptop, homelab, or VPS.</p>
+                </div>
+
+                <div class="bg-white p-8 rounded-xl shadow-sm">
+                    <div class="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center mb-4">
+                        <span class="text-2xl">🚫</span>
+                    </div>
+                    <h3 class="text-xl font-semibold mb-2">No Vendor Lock-In</h3>
+                    <p class="text-gray-600">Standard containers, standard protocols. Move your agents anywhere. We make deployment easy, not proprietary.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Comparison -->
+    <section class="py-16">
+        <div class="max-w-5xl mx-auto px-4">
+            <h2 class="text-3xl font-bold text-gray-900 mb-8 text-center">Pen vs Alternatives</h2>
+            
+            <div class="overflow-x-auto">
+                <table class="w-full text-left bg-white rounded-xl shadow-sm">
+                    <thead>
+                        <tr class="border-b-2 border-gray-200">
+                            <th class="py-3 px-4"></th>
+                            <th class="py-3 px-4 text-primary-600 font-bold">Pen</th>
+                            <th class="py-3 px-4 text-gray-500">Cloud AI</th>
+                            <th class="py-3 px-4 text-gray-500">Local Agent</th>
+                            <th class="py-3 px-4 text-gray-500">VM</th>
+                        </tr>
+                    </thead>
+                    <tbody class="text-gray-600">
+                        <tr class="border-b">
+                            <td class="py-3 px-4 font-medium">Your data stays yours</td>
+                            <td class="py-3 px-4 text-green-600">✓</td>
+                            <td class="py-3 px-4 text-red-500">✗</td>
+                            <td class="py-3 px-4 text-green-600">✓</td>
+                            <td class="py-3 px-4 text-green-600">✓</td>
+                        </tr>
+                        <tr class="border-b">
+                            <td class="py-3 px-4 font-medium">Isolated from your system</td>
+                            <td class="py-3 px-4 text-green-600">✓</td>
+                            <td class="py-3 px-4 text-green-600">✓</td>
+                            <td class="py-3 px-4 text-red-500">✗</td>
+                            <td class="py-3 px-4 text-green-600">✓</td>
+                        </tr>
+                        <tr class="border-b">
+                            <td class="py-3 px-4 font-medium">Starts in &lt;1 second</td>
+                            <td class="py-3 px-4 text-green-600">✓</td>
+                            <td class="py-3 px-4 text-green-600">✓</td>
+                            <td class="py-3 px-4 text-green-600">✓</td>
+                            <td class="py-3 px-4 text-red-500">✗</td>
+                        </tr>
+                        <tr class="border-b">
+                            <td class="py-3 px-4 font-medium">Bring your own API keys</td>
+                            <td class="py-3 px-4 text-green-600">✓</td>
+                            <td class="py-3 px-4 text-red-500">✗</td>
+                            <td class="py-3 px-4 text-green-600">✓</td>
+                            <td class="py-3 px-4 text-green-600">✓</td>
+                        </tr>
+                        <tr>
+                            <td class="py-3 px-4 font-medium">Full filesystem access</td>
+                            <td class="py-3 px-4 text-green-600">✓</td>
+                            <td class="py-3 px-4 text-red-500">✗</td>
+                            <td class="py-3 px-4 text-green-600">✓</td>
+                            <td class="py-3 px-4 text-green-600">✓</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <!-- Get Started -->
+    <section class="bg-gray-900 text-white py-20">
+        <div class="max-w-4xl mx-auto px-4 text-center">
+            <h2 class="text-3xl font-bold mb-4">Start Running Secure Agents</h2>
+            <p class="text-gray-300 mb-8 text-lg">
+                Self-host for free. Your data never leaves your control. Bring your own API keys.
+            </p>
+
+            <div class="flex justify-center gap-4">
+                <a href="https://github.com/clawpen/claw-pen" class="bg-primary-600 text-white px-8 py-3 rounded-lg font-semibold hover:bg-primary-700">
+                    Self-Host (Free)
+                </a>
+                <a href="pricing.html" class="border-2 border-white text-white px-8 py-3 rounded-lg font-semibold hover:bg-white/10">
+                    Cloud Pricing
+                </a>
+            </div>
+            
+            <div class="mt-8 text-gray-400 text-sm">
+                Powered by <span class="text-white font-semibold">Exo</span> — our open-source container runtime
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-gray-100 border-t border-gray-200 py-8">
+        <div class="max-w-7xl mx-auto px-4 text-center text-gray-600">
+            <p>🧩 Claw Pen — <a href="https://clawpen.ca" class="text-primary-600 hover:underline">clawpen.ca</a> — Built with ❤️ by the OpenClaw team</p>
+            <p class="mt-2 text-sm">All plans: Bring Your Own API Keys. We provide infrastructure, not compute.</p>
+        </div>
+    </footer>
+</body>
+</html>

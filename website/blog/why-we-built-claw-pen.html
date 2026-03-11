@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Why We Built Claw Pen - Claw Pen Blog</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                        },
+                    },
+                },
+            },
+        }
+    </script>
+</head>
+<body class="bg-gray-50 text-gray-900">
+    <!-- Navbar -->
+    <nav class="bg-white border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <a href="/" class="text-2xl font-bold text-primary-600">🧩 Claw Pen</a>
+                <div class="flex gap-6">
+                    <a href="/" class="text-gray-600 hover:text-primary-600">Home</a>
+                    <a href="index.html" class="text-gray-600 hover:text-primary-600">Blog</a>
+                    <a href="https://github.com/clawpen/claw-pen" class="text-gray-600 hover:text-primary-600">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+    
+    <article class="max-w-3xl mx-auto px-4 py-16">
+        <div class="text-gray-500 mb-4">March 11, 2026</div>
+        <h1 class="text-4xl font-bold mb-8">Why We Built Claw Pen: The Case for BYOK</h1>
+        
+        <div class="prose prose-lg max-w-none">
+            <p class="text-xl text-gray-600 mb-8">
+                When we started building AI-powered tools, we kept running into the same problem: 
+                <strong>every service wanted us to upload our data to their cloud.</strong>
+            </p>
+            
+            <p class="text-gray-700 mb-6">
+                Code repositories, financial documents, personal notes, work files — all of it had to leave our machines and sit on someone else's servers. Even worse, we were locked into whatever AI provider the service had chosen.
+            </p>
+            
+            <h2 class="text-2xl font-bold text-gray-900 mt-12 mb-4">The Problem with "AI as a Service"</h2>
+            
+            <p class="text-gray-700 mb-6">
+                Most AI tools today follow a simple model: you pay them, they provide the AI, and everything runs on their infrastructure. Sounds convenient, right?
+            </p>
+            
+            <p class="text-gray-700 mb-4">But there are hidden costs:</p>
+            
+            <ul class="list-disc pl-6 mb-8 text-gray-700 space-y-2">
+                <li><strong>Data exposure:</strong> Your files travel to third-party servers you don't control</li>
+                <li><strong>Vendor lock-in:</strong> You're stuck with whatever model they support</li>
+                <li><strong>Usage limits:</strong> Arbitrary caps on how much you can use "your" AI</li>
+                <li><strong>Price hikes:</strong> When they raise prices, you have no alternative</li>
+                <li><strong>Data retention:</strong> Who knows how long they keep your files?</li>
+            </ul>
+            
+            <h2 class="text-2xl font-bold text-gray-900 mt-12 mb-4">A Different Approach: Infrastructure, Not Compute</h2>
+            
+            <p class="text-gray-700 mb-6">
+                Claw Pen flips this model on its head. <strong>We don't sell AI. We sell the infrastructure to run YOUR AI agents on YOUR hardware.</strong>
+            </p>
+            
+            <p class="text-gray-700 mb-4">Here's how it works:</p>
+            
+            <ul class="list-disc pl-6 mb-8 text-gray-700 space-y-2">
+                <li><strong>You bring your own API keys</strong> — from z.ai, OpenAI, Anthropic, or anyone else</li>
+                <li><strong>You deploy pens on your own machines</strong> — your laptop, your homelab, your VPS</li>
+                <li><strong>Your data stays with you</strong> — files never leave your infrastructure</li>
+                <li><strong>You switch providers anytime</strong> — no lock-in, just standard containers</li>
+            </ul>
+            
+            <h2 class="text-2xl font-bold text-gray-900 mt-12 mb-4">Why This Is Safer</h2>
+            
+            <p class="text-gray-700 mb-6">
+                When you use a hosted AI service, your data takes this journey:
+            </p>
+            
+            <div class="bg-gray-100 p-4 rounded-lg mb-6 font-mono text-sm">
+                Your computer → Their servers → AI provider → Their servers → Your computer
+            </div>
+            
+            <p class="text-gray-700 mb-6">With Claw Pen, it's:</p>
+            
+            <div class="bg-gray-100 p-4 rounded-lg mb-6 font-mono text-sm">
+                Your computer → AI provider → Your computer
+            </div>
+            
+            <p class="text-gray-700 mb-8">
+                The AI provider still processes your requests (that's unavoidable), but there's no middleman holding your files. No third party building a data profile on you. No service that could be breached and expose everything you've ever uploaded.
+            </p>
+            
+            <h2 class="text-2xl font-bold text-gray-900 mt-12 mb-4">The BYOK Future</h2>
+            
+            <p class="text-gray-700 mb-6">
+                We believe the future of AI tooling isn't more hosted services — it's better infrastructure for running AI yourself. The models are getting cheaper and more capable. The API ecosystem is maturing. What's missing is <strong>easy deployment and management</strong>.
+            </p>
+            
+            <p class="text-gray-700 mb-4">That's where Claw Pen comes in. We make it dead simple to:</p>
+            
+            <ul class="list-disc pl-6 mb-8 text-gray-700 space-y-2">
+                <li>Deploy isolated AI agents (we call them <strong>pens</strong>)</li>
+                <li>Manage multiple agents with different specializations</li>
+                <li>Keep your keys secure and your data private</li>
+                <li>Switch providers without rebuilding everything</li>
+            </ul>
+            
+            <p class="text-xl font-semibold text-gray-900 mt-12">
+                Your AI agents. Your infrastructure. Your control.
+            </p>
+            
+            <p class="text-gray-600 mt-2">That's the Claw Pen promise.</p>
+            
+            <a href="index.html" class="inline-block mt-12 text-primary-600 font-semibold hover:text-primary-700">
+                ← Back to Blog
+            </a>
+        </div>
+    </article>
+
+    <!-- Footer -->
+    <footer class="bg-gray-100 border-t border-gray-200 py-8 mt-16">
+        <div class="max-w-7xl mx-auto px-4 text-center text-gray-600">
+            <p>🧩 Claw Pen — <a href="https://clawpen.ca" class="text-primary-600 hover:underline">clawpen.ca</a></p>
+        </div>
+    </footer>
+</body>
+</html>
