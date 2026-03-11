@@ -408,7 +408,7 @@
             
             if (ws) ws.close();
 
-            ws = new WebSocket('ws://localhost:18790/ws');
+            ws = new WebSocket('ws://localhost:18789/ws');
 
             ws.onopen = () => {
                 console.log('WebSocket connected');
@@ -437,7 +437,7 @@
             console.log('WS message:', data);
 
             if (data.type === 'event' && data.event === 'connect.challenge') {
-                ws.send(JSON.stringify({ type: 'auth', method: 'none' }));
+                ws.send(JSON.stringify({ type: 'auth', method: 'token', token: 'b515a9b6c0d5cfa218df9512e6d4f982c78f3907d542a31e' }));
                 return;
             }
 

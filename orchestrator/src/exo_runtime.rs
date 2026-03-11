@@ -385,8 +385,9 @@ impl ExoRuntimeClient {
             env.insert("LLM_MODEL".to_string(), model.clone());
         }
 
-        // Set agent name
-        env.insert("AGENT_NAME".to_string(), "claw-agent".to_string());
+        // NOTE: Don't set AGENT_NAME - it triggers exo's restrictive "agent-default" security profile
+        // which drops all capabilities and blocks syscalls needed by OpenClaw gateway
+        // env.insert("AGENT_NAME".to_string(), "claw-agent".to_string());
 
         // For local providers, configure host endpoint
         match &config.llm_provider {
