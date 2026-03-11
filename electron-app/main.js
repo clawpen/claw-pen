@@ -257,7 +257,7 @@ ipcMain.handle('fetch-agents', async () => {
     
     return new Promise((resolve, reject) => {
         const options = {
-            hostname: 'localhost',
+            hostname: '127.0.0.1',
             port: 8081,
             path: '/api/agents',
             method: 'GET'
@@ -351,7 +351,7 @@ ipcMain.handle('create-agent', async (event, config) => {
     
     return new Promise((resolve, reject) => {
         const req = http.request({
-            hostname: 'localhost',
+            hostname: '127.0.0.1',
             port: 8081,
             path: '/api/agents',
             method: 'POST',
@@ -398,7 +398,7 @@ ipcMain.handle('start-agent', async (event, id) => {
     
     return new Promise((resolve, reject) => {
         const options = {
-            hostname: 'localhost',
+            hostname: '127.0.0.1',
             port: 8081,
             path: '/api/agents/' + id + '/start',
             method: 'POST'
@@ -432,7 +432,7 @@ ipcMain.handle('stop-agent', async (event, id) => {
     
     return new Promise((resolve, reject) => {
         const options = {
-            hostname: 'localhost',
+            hostname: '127.0.0.1',
             port: 8081,
             path: '/api/agents/' + id + '/stop',
             method: 'POST'
@@ -455,7 +455,7 @@ ipcMain.handle('update-agent', async (event, config) => {
     
     // First get current agent config
     const currentAgent = await new Promise((resolve, reject) => {
-        http.get('http://localhost:8081/api/agents', (res) => {
+        http.get('http://127.0.0.1:8081/api/agents', (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
@@ -502,7 +502,7 @@ ipcMain.handle('update-agent', async (event, config) => {
     
     return new Promise((resolve, reject) => {
         const req = http.request({
-            hostname: 'localhost',
+            hostname: '127.0.0.1',
             port: 8081,
             path: '/api/agents/' + config.id,
             method: 'PUT',
@@ -539,7 +539,7 @@ ipcMain.handle('update-agent', async (event, config) => {
 ipcMain.handle('fetch-api-keys', async () => {
     const http = require('http');
     return new Promise((resolve, reject) => {
-        http.get('http://localhost:8081/api/keys', (res) => {
+        http.get('http://127.0.0.1:8081/api/keys', (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
@@ -557,7 +557,7 @@ ipcMain.handle('set-api-key', async (event, data) => {
     
     return new Promise((resolve, reject) => {
         const req = http.request({
-            hostname: 'localhost',
+            hostname: '127.0.0.1',
             port: 8081,
             path: '/api/keys',
             method: 'POST',
@@ -585,7 +585,7 @@ ipcMain.handle('login', async (event, credentials) => {
     
     return new Promise((resolve, reject) => {
         const req = http.request({
-            hostname: 'localhost',
+            hostname: '127.0.0.1',
             port: 8081,
             path: '/auth/login',
             method: 'POST',
@@ -636,7 +636,7 @@ ipcMain.handle('check-auth', async () => {
     
     return new Promise((resolve) => {
         // Check if auth is enabled
-        const req = http.get('http://localhost:8081/auth/status', (res) => {
+        const req = http.get('http://127.0.0.1:8081/auth/status', (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {

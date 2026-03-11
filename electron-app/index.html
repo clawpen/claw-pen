@@ -286,7 +286,7 @@
             setStatus('connecting');
             
             var port = (a.config && a.config.env_vars && a.config.env_vars.PORT) || 18790;
-            var url = 'ws://localhost:' + port + '/ws';
+            var url = 'ws://127.0.0.1:' + port + '/ws';
             
             try { await window.electronAPI.connectWebSocket(url); }
             catch (e) { console.error('Connection error:', e); setStatus('disconnected'); }

@@ -1,14 +1,16 @@
 #!/bin/sh
 set -e
 
-# Configuration from environment
 MODEL="${LLM_MODEL:-glm-5}"
 PROVIDER="${LLM_PROVIDER:-zai}"
 PROVIDER=$(echo "$PROVIDER" | tr '[:upper:]' '[:lower:]')
 PORT="${PORT:-18790}"
+# BIND: "loopback" (127.0.0.1 only) or "lan" (0.0.0.0 for container access)
+BIND="${BIND:-loopback}"
+# Token for gateway auth (required for lan bind)
+GATEWAY_TOKEN="${GATEWAY_TOKEN:-}"
 BASE_URL=""
 
-# Set API key based on provider
 case "$PROVIDER" in
   zai) 
     API_KEY="$ZAI_API_KEY" 
@@ -28,55 +30,28 @@ case "$PROVIDER" in
   *) API_KEY="${ZAI_API_KEY:-${ANTHROPIC_API_KEY:-${OPENAI_API_KEY:-}}}" ;;
 esac
 
-echo "[entrypoint] Starting OpenClaw Agent (Full)"
-echo "[entrypoint] Provider: $PROVIDER, Model: $MODEL, Port: $PORT"
-echo "[entrypoint] API Key: ${API_KEY:+set}, BaseURL: ${BASE_URL:-default}"
-echo "[entrypoint] Browser: $CHROME_BIN"
+echo "[entrypoint] Provider: $PROVIDER, Model: $MODEL, Port: $PORT, Bind: $BIND, API Key: ${API_KEY:+set}, BaseURL: ${BASE_URL:-default}"
 
-# Create OpenClaw config directory
 mkdir -p /root/.openclaw/agents/dev/agent
-mkdir -p /root/.openclaw/skills
-mkdir -p /root/.openclaw/workspace
-mkdir -p /root/.openclaw/canvas
 
-# Link skills from /agent to config
-if [ -d "/agent/.openclaw/skills" ] && [ "$(ls -A /agent/.openclaw/skills 2>/dev/null)" ]; then
-    cp -r /agent/.openclaw/skills/* /root/.openclaw/skills/ 2>/dev/null || true
-    echo "[entrypoint] Copied bundled skills"
+# Build gateway auth config
+if [ -n "$GATEWAY_TOKEN" ]; then
+  GATEWAY_AUTH="{\"mode\": \"token\", \"token\": \"${GATEWAY_TOKEN}\"}"
+else
+  GATEWAY_AUTH="{\"mode\": \"none\"}"
 fi
 
-# Generate OpenClaw config
 cat > /root/.openclaw/openclaw.json << CONF
 {
   "meta": {"lastTouchedVersion": "2026.2.26"},
   "agents": {
-    "defaults": {
-      "workspace": "/agent",
-      "skipBootstrap": true,
-      "model": {"primary": "${PROVIDER}/${MODEL}"}
-    },
-    "list": [{
-      "id": "dev",
-      "default": true,
-      "workspace": "/agent",
-      "identity": {"name": "Agent", "emoji": "🤖"},
-      "model": {"primary": "${PROVIDER}/${MODEL}"}
-    }]
+    "defaults": {"workspace": "/root/.openclaw/workspace-dev", "skipBootstrap": true, "model": {"primary": "${PROVIDER}/${MODEL}"}},
+    "list": [{"id": "dev", "default": true, "workspace": "/root/.openclaw/workspace-dev", "identity": {"name": "Agent", "emoji": "🤖"}, "model": {"primary": "${PROVIDER}/${MODEL}"}}]
   },
-  "gateway": {
-    "mode": "local",
-    "bind": "lan",
-    "auth": {"mode": "none"},
-    "port": ${PORT}
-  },
-  "browser": {
-    "enabled": true,
-    "headless": true
-  }
+  "gateway": {"mode": "local", "bind": "${BIND}", "auth": ${GATEWAY_AUTH}, "port": ${PORT}}
 }
 CONF
 
-# Generate auth profiles
 if [ -n "$API_KEY" ]; then
   if [ -n "$BASE_URL" ]; then
     cat > /root/.openclaw/agents/dev/agent/auth-profiles.json << AUTH
@@ -87,9 +62,6 @@ AUTH
 {"version":1,"profiles":{"${PROVIDER}:default":{"type":"api_key","provider":"${PROVIDER}","key":"${API_KEY}"}},"lastGood":{"${PROVIDER}":"${PROVIDER}:default"}}
 AUTH
   fi
-  echo "[entrypoint] Auth profiles configured"
 fi
 
-# Start OpenClaw gateway
-echo "[entrypoint] Starting gateway on port $PORT..."
-exec node /usr/local/lib/node_modules/openclaw/openclaw.mjs gateway run --dev --auth none --allow-unconfigured
+exec node /usr/local/lib/node_modules/openclaw/openclaw.mjs gateway run --dev --allow-unconfigured

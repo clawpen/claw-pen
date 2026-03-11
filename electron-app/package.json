@@ -1,23 +1,45 @@
 {
   "name": "claw-pen-desktop",
-  "version": "1.0.0",
-  "description": "Claw Pen Desktop - Agent Management UI",
+  "version": "0.2.0",
+  "description": "Claw Pen - AI Agent Management Desktop App",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
-    "dev": "electron . --dev"
+    "build:win": "electron-builder --win",
+    "build:linux": "electron-builder --linux",
+    "build:mac": "electron-builder --mac"
   },
-  "keywords": [],
   "author": "Claw Pen",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^40.8.0",
-    "electron-builder": "^25.0.0"
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
   },
   "dependencies": {
-    "bcryptjs": "^3.0.3",
-    "tweetnacl": "^1.0.3",
-    "ws": "^8.19.0"
+    "axios": "^1.6.0",
+    "ws": "^8.14.0",
+    "tweetnacl": "^1.0.3"
+  },
+  "build": {
+    "appId": "com.clawpen.desktop",
+    "productName": "Claw Pen",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "**/*",
+      "!node_modules/*/{CHANGELOG.md,README.md,readme.md,LICENSE,license}",
+      "!**/.*"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    },
+    "mac": {
+      "target": "dmg"
+    }
   }
 }
