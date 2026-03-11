@@ -54,7 +54,8 @@ impl ExoRuntimeClient {
         } else {
             vec![
                 "exo".to_string(),
-                "/home/codi/Desktop/software/exo/target/release/exo".to_string(),
+                "/data/software/exo/target/release/exo".to_string(),
+                "/home/codi/.local/bin/exo".to_string(),
             ]
         };
 
@@ -160,6 +161,10 @@ impl ExoRuntimeClient {
         // args.push("--cpus".to_string());
         // args.push(format!("{}", config.cpu_cores));
 
+        // Use host network mode so container can bind to host ports
+        args.push("--network".to_string());
+        args.push("host".to_string());
+
         // Add environment variables
         for (key, value) in self.build_env_vars(config) {
             args.push("-e".to_string());
@@ -179,16 +184,15 @@ impl ExoRuntimeClient {
             }
         }
 
-        // Get gateway port from config
+        // Get gateway port from config (used in env vars, not port mapping since we use host network)
         let gateway_port: u16 = config
             .env_vars
             .get("PORT")
             .and_then(|p| p.parse().ok())
             .unwrap_or(18790);
 
-        // Add port mapping for gateway
-        args.push("-p".to_string());
-        args.push(format!("{}:{}:{}", gateway_port, gateway_port, "tcp"));
+        // Note: With --network host, no port mapping needed - container binds directly to host
+        // The PORT env var tells the gateway which port to use
 
         // Select image based on agent runtime
         let default_runtime = AgentRuntime::default();
@@ -199,10 +203,10 @@ impl ExoRuntimeClient {
         };
         args.push(image.to_string());
 
-        // Default command for agent containers
-        args.push("openclaw".to_string());
-        args.push("agent".to_string());
-        args.push("--local".to_string());
+        // Use the image's entrypoint (for openclaw-agent, this is /entrypoint.sh)
+        // Pass -- to signal end of exo args and start of container command
+        args.push("--".to_string());
+        args.push("/entrypoint.sh".to_string());
 
         let output = Command::new(&self.exo_path)
             .args(&args)
