@@ -159,8 +159,8 @@ curl -X POST http://localhost:3000/api/agents \
 |----------|---------------|-------|
 | OpenAI | API Key | GPT-4o, GPT-4, GPT-3.5 |
 | Anthropic | API Key | Claude 3.5 Sonnet, Opus |
-| Kimi | OAuth | Moonshot AI (OpenClaw gateway) |
-| z.ai | OAuth / API Key | GLM models |
+| Kimi | API Key | Moonshot AI (OpenClaw gateway) |
+| z.ai | API Key | GLM models |
 | Ollama | Local | Self-hosted models |
 | LM Studio | Local | GUI-based local inference |
 | HuggingFace | Token | Various open models |
