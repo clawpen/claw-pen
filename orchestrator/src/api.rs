@@ -337,10 +337,9 @@ pub async fn create_agent(
     }
 
     // Determine which runtime to use
-    // Priority: per-agent runtime > global config runtime
+    // Priority: per-agent runtime > global config runtime (always exo now)
     let agent_runtime = runtime.or_else(|| match state.config.container_runtime {
-        crate::config::ContainerRuntimeType::Docker => Some("docker".to_string()),
-        crate::config::ContainerRuntimeType::Exo => Some("exo".to_string()),
+        _ => Some("exo".to_string()),
     });
 
     // Get the appropriate runtime client based on agent's runtime preference
@@ -934,11 +933,8 @@ pub async fn get_system_stats(State(state): State<Arc<AppState>>) -> Json<System
     // Get CPU usage (simplified - just count running containers)
     let cpu_usage = (running.len() as f32 / cpu_cores.max(1.0)) * 100.0;
 
-    // Determine active runtime
-    let runtime = match state.config.container_runtime {
-        crate::config::ContainerRuntimeType::Docker => "docker",
-        crate::config::ContainerRuntimeType::Exo => "exo",
-    };
+    // Determine active runtime (always exo now)
+    let runtime = "exo";
 
     Json(SystemStats {
         total_memory_mb: total_mem / 1024,
@@ -1273,10 +1269,8 @@ pub async fn import_agent(
 // === Runtime Status ===
 
 pub async fn runtime_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let runtime_name = match state.config.container_runtime {
-        crate::config::ContainerRuntimeType::Docker => "docker",
-        crate::config::ContainerRuntimeType::Exo => "exo",
-    };
+    // Always report exo as the runtime (Docker is deprecated)
+    let runtime_name = "exo";
 
     Json(serde_json::json!({
         "runtime": runtime_name,

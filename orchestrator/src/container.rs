@@ -71,21 +71,27 @@ impl RuntimeClient {
         runtime_type: ContainerRuntimeType,
         exo_path: Option<String>,
     ) -> Result<Self> {
-        // Exo is the only supported runtime now
-        let exo_client = ExoRuntimeClient::new(exo_path.clone())?;
-        
+        // Log deprecation warning if Docker is selected
         match runtime_type {
-            ContainerRuntimeType::Exo | ContainerRuntimeType::Docker => {
+            ContainerRuntimeType::Docker => {
+                tracing::warn!("Docker runtime is deprecated. Using Exo runtime instead.");
+                tracing::info!("Update your config to use 'container-runtime = \"exo\"'");
+            }
+            ContainerRuntimeType::Exo => {
                 tracing::info!("Using Exo runtime");
-                Ok(Self {
-                    inner: exo_client,
-                    network_backend: NetworkBackend::default(),
-                    headscale_url: None,
-                    headscale_auth_key: None,
-                    headscale_namespace: None,
-                })
             }
         }
+
+        // Always use Exo runtime (the only supported runtime)
+        let exo_client = ExoRuntimeClient::new(exo_path)?;
+
+        Ok(Self {
+            inner: exo_client,
+            network_backend: NetworkBackend::default(),
+            headscale_url: None,
+            headscale_auth_key: None,
+            headscale_namespace: None,
+        })
     }
 
     /// Configure the network backend (called after loading config)

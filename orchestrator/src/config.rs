@@ -24,8 +24,10 @@ pub enum NetworkBackend {
 #[derive(Debug, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum ContainerRuntimeType {
-    #[default]
+    /// Docker runtime (deprecated - will use Exo instead)
     Docker,
+    /// Exo runtime (default)
+    #[default]
     Exo,
 }
 
@@ -117,7 +119,7 @@ pub fn load() -> anyhow::Result<Config> {
         .set_default("deployment_mode", "windows-wsl")?
         .set_default("network_backend", "tailscale")?
         .set_default("runtime_socket", "/var/run/claw-pen.sock")?
-        .set_default("container_runtime", "docker")?
+        .set_default("container_runtime", "exo")?
         .set_default("exo_path", None::<String>)?
         .set_default("tailscale_auth_key", None::<String>)?
         .set_default("headscale_url", None::<String>)?
