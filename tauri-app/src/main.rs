@@ -655,6 +655,141 @@ async fn send_floating_message(
     }
 }
 
+// === Agent Management Commands ===
+
+#[tauri::command]
+async fn list_agents(_state: tauri::State<'_, AppState>) -> Result<Vec<serde_json::Value>, String> {
+    use reqwest::Client;
+
+    let client = Client::new();
+    let url = "http://localhost:8081/api/agents";
+
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to orchestrator: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Failed to list agents: HTTP {}", response.status()));
+    }
+
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+#[tauri::command]
+async fn create_agent(
+    _state: tauri::State<'_, AppState>,
+    name: String,
+    llm_provider: String,
+    llm_model: String,
+) -> Result<serde_json::Value, String> {
+    use reqwest::Client;
+    use serde_json::json;
+
+    let client = Client::new();
+    let url = "http://localhost:8081/api/agents";
+
+    let payload = json!({
+        "name": name,
+        "config": {
+            "llm_provider": llm_provider,
+            "llm_model": llm_model,
+            "memory_mb": 1024,
+            "cpu_cores": 1.0
+        }
+    });
+
+    let response = client
+        .post(url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to orchestrator: {}", e))?;
+
+    if !response.status().is_success() {
+        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(format!("Failed to create agent: {}", error_text));
+    }
+
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+#[tauri::command]
+async fn start_agent(_state: tauri::State<'_, AppState>, id: String) -> Result<serde_json::Value, String> {
+    use reqwest::Client;
+
+    let client = Client::new();
+    let url = format!("http://localhost:8081/api/agents/{}/start", id);
+
+    let response = client
+        .post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to orchestrator: {}", e))?;
+
+    if !response.status().is_success() {
+        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(format!("Failed to start agent: {}", error_text));
+    }
+
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+#[tauri::command]
+async fn stop_agent(_state: tauri::State<'_, AppState>, id: String) -> Result<serde_json::Value, String> {
+    use reqwest::Client;
+
+    let client = Client::new();
+    let url = format!("http://localhost:8081/api/agents/{}/stop", id);
+
+    let response = client
+        .post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to orchestrator: {}", e))?;
+
+    if !response.status().is_success() {
+        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(format!("Failed to stop agent: {}", error_text));
+    }
+
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+#[tauri::command]
+async fn delete_agent(_state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    use reqwest::Client;
+
+    let client = Client::new();
+    let url = format!("http://localhost:8081/api/agents/{}", id);
+
+    let response = client
+        .delete(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to orchestrator: {}", e))?;
+
+    if !response.status().is_success() {
+        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(format!("Failed to delete agent: {}", error_text));
+    }
+
+    Ok(())
+}
+
 // URL encoding for query params
 mod urlencoding {
     pub fn encode(s: &str) -> String {
@@ -684,6 +819,12 @@ fn main() {
             pop_out_agent,
             connect_floating_window,
             send_floating_message,
+            // Agent management commands
+            list_agents,
+            create_agent,
+            start_agent,
+            stop_agent,
+            delete_agent,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
