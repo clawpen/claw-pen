@@ -293,7 +293,14 @@ impl ExoRuntimeClient {
     }
 
     async fn get_stats_internal(&self, _id: &str) -> Result<Option<ResourceUsage>> {
-        // TODO: Implement stats collection via exo stats command when available
+        // Stats collection not yet available in exo CLI
+        // TODO: Implement when exo adds 'stats' or 'inspect' command
+        // See: https://github.com/exo-express/exo/issues
+        //
+        // Potential approaches when exo adds stats support:
+        // 1. Use `exo stats <id>` if available
+        // 2. Use `exo inspect <id>` for detailed container info
+        // 3. Parse cgroup metrics from /proc for container processes
         Ok(None)
     }
 
