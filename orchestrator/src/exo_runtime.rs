@@ -82,10 +82,21 @@ impl ExoRuntimeClient {
     }
 
     async fn list_containers_internal(&self) -> Result<Vec<AgentContainer>> {
-        let output = Command::new(&self.exo_path)
-            .args(["list", "--json"])
-            .output()
-            .await?;
+        // Add timeout to list command to prevent hanging
+        let output = tokio::time::timeout(
+            tokio::time::Duration::from_secs(10),
+            Command::new(&self.exo_path)
+                .args(["list", "--json"])
+                .output()
+        )
+        .await
+        .map_err(|e| {
+            if e.is_elapsed() {
+                anyhow::anyhow!("Timeout listing containers")
+            } else {
+                anyhow::anyhow!("Failed to list containers: {}", e)
+            }
+        })??;
 
         if !output.status.success() {
             tracing::warn!(
@@ -151,9 +162,10 @@ impl ExoRuntimeClient {
         // Build args for exo run
         let mut args = vec![
             "run".to_string(),
-            "--name".to_string(),
+            "-n".to_string(), // Use -n instead of --name
             name.to_string(),
-            "-d".to_string(), // detached
+            "--detach".to_string(), // Use --detach instead of -d to avoid conflict with --debug
+            "-q".to_string(), // quiet mode - reduce output
         ];
 
         // Note: Memory and CPU limits not supported by exo runtime
@@ -210,31 +222,34 @@ impl ExoRuntimeClient {
         args.push("--".to_string());
         args.push("/entrypoint.sh".to_string());
 
-        // Capture stdout separately, discard stderr (which contains ANSI-colored logs)
-        // This prevents log pollution from corrupting the container ID
-        let output = Command::new(&self.exo_path)
+        // Spawn the command in background and return immediately
+        // We'll verify the container was created by checking exo list
+        Command::new(&self.exo_path)
             .args(&args)
-            .stdout(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .output()
-            .await?;
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("Failed to spawn exo run command: {}", e))?;
 
-        if !output.status.success() {
-            // Since stderr is discarded, check exit code only
-            anyhow::bail!(
-                "Failed to create container '{}' (exit code: {:?})",
-                name,
-                output.status.code()
-            );
-        }
+        // Wait a moment for the container to be created
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-        let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        // Verify the container was created by checking exo list
+        let mut retries = 10;
+        let id = loop {
+            let containers = self.list_containers_internal().await?;
+            if let Some(container) = containers.iter().find(|c| c.name == name) {
+                tracing::info!("Created container: {} ({})", name, container.id);
+                break container.id.clone();
+            }
 
-        // Validate we got a clean container ID (should be hex string)
-        if id.is_empty() || !id.chars().all(|c| c.is_ascii_hexdigit()) {
-            tracing::warn!("Unexpected container ID format: '{}'", id);
-        }
-        tracing::info!("Created container: {} ({})", name, id);
+            retries -= 1;
+            if retries <= 0 {
+                anyhow::bail!("Container '{}' was not found in exo list after creation", name);
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        };
+
         Ok(id)
     }
 
