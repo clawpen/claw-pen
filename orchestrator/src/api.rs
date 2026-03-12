@@ -344,29 +344,74 @@ pub async fn create_agent(
 
     // Get the appropriate runtime client based on agent's runtime preference
     let id = if let Some(ref rt) = agent_runtime {
+        tracing::info!("Creating agent '{}' with runtime: {}", req.name, rt);
         if rt == "exo" {
             // Use exo-specific runtime if available
-            state
-                .exo_runtime
-                .create_container(&req.name, &config)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            match tokio::time::timeout(
+                tokio::time::Duration::from_secs(30),
+                state.exo_runtime.create_container(&req.name, &config)
+            )
+            .await
+            {
+                Ok(Ok(id)) => {
+                    tracing::info!("Agent '{}' created with container ID: {}", req.name, id);
+                    id
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("Failed to create agent '{}' with exo runtime: {}", req.name, e);
+                    return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+                }
+                Err(_) => {
+                    tracing::error!("Timeout creating agent '{}' with exo runtime", req.name);
+                    return Err((StatusCode::INTERNAL_SERVER_ERROR, "Timeout creating agent".to_string()));
+                }
+            }
         } else {
             // Use default runtime (exo)
-            state
-                .runtime
-                .create_container(&req.name, &config)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            match tokio::time::timeout(
+                tokio::time::Duration::from_secs(30),
+                state.runtime.create_container(&req.name, &config)
+            )
+            .await
+            {
+                Ok(Ok(id)) => {
+                    tracing::info!("Agent '{}' created with container ID: {}", req.name, id);
+                    id
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("Failed to create agent '{}' with default runtime: {}", req.name, e);
+                    return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+                }
+                Err(_) => {
+                    tracing::error!("Timeout creating agent '{}' with default runtime", req.name);
+                    return Err((StatusCode::INTERNAL_SERVER_ERROR, "Timeout creating agent".to_string()));
+                }
+            }
         }
     } else {
-        state
-            .runtime
-            .create_container(&req.name, &config)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        tracing::info!("Creating agent '{}' with default runtime", req.name);
+        match tokio::time::timeout(
+            tokio::time::Duration::from_secs(30),
+            state.runtime.create_container(&req.name, &config)
+        )
+        .await
+        {
+            Ok(Ok(id)) => {
+                tracing::info!("Agent '{}' created with container ID: {}", req.name, id);
+                id
+            }
+            Ok(Err(e)) => {
+                tracing::error!("Failed to create agent '{}': {}", req.name, e);
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+            }
+            Err(_) => {
+                tracing::error!("Timeout creating agent '{}'", req.name);
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, "Timeout creating agent".to_string()));
+            }
+        }
     };
 
+    let agent_name = req.name.clone();
     let agent = AgentContainer {
         id,
         name: req.name,
@@ -406,14 +451,28 @@ pub async fn create_agent(
     }
 
     // Add to state
-    let mut containers = state.containers.write().await;
-    containers.push(agent.clone());
-
-    // Persist to storage
-    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(&agent)) {
-        tracing::warn!("Failed to persist agent: {}", e);
+    {
+        let mut containers = state.containers.write().await;
+        containers.push(agent.clone());
+        tracing::info!("Agent '{}' added to in-memory state (total: {})", agent_name, containers.len());
     }
 
+    // Persist to storage
+    let stored_agent = crate::storage::to_stored_agent(&agent);
+    match crate::storage::upsert_agent(&stored_agent) {
+        Ok(_) => {
+            tracing::info!("Agent '{}' persisted to storage at: {:?}",
+                agent_name,
+                crate::storage::get_data_dir().map(|p| p.join("agents.json"))
+            );
+        }
+        Err(e) => {
+            tracing::error!("Failed to persist agent '{}' to storage: {}", agent_name, e);
+            // Continue anyway - agent is created and in memory
+        }
+    }
+
+    tracing::info!("Successfully created and registered agent '{}', returning response", agent_name);
     Ok(Json(agent))
 }
 

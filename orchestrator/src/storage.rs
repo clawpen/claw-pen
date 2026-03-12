@@ -6,12 +6,12 @@ use std::path::PathBuf;
 const AGENTS_FILE: &str = "agents.json";
 
 /// Get the data directory for storing agent configurations
-fn get_data_dir() -> Result<PathBuf> {
-    let dir = dirs::config_dir()
-        .map(|d| d.join("claw-pen"))
-        .unwrap_or_else(|| PathBuf::from("."));
-    fs::create_dir_all(&dir)?;
-    Ok(dir)
+/// Uses the same directory as the main orchestrator for consistency
+pub fn get_data_dir() -> Result<PathBuf> {
+    // Use the same data directory as main.rs for consistency
+    let data_dir = PathBuf::from("/data/claw-pen/data");
+    fs::create_dir_all(&data_dir)?;
+    Ok(data_dir)
 }
 
 /// Storage format for agents on disk
