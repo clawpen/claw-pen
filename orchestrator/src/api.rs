@@ -245,6 +245,66 @@ pub async fn create_agent(
                 cfg.memory_mb = t.config.memory_mb;
                 cfg.cpu_cores = t.config.cpu_cores;
                 cfg.env_vars = t.env.clone();
+                cfg.image = t.config.image.clone();
+
+                // Create safe volume mounts from template
+                // Host paths will be under {data_dir}/agents/{agent_name}/
+                if !t.config.volumes.is_empty() {
+                    // Get current working directory for absolute paths
+                    let cwd = std::env::current_dir()
+                        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+                    // Create agent-specific data directory (absolute path)
+                    let agent_data_dir = cwd
+                        .join("data")
+                        .join("agents")
+                        .join(&req.name)
+                        .join("volumes");
+
+                    // Ensure the directory exists
+                    if let Err(e) = std::fs::create_dir_all(&agent_data_dir) {
+                        tracing::warn!("Failed to create agent data directory: {}", e);
+                    } else {
+                        tracing::info!("Created agent data directory: {:?}", agent_data_dir);
+                    }
+
+                    // Convert volume paths to VolumeMounts
+                    for volume_path in &t.config.volumes {
+                        // Extract the last component as the directory name
+                        // e.g., "/agent/memory" -> "memory"
+                        let dir_name = volume_path
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(volume_path)
+                            .to_string();
+
+                        // Create host path (absolute)
+                        let host_path = agent_data_dir.join(&dir_name);
+
+                        // Create host directory
+                        if let Err(e) = std::fs::create_dir_all(&host_path) {
+                            tracing::warn!("Failed to create volume directory: {:?}: {}", host_path, e);
+                        } else {
+                            tracing::info!("Created volume directory: {:?}", host_path);
+                        }
+
+                        // Convert to absolute path string for Docker
+                        // Keep the native Windows path format (backslashes)
+                        // Docker Desktop for Windows handles this correctly
+                        let absolute_path = host_path
+                            .canonicalize()
+                            .unwrap_or(host_path)
+                            .to_string_lossy()
+                            .to_string();
+
+                        cfg.volumes.push(crate::types::VolumeMount {
+                            source: absolute_path,
+                            target: volume_path.clone(),
+                            read_only: false,
+                        });
+                    }
+                }
+
                 cfg
             })
             .ok_or_else(|| {
@@ -924,34 +984,15 @@ pub async fn get_system_stats(State(state): State<Arc<AppState>>) -> Json<System
 }
 
 fn get_system_memory() -> (u64, u64) {
-    use std::fs;
+    use sysinfo::System;
 
-    if let Ok(content) = fs::read_to_string("/proc/meminfo") {
-        let mut total = 0u64;
-        let mut available = 0u64;
+    let mut sys = System::new_all();
+    sys.refresh_all();
 
-        for line in content.lines() {
-            if line.starts_with("MemTotal:") {
-                total = line
-                    .split(':')
-                    .nth(1)
-                    .and_then(|s| s.split_whitespace().next())
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(0);
-            } else if line.starts_with("MemAvailable:") {
-                available = line
-                    .split(':')
-                    .nth(1)
-                    .and_then(|s| s.split_whitespace().next())
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(0);
-            }
-        }
+    let total_mem = sys.total_memory();
+    let available_mem = sys.available_memory();
 
-        (total, available)
-    } else {
-        (8192 * 1024, 4096 * 1024) // Fallback: 8GB total, 4GB available
-    }
+    (total_mem, available_mem)
 }
 
 // === Templates ===
@@ -1292,6 +1333,9 @@ pub async fn chat_websocket(
     Query(params): Query<HashMap<String, String>>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, (StatusCode, String)> {
+    // Log the connection attempt
+    tracing::info!("WebSocket connection request for agent: {}", id);
+
     // Validate JWT token from query parameter
     let token = params.get("token").ok_or((
         StatusCode::UNAUTHORIZED,
@@ -1312,57 +1356,376 @@ pub async fn chat_websocket(
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
 
     if agent.status != AgentStatus::Running {
+        tracing::warn!("Agent {} is not running: {:?}", id, agent.status);
         return Err((StatusCode::BAD_REQUEST, "Agent is not running".to_string()));
     }
 
     let agent_id = agent.id.clone();
+    let agent_name = agent.name.clone();
+    let gateway_port = agent.gateway_port;
     drop(containers);
 
-    Ok(ws.on_upgrade(move |socket| handle_chat_stream(socket, state, agent_id)))
+    tracing::info!("Upgrading WebSocket connection for agent '{}' (ID: {}, port: {})", agent_name, id, gateway_port);
+
+    Ok(ws.on_upgrade(move |socket| handle_chat_stream(socket, state, agent_id, gateway_port)))
 }
 
-async fn handle_chat_stream(socket: WebSocket, _state: Arc<AppState>, _agent_id: String) {
-    use axum::extract::ws::Message;
-    use futures_util::{SinkExt, StreamExt};
+/// Get the IP address of a container from Docker
+async fn get_container_ip(_runtime: &crate::container::RuntimeClient, container_id: &str) -> anyhow::Result<String> {
+    use bollard::container::InspectContainerOptions;
+    use bollard::Docker;
+    use bollard::API_DEFAULT_VERSION;
 
-    let (mut tx, mut rx) = socket.split();
+    // Create a new Docker connection (try Windows named pipe first, then Unix socket)
+    let docker = if cfg!(windows) {
+        Docker::connect_with_named_pipe(r"\\.\pipe\docker_engine", 120, API_DEFAULT_VERSION)
+    } else {
+        Docker::connect_with_socket("/var/run/docker.sock", 120, API_DEFAULT_VERSION)
+    }
+    .map_err(|e| anyhow::anyhow!("Failed to connect to Docker: {}", e))?;
 
-    // Send welcome message
-    let welcome = serde_json::json!({
-        "role": "system",
-        "content": "Connected to agent. Send a message to start chatting.",
-        "timestamp": chrono::Utc::now().timestamp()
-    });
+    let inspect = docker
+        .inspect_container(container_id, None::<InspectContainerOptions>)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to inspect container: {}", e))?;
 
-    if tx.send(Message::Text(welcome.to_string())).await.is_err() {
-        return;
+    // Get the IP from the bridge network
+    if let Some(networks) = inspect.network_settings.and_then(|n| n.networks) {
+        for (_name, network) in networks {
+            if let Some(ip) = network.ip_address {
+                return Ok(ip.to_string());
+            }
+        }
     }
 
-    // Handle incoming messages
-    while let Some(msg_result) = rx.next().await {
+    Err(anyhow::anyhow!("No IP address found for container"))
+}
+
+async fn handle_chat_stream(socket: WebSocket, state: Arc<AppState>, agent_id: String, gateway_port: u16) {
+    use axum::extract::ws::Message;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::{connect_async_with_config, tungstenite::protocol::WebSocketConfig, tungstenite::Message as TungsteniteMessage};
+    use std::time::Duration;
+
+    println!("[handle_chat_stream] Starting for agent {} on port {}", agent_id, gateway_port);
+    let (mut client_tx, mut client_rx) = socket.split();
+
+    // On Windows, use 127.0.0.1 to force IPv4 (Windows Firewall may block IPv6 localhost)
+    // On Linux, use the container's bridge network IP
+    #[cfg(windows)]
+    let agent_ip = "127.0.0.1";
+    #[cfg(not(windows))]
+    let agent_ip = match get_container_ip(&state.runtime, &agent_id).await {
+        Ok(ip) => ip,
+        Err(e) => {
+            tracing::warn!("Failed to get container IP for {}: {}", agent_id, e);
+            // Fall back to localhost
+            "127.0.0.1".to_string()
+        }
+    };
+
+    // Connect to agent websocket using OpenClaw protocol
+    // OpenClaw uses RPC protocol: type="req"/"res"/"event", not "action"
+    // Password auth: wait for challenge, respond with connect request
+    let agent_ws_url = format!("ws://{}:{}/chat", agent_ip, gateway_port);
+    println!("[handle_chat_stream] Connecting to agent at: {}", agent_ws_url);
+
+    // Configure websocket with more lenient settings
+    let config = WebSocketConfig {
+        max_send_queue: Some(100),
+        accept_unmasked_frames: true,  // Be lenient with protocol
+        ..Default::default()
+    };
+
+    let (agent_ws_stream, _) = match connect_async_with_config(&agent_ws_url, Some(config), false).await {
+        Ok(result) => {
+            println!("[handle_chat_stream] Successfully connected to agent!");
+            tracing::info!("Connected to agent websocket at {}", agent_ws_url);
+            result
+        }
+        Err(e) => {
+            println!("[handle_chat_stream] ERROR connecting to agent: {:?}", e);
+            tracing::warn!("Failed to connect to agent websocket at {}: {}", agent_ws_url, e);
+            let error_msg = serde_json::json!({
+                "role": "system",
+                "error": "Could not connect to agent",
+                "content": format!("Agent websocket unavailable: {}", e),
+                "timestamp": chrono::Utc::now().timestamp()
+            });
+            let _ = client_tx.send(Message::Text(error_msg.to_string())).await;
+            return;
+        }
+    };
+
+    let (mut agent_tx, mut agent_rx) = agent_ws_stream.split();
+
+    // Handle authentication challenge (password mode uses challenge-response)
+    let auth_timeout = tokio::time::sleep(tokio::time::Duration::from_secs(5));
+    tokio::pin!(auth_timeout);
+    let mut authenticated = false;
+
+    tracing::info!("Waiting for authentication challenge...");
+    while !authenticated {
+        tokio::select! {
+            _ = &mut auth_timeout => {
+                tracing::warn!("Timeout waiting for authentication challenge");
+                let error_msg = serde_json::json!({
+                    "role": "system",
+                    "error": "Authentication timeout",
+                    "content": "Agent did not send authentication challenge",
+                    "timestamp": chrono::Utc::now().timestamp()
+                });
+                let _ = client_tx.send(Message::Text(error_msg.to_string())).await;
+                return;
+            }
+            msg_result = agent_rx.next() => {
+                match msg_result {
+                    Some(Ok(TungsteniteMessage::Text(text))) => {
+                        // Check if this is a challenge event
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if json["type"] == "event" && json["event"] == "connect.challenge" {
+                                tracing::info!("Received authentication challenge, sending OpenClaw connect request...");
+                                // Send OpenClaw connect request (RPC protocol)
+                                // Note: OpenClaw uses type="req"/"res"/"event", method names, and params
+                                let connect_request = serde_json::json!({
+                                    "type": "req",
+                                    "id": uuid::Uuid::new_v4().to_string(),
+                                    "method": "connect",
+                                    "params": {
+                                        "minProtocol": 3,
+                                        "maxProtocol": 3,
+                                        "client": {
+                                            "id": "cli",
+                                            "version": env!("CARGO_PKG_VERSION"),
+                                            "platform": "rust",
+                                            "mode": "cli"
+                                        },
+                                        "role": "operator",
+                                        "scopes": ["operator.read", "operator.write"],
+                                        "caps": [],
+                                        "commands": [],
+                                        "permissions": {},
+                                        "auth": {
+                                            "password": "clawpen"
+                                        },
+                                        "locale": "en-US",
+                                        "userAgent": format!("claw-pen-orchestrator/{}", env!("CARGO_PKG_VERSION"))
+                                    }
+                                });
+                                tracing::info!("Sending connect request: {}", connect_request.to_string());
+
+                                // Try to send the connect request
+                                if agent_tx.send(TungsteniteMessage::Text(connect_request.to_string())).await.is_err() {
+                                    tracing::error!("Failed to send connect request");
+                                    return;
+                                }
+
+                                tracing::info!("Connect request sent successfully, waiting for response...");
+                                // Wait for agent's response to our connect request
+                                let confirm_timeout = tokio::time::sleep(tokio::time::Duration::from_secs(3));
+                                tokio::pin!(confirm_timeout);
+                                let mut auth_confirmed = false;
+
+                                // Read next message to see if auth succeeded
+                                loop {
+                                    tokio::select! {
+                                        _ = &mut confirm_timeout => {
+                                            tracing::warn!("Timeout waiting for authentication response");
+                                            break;
+                                        }
+                                        confirm_result = agent_rx.next() => {
+                                            match confirm_result {
+                                                Some(Ok(TungsteniteMessage::Text(confirm_text))) => {
+                                                    tracing::info!("Received response: {}", confirm_text);
+                                                    if let Ok(confirm_json) = serde_json::from_str::<serde_json::Value>(&confirm_text) {
+                                                        // OpenClaw sends type="res" responses
+                                                        if confirm_json["type"] == "res" {
+                                                            if confirm_json["ok"] == true {
+                                                                tracing::info!("✅ Authentication successful! Connected to OpenClaw agent");
+                                                                auth_confirmed = true;
+                                                                break;
+                                                            } else {
+                                                                tracing::error!("❌ Authentication failed: {}", confirm_text);
+                                                                let error_msg = confirm_json["error"].as_str().unwrap_or("Unknown error");
+                                                                tracing::error!("Error details: {}", error_msg);
+                                                                return;
+                                                            }
+                                                        }
+                                                    }
+                                                    // If not an error, assume success and continue
+                                                    auth_confirmed = true;
+                                                    break;
+                                                }
+                                                Some(Ok(TungsteniteMessage::Close(_))) => {
+                                                    tracing::error!("Agent closed connection after authentication attempt");
+                                                    return;
+                                                }
+                                                Some(Err(e)) => {
+                                                    tracing::error!("WebSocket error after auth: {}", e);
+                                                    return;
+                                                }
+                                                None => {
+                                                    tracing::warn!("Agent stream ended after auth");
+                                                    return;
+                                                }
+                                                Some(Ok(_)) => {}
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if auth_confirmed {
+                                    authenticated = true;
+                                } else {
+                                    tracing::warn!("Authentication not explicitly confirmed, proceeding anyway");
+                                    authenticated = true;
+                                }
+                                continue;
+                            }
+                        }
+                        // Forward any other messages to client (might be auth confirmation or other events)
+                        if client_tx.send(Message::Text(text)).await.is_err() {
+                            return;
+                        }
+                    }
+                    Some(Ok(TungsteniteMessage::Close(_))) => {
+                        tracing::warn!("Agent closed connection during authentication");
+                        return;
+                    }
+                    Some(Err(e)) => {
+                        tracing::error!("WebSocket error during authentication: {}", e);
+                        return;
+                    }
+                    None => {
+                        tracing::warn!("Agent stream ended during authentication");
+                        return;
+                    }
+                    Some(Ok(_)) => {}
+                }
+            }
+        }
+    }
+
+    tracing::info!("Connected to agent gateway, starting message proxy");
+
+    // Spawn a task to forward messages from agent to client
+    let agent_to_client = tokio::spawn(async move {
+        while let Some(msg_result) = agent_rx.next().await {
+            match msg_result {
+                Ok(TungsteniteMessage::Text(text)) => {
+                    if client_tx.send(Message::Text(text)).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(TungsteniteMessage::Close(_)) => {
+                    break;
+                }
+                Err(_) => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+
+    // Forward messages from client to agent with OpenClaw protocol translation
+    let mut request_id_counter = 0u64;
+    while let Some(msg_result) = client_rx.next().await {
         match msg_result {
             Ok(Message::Text(text)) => {
-                // Parse the incoming message
-                if let Ok(msg_data) = serde_json::from_str::<serde_json::Value>(&text) {
-                    let user_content = msg_data
-                        .get("content")
-                        .and_then(|c| c.as_str())
-                        .unwrap_or(&text);
+                tracing::info!("Received from GUI: {}", text);
 
-                    // TODO: Forward to actual agent container via its own WebSocket/API
-                    // For now, echo back with a placeholder response
-                    let response = serde_json::json!({
-                        "role": "assistant",
-                        "content": format!("Echo: {}", user_content),
-                        "timestamp": chrono::Utc::now().timestamp()
-                    });
+                // Parse the client message
+                if let Ok(mut client_msg) = serde_json::from_str::<serde_json::Value>(&text) {
+                    // Check if this is already in OpenClaw format (has "method" field)
+                    if let Some(method) = client_msg.get("method").and_then(|m| m.as_str()) {
+                        // Check if it's a chat.send message that needs fixing
+                        if method == "chat.send" {
+                            // Fix sessionKey if it's in the short format
+                            if let Some(params) = client_msg.get_mut("params") {
+                                if let Some(session_key) = params.get("sessionKey").and_then(|k| k.as_str()) {
+                                    if session_key == "main" || session_key == "dev" {
+                                        params["sessionKey"] = serde_json::json!("agent:dev:main");
+                                    }
+                                }
 
-                    if tx.send(Message::Text(response.to_string())).await.is_err() {
+                                // Add idempotencyKey if missing
+                                if params.get("idempotencyKey").is_none() {
+                                    request_id_counter += 1;
+                                    let idempotency_key = format!("idem-{}-{}", chrono::Utc::now().timestamp(), request_id_counter);
+                                    params["idempotencyKey"] = serde_json::json!(idempotency_key);
+                                }
+
+                                // Remove "deliver" field if present (not an OpenClaw param)
+                                if let Some(_deliver) = params.get("deliver") {
+                                    let mut params_obj = params.as_object().unwrap().clone();
+                                    params_obj.remove("deliver");
+                                    client_msg["params"] = serde_json::json!(params_obj);
+                                }
+                            }
+
+                            let fixed_msg = client_msg.to_string();
+                            tracing::info!("Fixed chat.send message: {}", fixed_msg);
+                            if agent_tx.send(TungsteniteMessage::Text(fixed_msg)).await.is_err() {
+                                break;
+                            }
+                        } else {
+                            // Other OpenClaw methods - forward as-is
+                            tracing::debug!("Forwarding OpenClaw message: {}", text);
+                            if agent_tx.send(TungsteniteMessage::Text(text)).await.is_err() {
+                                break;
+                            }
+                        }
+                    } else {
+                        // Check if this is a client format message with "content"
+                        let content = client_msg.get("content")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+
+                        // Only translate messages that have actual content to send
+                        if !content.is_empty() {
+                            let session = client_msg.get("session")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("main");
+
+                            // Generate unique IDs
+                            request_id_counter += 1;
+                            let req_id = format!("req-{}", request_id_counter);
+                            let idempotency_key = format!("idem-{}-{}", chrono::Utc::now().timestamp(), request_id_counter);
+
+                            // Translate to OpenClaw chat.send format
+                            let openclaw_msg = serde_json::json!({
+                                "type": "req",
+                                "id": req_id,
+                                "method": "chat.send",
+                                "params": {
+                                    "sessionKey": format!("agent:dev:{}", session),
+                                    "message": content,
+                                    "idempotencyKey": idempotency_key
+                                }
+                            });
+
+                            tracing::info!("Translated client message to OpenClaw format: {}", openclaw_msg.to_string());
+
+                            if agent_tx.send(TungsteniteMessage::Text(openclaw_msg.to_string())).await.is_err() {
+                                break;
+                            }
+                        } else {
+                            // Skip control messages or empty messages
+                            let msg_type = client_msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            tracing::debug!("Skipping non-chat message: type='{}', content='{}'", msg_type, content);
+                        }
+                    }
+                } else {
+                    // If parsing fails, forward as-is (might already be OpenClaw format)
+                    tracing::warn!("Failed to parse client message, forwarding as-is: {}", text);
+                    if agent_tx.send(TungsteniteMessage::Text(text)).await.is_err() {
                         break;
                     }
                 }
             }
             Ok(Message::Close(_)) => {
+                let _ = agent_tx.send(TungsteniteMessage::Close(None)).await;
                 break;
             }
             Err(_) => {
@@ -1371,6 +1734,9 @@ async fn handle_chat_stream(socket: WebSocket, _state: Arc<AppState>, _agent_id:
             _ => {}
         }
     }
+
+    // Clean up
+    agent_to_client.abort();
 }
 
 // === Teams ===

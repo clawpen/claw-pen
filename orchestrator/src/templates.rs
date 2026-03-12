@@ -11,23 +11,25 @@ pub struct Template {
     pub env: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
 pub struct TemplateConfig {
     #[serde(default)]
     pub llm_provider: Option<String>,
     #[serde(default)]
     pub llm_model: Option<String>,
-    #[serde(default = "default_memory")]
+    #[serde(default)]
     pub memory_mb: u32,
-    #[serde(default = "default_cpu")]
+    #[serde(default)]
     pub cpu_cores: f32,
-}
-
-fn default_memory() -> u32 {
-    1024
-}
-fn default_cpu() -> f32 {
-    1.0
+    /// Custom container image (e.g., "openclaw-agent:latest")
+    /// If not specified, defaults to node:20-alpine
+    #[serde(default)]
+    pub image: Option<String>,
+    /// Volume mount paths inside the container
+    /// Host paths will be created automatically under {data_dir}/agents/{agent_name}/
+    #[serde(default)]
+    pub volumes: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

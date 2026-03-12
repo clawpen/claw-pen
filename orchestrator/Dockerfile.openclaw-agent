@@ -1,0 +1,66 @@
+FROM openclaw-agent:latest
+
+# Create custom entrypoint inline that supports password authentication
+RUN echo '#!/bin/sh\n\
+set -e\n\
+MODEL="${LLM_MODEL:-glm-5}"\n\
+PROVIDER="${LLM_PROVIDER:-zai}"\n\
+PROVIDER=$(echo "$PROVIDER" | tr "[:upper:]" "[:lower:]")\n\
+PORT="${PORT:-18790}"\n\
+BIND="${BIND:-loopback}"\n\
+GATEWAY_TOKEN="${GATEWAY_TOKEN:-}"\n\
+GATEWAY_PASSWORD="${GATEWAY_PASSWORD:-}"\n\
+BASE_URL=""\n\
+case "$PROVIDER" in\n\
+  zai)\n\
+    API_KEY="$ZAI_API_KEY"\n\
+    BASE_URL="https://api.z.ai/api/coding/paas/v4"\n\
+    ;;\n\
+  kimi|kimi-code)\n\
+    API_KEY="$KIMI_API_KEY"\n\
+    BASE_URL="https://api.kimi.com/coding/v1"\n\
+    PROVIDER="openai"\n\
+    ;;\n\
+  anthropic) API_KEY="$ANTHROPIC_API_KEY" ;;\n\
+  openai)\n\
+    API_KEY="$OPENAI_API_KEY"\n\
+    BASE_URL="${OPENAI_BASE_URL:-}"\n\
+    ;;\n\
+  google|gemini) API_KEY="$GOOGLE_API_KEY" ;;\n\
+  *) API_KEY="${ZAI_API_KEY:-${ANTHROPIC_API_KEY:-${OPENAI_API_KEY:-}}}" ;;\n\
+esac\n\
+echo "[entrypoint] Provider: $PROVIDER, Model: $MODEL, Port: $PORT, Bind: $BIND, API Key: ${API_KEY:+set}, BaseURL: ${BASE_URL:-default}"\n\
+mkdir -p /root/.openclaw/agents/dev/agent\n\
+if [ -n "$GATEWAY_TOKEN" ]; then\n\
+  GATEWAY_AUTH="{\\"mode\\": \\"token\\", \\"token\\": \\"${GATEWAY_TOKEN}\\"}"\n\
+  echo "[entrypoint] Using token authentication"\n\
+elif [ -n "$GATEWAY_PASSWORD" ]; then\n\
+  GATEWAY_AUTH="{\\"mode\\": \\"password\\", \\"password\\": \\"${GATEWAY_PASSWORD}\\"}"\n\
+  echo "[entrypoint] Using password authentication (challenge-response)"\n\
+else\n\
+  GATEWAY_AUTH="{\\"mode\\": \\"none\\"}"\n\
+  echo "[entrypoint] No authentication configured"\n\
+fi\n\
+cat > /root/.openclaw/openclaw.json << CONF\n\
+{\n\
+  "meta": {"lastTouchedVersion": "2026.2.26"},\n\
+  "agents": {\n\
+    "defaults": {"workspace": "/root/.openclaw/workspace-dev", "skipBootstrap": true, "model": {"primary": "${PROVIDER}/${MODEL}"}},\n\
+    "list": [{"id": "dev", "default": true, "workspace": "/root/.openclaw/workspace-dev", "identity": {"name": "Agent", "emoji": "🤖"}, "model": {"primary": "${PROVIDER}/${MODEL}"}}]\n\
+  },\n\
+  "gateway": {"mode": "local", "bind": "${BIND}", "auth": ${GATEWAY_AUTH}, "port": ${PORT}}\n\
+}\n\
+CONF\n\
+if [ -n "$API_KEY" ]; then\n\
+  if [ -n "$BASE_URL" ]; then\n\
+    cat > /root/.openclaw/agents/dev/agent/auth-profiles.json << AUTH\n\
+{"version":1,"profiles":{"${PROVIDER}:default":{"type":"api_key","provider":"${PROVIDER}","key":"${API_KEY}","baseUrl":"${BASE_URL}"}},"lastGood":{"${PROVIDER}":"${PROVIDER}:default"}}\n\
+AUTH\n\
+  else\n\
+    cat > /root/.openclaw/agents/dev/agent/auth-profiles.json << AUTH\n\
+{"version":1,"profiles":{"${PROVIDER}:default":{"type":"api_key","provider":"${PROVIDER}","key":"${API_KEY}"}},"lastGood":{"${PROVIDER}":"${PROVIDER}:default"}}\n\
+AUTH\n\
+  fi\n\
+fi\n\
+exec node /usr/local/lib/node_modules/openclaw/openclaw.mjs gateway run --dev --allow-unconfigured\n' > /entrypoint.sh && \
+    chmod +x /entrypoint.sh
