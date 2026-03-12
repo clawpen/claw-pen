@@ -532,3 +532,191 @@ impl Default for ExoRuntimeClient {
         Self::new(None).expect("Failed to create ExoRuntimeClient")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{LlmProvider, AgentRuntime};
+
+    #[test]
+    fn test_build_env_vars_openai() {
+        let client = ExoRuntimeClient::new(Some("/bin/echo".to_string()));
+        assert!(client.is_ok(), "Should create client with echo command");
+
+        let client = client.unwrap();
+        let mut config = AgentConfig::default();
+
+        config.llm_provider = LlmProvider::OpenAI;
+        config.llm_model = Some("gpt-4".to_string());
+        config.env_vars = std::collections::HashMap::from([
+            ("CUSTOM_VAR".to_string(), "custom_value".to_string()),
+        ]);
+
+        let env = client.build_env_vars(&config);
+
+        assert_eq!(env.get("LLM_PROVIDER"), Some(&"openai".to_string()));
+        assert_eq!(env.get("LLM_MODEL"), Some(&"gpt-4".to_string()));
+        assert_eq!(env.get("CUSTOM_VAR"), Some(&"custom_value".to_string()));
+        assert!(env.get("AGENT_NAME").is_none(), "AGENT_NAME should not be set");
+    }
+
+    #[test]
+    fn test_build_env_vars_anthropic() {
+        let client = ExoRuntimeClient::new(Some("/bin/echo".to_string())).unwrap();
+        let mut config = AgentConfig::default();
+
+        config.llm_provider = LlmProvider::Anthropic;
+        config.llm_model = Some("claude-3-5-sonnet-20241022".to_string());
+
+        let env = client.build_env_vars(&config);
+
+        assert_eq!(env.get("LLM_PROVIDER"), Some(&"anthropic".to_string()));
+        assert_eq!(env.get("LLM_MODEL"), Some(&"claude-3-5-sonnet-20241022".to_string()));
+    }
+
+    #[test]
+    fn test_build_env_vars_ollama() {
+        let client = ExoRuntimeClient::new(Some("/bin/echo".to_string())).unwrap();
+        let mut config = AgentConfig::default();
+
+        config.llm_provider = LlmProvider::Ollama;
+        config.llm_model = Some("llama2".to_string());
+
+        let env = client.build_env_vars(&config);
+
+        assert_eq!(env.get("LLM_PROVIDER"), Some(&"ollama".to_string()));
+        assert_eq!(
+            env.get("OLLAMA_HOST"),
+            Some(&"http://host.containers.internal:11434".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_env_vars_custom_endpoint() {
+        let client = ExoRuntimeClient::new(Some("/bin/echo".to_string())).unwrap();
+        let mut config = AgentConfig::default();
+
+        config.llm_provider = LlmProvider::Custom {
+            endpoint: "https://api.example.com/v1".to_string(),
+        };
+
+        let env = client.build_env_vars(&config);
+
+        assert_eq!(env.get("LLM_PROVIDER"), Some(&"custom".to_string()));
+        assert_eq!(
+            env.get("LLM_ENDPOINT"),
+            Some(&"https://api.example.com/v1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_env_vars_with_secrets() {
+        let client = ExoRuntimeClient::new(Some("/bin/echo".to_string())).unwrap();
+        let mut config = AgentConfig::default();
+
+        config.secrets = vec!["API_KEY".to_string(), "DATABASE_URL".to_string()];
+        config.env_vars = std::collections::HashMap::new();
+
+        let env = client.build_env_vars(&config);
+
+        assert_eq!(env.get("HAS_SECRET_API_KEY"), Some(&"true".to_string()));
+        assert_eq!(env.get("HAS_SECRET_DATABASE_URL"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn test_build_mounts_valid() {
+        let client = ExoRuntimeClient::new(Some("/bin/echo".to_string())).unwrap();
+        let _config = AgentConfig::default();
+
+        let volumes = vec![
+            VolumeMount {
+                source: "/data/claw-pen/volumes/mydata".to_string(),
+                target: "/data".to_string(),
+                read_only: false,
+            },
+        ];
+
+        let mounts = client.build_mounts(&volumes);
+
+        assert_eq!(mounts.len(), 1);
+        assert_eq!(mounts[0], "/data/claw-pen/volumes/mydata:/data");
+    }
+
+    #[test]
+    fn test_build_mounts_readonly() {
+        let client = ExoRuntimeClient::new(Some("/bin/echo".to_string())).unwrap();
+        let _config = AgentConfig::default();
+
+        let volumes = vec![VolumeMount {
+            source: "/data/claw-pen/volumes/config".to_string(),
+            target: "/etc/config".to_string(),
+            read_only: true,
+        }];
+
+        let mounts = client.build_mounts(&volumes);
+
+        assert_eq!(mounts.len(), 1);
+        assert_eq!(mounts[0], "/data/claw-pen/volumes/config:/etc/config:ro");
+    }
+
+    #[test]
+    fn test_build_mounts_rejects_path_traversal() {
+        let client = ExoRuntimeClient::new(Some("/bin/echo".to_string())).unwrap();
+        let _config = AgentConfig::default();
+
+        let volumes = vec![VolumeMount {
+            source: "/data/claw-pen/volumes/../../../etc/passwd".to_string(),
+            target: "/data".to_string(),
+            read_only: false,
+        }];
+
+        let mounts = client.build_mounts(&volumes);
+
+        assert_eq!(mounts.len(), 0, "Path traversal should be rejected");
+    }
+
+    #[test]
+    fn test_build_mounts_rejects_suspicious_paths() {
+        let client = ExoRuntimeClient::new(Some("/bin/echo".to_string())).unwrap();
+        let _config = AgentConfig::default();
+
+        let volumes = vec![VolumeMount {
+            source: "/var/run/docker.sock".to_string(),
+            target: "/docker.sock".to_string(),
+            read_only: false,
+        }];
+
+        let mounts = client.build_mounts(&volumes);
+
+        assert_eq!(mounts.len(), 0, "Suspicious paths should be rejected");
+    }
+
+    #[test]
+    fn test_exo_runtime_client_creation_fails_without_binary() {
+        let result = ExoRuntimeClient::new(Some("/nonexistent/path/to/exo".to_string()));
+        assert!(result.is_err(), "Should fail when exo binary not found");
+    }
+
+    #[tokio::test]
+    async fn test_exo_runtime_client_with_echo_command() {
+        // This test uses /bin/echo which should exist on most systems
+        let result = ExoRuntimeClient::new(Some("/bin/echo".to_string()));
+        assert!(result.is_ok(), "Should create client with /bin/echo");
+
+        let client = result.unwrap();
+        assert_eq!(
+            client.exo_path(),
+            "/bin/echo",
+            "Should store the provided path"
+        );
+    }
+
+    #[test]
+    fn test_default_runtime_for_openclaw() {
+        let _config = AgentConfig::default();
+        let default_runtime = AgentRuntime::default();
+
+        // Openclaw should be the default
+        assert!(matches!(default_runtime, AgentRuntime::Openclaw));
+    }
+}
