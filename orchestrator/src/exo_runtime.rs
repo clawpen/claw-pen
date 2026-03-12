@@ -5,7 +5,7 @@ use crate::validation;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::process::Command;
+use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::container::ContainerRuntime;
@@ -60,7 +60,8 @@ impl ExoRuntimeClient {
         };
 
         for path in &paths_to_try {
-            if let Ok(output) = Command::new(path).arg("--version").output() {
+            // Use std::process::Command for synchronous version check at startup
+            if let Ok(output) = std::process::Command::new(path).arg("--version").output() {
                 if output.status.success() {
                     let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     tracing::info!("Connected to Exo runtime at '{}': {}", path, version);
@@ -83,7 +84,8 @@ impl ExoRuntimeClient {
     async fn list_containers_internal(&self) -> Result<Vec<AgentContainer>> {
         let output = Command::new(&self.exo_path)
             .args(["list", "--json"])
-            .output()?;
+            .output()
+            .await?;
 
         if !output.status.success() {
             tracing::warn!(
@@ -208,18 +210,30 @@ impl ExoRuntimeClient {
         args.push("--".to_string());
         args.push("/entrypoint.sh".to_string());
 
+        // Capture stdout separately, discard stderr (which contains ANSI-colored logs)
+        // This prevents log pollution from corrupting the container ID
         let output = Command::new(&self.exo_path)
             .args(&args)
-            .output()?;
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .await?;
 
         if !output.status.success() {
+            // Since stderr is discarded, check exit code only
             anyhow::bail!(
-                "Failed to create container: {}",
-                String::from_utf8_lossy(&output.stderr)
+                "Failed to create container '{}' (exit code: {:?})",
+                name,
+                output.status.code()
             );
         }
 
         let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+        // Validate we got a clean container ID (should be hex string)
+        if id.is_empty() || !id.chars().all(|c| c.is_ascii_hexdigit()) {
+            tracing::warn!("Unexpected container ID format: '{}'", id);
+        }
         tracing::info!("Created container: {} ({})", name, id);
         Ok(id)
     }
@@ -227,7 +241,8 @@ impl ExoRuntimeClient {
     async fn start_container_internal(&self, id: &str) -> Result<()> {
         let output = Command::new(&self.exo_path)
             .args(["start", id])
-            .output()?;
+            .output()
+            .await?;
 
         if !output.status.success() {
             tracing::warn!(
@@ -243,7 +258,8 @@ impl ExoRuntimeClient {
     async fn stop_container_internal(&self, id: &str) -> Result<()> {
         let output = Command::new(&self.exo_path)
             .args(["stop", id])
-            .output()?;
+            .output()
+            .await?;
 
         if !output.status.success() {
             tracing::warn!(
@@ -262,7 +278,8 @@ impl ExoRuntimeClient {
 
         let output = Command::new(&self.exo_path)
             .args(["remove", id])
-            .output()?;
+            .output()
+            .await?;
 
         if !output.status.success() {
             anyhow::bail!(
@@ -288,7 +305,8 @@ impl ExoRuntimeClient {
     pub async fn get_logs(&self, id: &str, tail: usize) -> Result<Vec<LogEntry>> {
         let output = Command::new(&self.exo_path)
             .args(["logs", id, "--tail", &tail.to_string()])
-            .output()?;
+            .output()
+            .await?;
 
         if !output.status.success() {
             return Ok(vec![]);
@@ -314,7 +332,7 @@ impl ExoRuntimeClient {
 
         tokio::spawn(async move {
             // Use exo logs --follow for streaming
-            let mut child = match std::process::Command::new(&exo_path)
+            let mut child = match Command::new(&exo_path)
                 .args(["logs", &id_string, "--follow"])
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -328,10 +346,11 @@ impl ExoRuntimeClient {
             };
 
             // Read from stdout
-            use std::io::{BufRead, BufReader};
+            use tokio::io::{AsyncBufReadExt, BufReader};
             if let Some(stdout) = child.stdout.take() {
                 let reader = BufReader::new(stdout);
-                for line in reader.lines().flatten() {
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
                     let entry = LogEntry {
                         timestamp: chrono::Utc::now().to_rfc3339(),
                         level: "info".to_string(),
