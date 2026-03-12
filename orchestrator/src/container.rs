@@ -420,19 +420,19 @@ impl DockerClient {
 
     fn get_image_for_provider(provider: &LlmProvider) -> &'static str {
         match provider {
-            LlmProvider::OpenAI => "openclaw-agent:latest",
-            LlmProvider::Anthropic => "openclaw-agent:latest",
-            LlmProvider::Gemini => "openclaw-agent:latest",
-            LlmProvider::Kimi => "openclaw-agent:latest",
-            LlmProvider::Zai => "openclaw-agent:latest",
-            LlmProvider::Huggingface => "openclaw-agent:latest",
-            LlmProvider::Ollama => "openclaw-agent:latest",
-            LlmProvider::KimiCode => "openclaw-agent:latest",
-            LlmProvider::Access => "openclaw-agent:latest",
-            LlmProvider::LlamaCpp => "openclaw-agent:latest",
-            LlmProvider::Vllm => "openclaw-agent:latest",
-            LlmProvider::Lmstudio => "openclaw-agent:latest",
-            _ => "openclaw-agent:latest",
+            LlmProvider::OpenAI => "node:20-alpine",
+            LlmProvider::Anthropic => "node:20-alpine",
+            LlmProvider::Gemini => "node:20-alpine",
+            LlmProvider::Kimi => "node:20-alpine",
+            LlmProvider::Zai => "node:20-alpine",
+            LlmProvider::Huggingface => "node:20-alpine",
+            LlmProvider::Ollama => "node:20-alpine",
+            LlmProvider::KimiCode => "node:20-alpine",
+            LlmProvider::Access => "node:20-alpine",
+            LlmProvider::LlamaCpp => "node:20-alpine",
+            LlmProvider::Vllm => "node:20-alpine",
+            LlmProvider::Lmstudio => "node:20-alpine",
+            _ => "node:20-alpine",
         }
     }
 
@@ -566,7 +566,13 @@ impl ContainerRuntime for DockerClient {
         validation::validate_cpu_cores(config.cpu_cores)
             .map_err(|e| anyhow::anyhow!("Invalid CPU config: {}", e))?;
 
-        let image = Self::get_image_for_provider(&config.llm_provider);
+        // Use custom image if specified, otherwise default to provider image
+        let image = config.image.as_deref()
+            .unwrap_or_else(|| Self::get_image_for_provider(&config.llm_provider));
+
+        // Check if this is an openclaw-agent image (needs special handling)
+        let is_openclaw_agent = image.contains("openclaw-agent");
+
         let mut env = Self::build_env_vars(config);
 
         // Add Headscale environment variables if using Headscale backend
@@ -575,22 +581,61 @@ impl ContainerRuntime for DockerClient {
 
         let labels = Self::build_labels(name, &config.llm_provider);
 
+        // For openclaw-agent, set environment variables
+        // Check if it's our custom image (uses different env var names)
+        let is_custom_image = image.contains("custom");
+
+        if is_openclaw_agent {
+            if is_custom_image {
+                // Custom image uses GATEWAY_PASSWORD and BIND (no OPENCLAW_ prefix)
+                if !config.env_vars.contains_key("GATEWAY_PASSWORD") {
+                    env.push("GATEWAY_PASSWORD=clawpen".to_string());
+                }
+                if !config.env_vars.contains_key("BIND") {
+                    env.push("BIND=lan".to_string());
+                }
+            } else {
+                // Official image uses OPENCLAW_GATEWAY_PASSWORD and OPENCLAW_BIND
+                if !config.env_vars.contains_key("OPENCLAW_GATEWAY_PASSWORD") {
+                    env.push("OPENCLAW_GATEWAY_PASSWORD=clawpen".to_string());
+                }
+                if !config.env_vars.contains_key("OPENCLAW_BIND") {
+                    env.push("OPENCLAW_BIND=lan".to_string());
+                }
+            }
+        }
+
         // Ensure the isolated network exists
         self.ensure_network().await?;
 
         // Build port bindings for bridge mode
-        // Agent containers expose port 8080 internally for communication
-        let port_bindings = HashMap::from([(
-            format!("{}/tcp", AGENT_INTERNAL_PORT),
-            Some(vec![bollard::models::PortBinding {
-                host_ip: Some("127.0.0.1".to_string()), // Only bind to localhost for security
-                host_port: None,                        // Let Docker assign a random port
-            }]),
-        )]);
+        // For openclaw-agent, bind the gateway port to localhost (no auth required)
+        // For other agents, expose port 8080 internally for communication
+        let port_bindings = if is_openclaw_agent {
+            let gateway_port = config.env_vars.get("PORT")
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(18790);
+            HashMap::from([(
+                format!("{}/tcp", gateway_port),
+                Some(vec![bollard::models::PortBinding {
+                    host_ip: Some("127.0.0.1".to_string()), // Bind to localhost to allow no-auth mode
+                    host_port: Some(gateway_port.to_string()),
+                }]),
+            )])
+        } else {
+            HashMap::from([(
+                format!("{}/tcp", AGENT_INTERNAL_PORT),
+                Some(vec![bollard::models::PortBinding {
+                    host_ip: Some("127.0.0.1".to_string()), // Only bind to localhost for security
+                    host_port: None,                        // Let Docker assign a random port
+                }]),
+            )])
+        };
 
         // Exposed ports (ports the container listens on)
-        let exposed_ports =
-            HashMap::from([(format!("{}/tcp", AGENT_INTERNAL_PORT), HashMap::new())]);
+        let exposed_ports = port_bindings.keys()
+            .map(|p| (p.clone(), HashMap::new()))
+            .collect();
 
         // Container configuration with bridge network (isolated from host)
         // Build volume binds from config
@@ -600,10 +645,16 @@ impl ContainerRuntime for DockerClient {
                     .volumes
                     .iter()
                     .map(|v| {
+                        // For Docker bind mounts, keep the host path as-is
+                        // Docker on Windows handles native paths correctly
+                        // Only convert the target (container) path
+                        let source = &v.source;
+                        let target = v.target.replace('\\', "/");
+
                         if v.read_only {
-                            format!("{}:{}:ro", v.source, v.target)
+                            format!("{}:{}:ro", source, target)
                         } else {
-                            format!("{}:{}", v.source, v.target)
+                            format!("{}:{}", source, target)
                         }
                     })
                     .collect::<Vec<_>>(),
@@ -617,11 +668,15 @@ impl ContainerRuntime for DockerClient {
             env: Some(env),
             labels: Some(labels),
             exposed_ports: Some(exposed_ports),
+            // For openclaw-agent, use default entrypoint/cmd (environment variables control config)
+            cmd: None,
+            entrypoint: None,
             host_config: Some(bollard::models::HostConfig {
                 memory: Some((config.memory_mb * 1024 * 1024) as i64),
                 nano_cpus: Some((config.cpu_cores * 1_000_000_000.0) as i64),
-                // Use bridge mode for network isolation instead of host mode
-                network_mode: Some("host".to_string()),
+                // Use bridge mode for openclaw-agent (port mapping required)
+                // Use host mode for standard agents
+                network_mode: if is_openclaw_agent { None } else { Some("host".to_string()) },
                 port_bindings: Some(port_bindings),
                 // Volume mounts
                 binds,
@@ -650,24 +705,28 @@ impl ContainerRuntime for DockerClient {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create container: {}", e))?;
 
-        // Connect to the isolated Claw Pen network
-        let connect_opts = ConnectNetworkOptions {
-            container: &result.id,
-            endpoint_config: bollard::models::EndpointSettings {
-                // No special endpoint config needed
-                ..Default::default()
-            },
-        };
+        // Connect to the isolated Claw Pen network (skip for openclaw-agent which uses bridge mode)
+        if !is_openclaw_agent {
+            let connect_opts = ConnectNetworkOptions {
+                container: &result.id,
+                endpoint_config: bollard::models::EndpointSettings {
+                    // No special endpoint config needed
+                    ..Default::default()
+                },
+            };
 
-        if let Err(e) = self
-            .docker
-            .connect_network(CLAW_PEN_NETWORK, connect_opts)
-            .await
-        {
-            tracing::warn!("Failed to connect container to isolated network: {}", e);
+            if let Err(e) = self
+                .docker
+                .connect_network(CLAW_PEN_NETWORK, connect_opts)
+                .await
+            {
+                tracing::warn!("Failed to connect container to isolated network: {}", e);
+            }
+            tracing::info!("Created container {} in isolated bridge network", result.id);
+        } else {
+            tracing::info!("Created container {} with bridge networking (openclaw-agent)", result.id);
         }
 
-        tracing::info!("Created container {} in isolated bridge network", result.id);
         Ok(result.id)
     }
 
@@ -788,19 +847,19 @@ impl ExoClient {
     fn get_image_for_provider(provider: &LlmProvider) -> &'static str {
         // Exo uses the same images as Docker for compatibility
         match provider {
-            LlmProvider::OpenAI => "openclaw-agent:latest",
-            LlmProvider::Anthropic => "openclaw-agent:latest",
-            LlmProvider::Gemini => "openclaw-agent:latest",
-            LlmProvider::Kimi => "openclaw-agent:latest",
-            LlmProvider::Zai => "openclaw-agent:latest",
-            LlmProvider::Huggingface => "openclaw-agent:latest",
-            LlmProvider::Ollama => "openclaw-agent:latest",
-            LlmProvider::KimiCode => "openclaw-agent:latest",
-            LlmProvider::Access => "openclaw-agent:latest",
-            LlmProvider::LlamaCpp => "openclaw-agent:latest",
-            LlmProvider::Vllm => "openclaw-agent:latest",
-            LlmProvider::Lmstudio => "openclaw-agent:latest",
-            _ => "openclaw-agent:latest",
+            LlmProvider::OpenAI => "node:20-alpine",
+            LlmProvider::Anthropic => "node:20-alpine",
+            LlmProvider::Gemini => "node:20-alpine",
+            LlmProvider::Kimi => "node:20-alpine",
+            LlmProvider::Zai => "node:20-alpine",
+            LlmProvider::Huggingface => "node:20-alpine",
+            LlmProvider::Ollama => "node:20-alpine",
+            LlmProvider::KimiCode => "node:20-alpine",
+            LlmProvider::Access => "node:20-alpine",
+            LlmProvider::LlamaCpp => "node:20-alpine",
+            LlmProvider::Vllm => "node:20-alpine",
+            LlmProvider::Lmstudio => "node:20-alpine",
+            _ => "node:20-alpine",
         }
     }
 
@@ -930,7 +989,9 @@ impl ContainerRuntime for ExoClient {
         validation::validate_container_name(name)
             .map_err(|e| anyhow::anyhow!("Invalid container name: {}", e))?;
 
-        let image = Self::get_image_for_provider(&config.llm_provider);
+        // Use custom image if specified, otherwise default to provider image
+        let image = config.image.as_deref()
+            .unwrap_or_else(|| Self::get_image_for_provider(&config.llm_provider));
         let mut args = vec![
             "run".to_string(),
             "--name".to_string(),
