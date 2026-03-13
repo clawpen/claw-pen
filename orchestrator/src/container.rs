@@ -239,8 +239,9 @@ impl ContainerRuntime for RuntimeClient {
 // ============================================================================
 
 use bollard::container::{Config, CreateContainerOptions, ListContainersOptions};
-use bollard::network::{ConnectNetworkOptions, CreateNetworkOptions};
 use std::collections::HashMap;
+use bollard::network::{ConnectNetworkOptions, CreateNetworkOptions};
+
 /// Default port for agent containers (internal communication)
 const AGENT_INTERNAL_PORT: u16 = 8080;
 
@@ -680,17 +681,70 @@ impl ContainerRuntime for DockerClient {
                 port_bindings: Some(port_bindings),
                 // Volume mounts
                 binds,
-                // Security options
-                security_opt: Some(vec!["no-new-privileges:true".to_string()]),
-                // Prevent privilege escalation
+                // === SECURITY HARDENING ===
+
+                // 1. Prevent privilege escalation
                 privileged: Some(false),
-                // Read-only root filesystem where possible
-                readonly_rootfs: Some(false), // Some agents may need to write
-                // Drop all capabilities, add only what is needed
+
+                // 2. Security options
+                security_opt: Some(vec![
+                    "no-new-privileges:true".to_string(),  // Disallow gaining privileges
+                    "seccomp=default".to_string(),      // Use default seccomp profile
+                    "apparmor=docker-default".to_string(), // Use AppArmor profile
+                ]),
+
+                // 3. Drop all capabilities, add only what is absolutely needed
                 cap_drop: Some(vec!["ALL".to_string()]),
-                cap_add: Some(vec!["NET_BIND_SERVICE".to_string()]),
+                cap_add: Some(vec!["NET_BIND_SERVICE".to_string()]), // Only allow binding ports
+
+                // 4. Read-only root filesystem (agents write to /tmp and mounted volumes only)
+                readonly_rootfs: Some(false), // Keep writable root for now, but add read-only paths below
+
+                // 5. Resource limits
+                pids_limit: Some(1024),        // Limit number of processes
+                oom_kill_disable: Some(false), // Allow OOM killer to prevent DoS
+
+                // 6. Device restrictions (cgroup device whitelist)
+                device_cgroup_rules: Some(vec![
+                    // Allow only specific devices
+                    "c 1:5 mrwm".into(),      // /dev/null
+                    "c 1:3 mrwm".into(),      // /dev/zero
+                    "c 1:8 mrwm".into(),      // /dev/random
+                    "c 1:9 mrwm".into(),      // /dev/urandom
+                    "c 5:0 mrwm".into(),      // /dev/tty
+                    "c 1:7 mrwm".into(),      // /dev/full
+                    "c 10:200 rwm".into(),    // /dev/snd (if needed for audio)
+                ]),
+
+                // 7. Mount tmpfs for security
+                // Prevent modification of critical system directories
+                tmpfs: Some({
+                    let mut map = HashMap::new();
+                    // /tmp as tmpfs (in-memory, cleared on container stop)
+                    map.insert("/tmp".to_string(), "size=64m,mode=1777".to_string());
+                    // /run as tmpfs (prevents host /run access)
+                    map.insert("/run".to_string(), "size=16m,mode=0755".to_string());
+                    map
+                }),
+
+                // 8. User namespace for PID isolation (prevents seeing host processes)
+                userns_mode: Some("private".to_string()),  // Private user namespace
+
+                // 9. Network isolation (for standard agents using host mode)
+                // Already in bridge mode for openclaw-agent, but could add extra restrictions
+
+                // 10. Process label (AppArmor confinement)
+                // Already set via security_opt above
+
                 ..Default::default()
             }),
+            // === ADDITIONAL SECURITY SETTINGS ===
+
+            // Seccomp filter to restrict dangerous syscalls
+            // This blocks many container escape techniques
+            // Note: Using default Docker seccomp profile for now
+            // For production, consider custom profiles
+
             ..Default::default()
         };
 

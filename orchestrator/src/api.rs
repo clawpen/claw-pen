@@ -42,6 +42,11 @@ use crate::container::ContainerRuntime;
 use crate::types::*;
 use crate::AppState;
 
+// Re-export volume attachment functions
+pub use crate::volume_attachment::{
+    list_agent_volumes, attach_volume_to_agent, detach_volume_from_agent,
+};
+
 /// Base port for agent gateways
 const BASE_AGENT_PORT: u16 = 18790;
 /// Maximum port to allocate (gives us 10 agents: 18790-18799)

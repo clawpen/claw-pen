@@ -73,6 +73,10 @@ pub struct AgentConfig {
     /// API key for the LLM provider (stored encrypted)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// Custom container image (e.g., "openclaw-agent:latest")
+    /// If not specified, defaults to node:20-alpine
+    #[serde(default)]
+    pub image: Option<String>,
 }
 
 fn default_memory() -> u32 {
@@ -238,6 +242,7 @@ pub struct PartialAgentConfig {
     pub restart_policy: Option<RestartPolicy>,
     pub health_check: Option<HealthCheck>,
     pub volumes: Option<Vec<VolumeMount>>,
+    pub image: Option<String>,
 }
 
 // === Project/Group Management ===
@@ -336,6 +341,9 @@ impl AgentConfig {
         }
         if let Some(ref volumes) = partial.volumes {
             self.volumes = volumes.clone();
+        }
+        if let Some(ref image) = partial.image {
+            self.image = Some(image.clone());
         }
     }
 }
@@ -585,4 +593,24 @@ pub struct UpdateVolumeRequest {
     pub default_target: Option<String>,
     pub read_only: Option<bool>,
     pub tags: Option<Vec<String>>,
+}
+
+/// Request to attach a volume to an existing agent
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachVolumeRequest {
+    /// Volume ID or name to attach
+    pub volume_id: String,
+    /// Mount point inside container (uses volume default if not specified)
+    pub target: Option<String>,
+    /// Whether to mount read-only (uses volume default if not specified)
+    pub read_only: Option<bool>,
+}
+
+/// Request to detach a volume from an agent
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetachVolumeRequest {
+    /// Volume ID or name to detach (or specify target instead)
+    pub volume_id: Option<String>,
+    /// Target path to detach (or specify volume_id instead)
+    pub target: Option<String>,
 }
