@@ -1206,6 +1206,7 @@
         }
         
         function selectAgent(agent) {
+            console.log('[selectAgent] Switching to:', agent.name, 'ID:', agent.id);
             hideReplying();  // Hide indicator when switching agents
             if (selectedAgent && messagesEl.children.length) chatHistory[selectedAgent.name] = messagesEl.innerHTML;
             selectedAgent = agent;
@@ -1214,23 +1215,202 @@
             renderTabs();  // Update tab selection
             messagesEl.innerHTML = chatHistory[agent.name] || '<div class="message system">Connecting...</div>';
             if (chatHistory[agent.name]) messagesEl.scrollTop = messagesEl.scrollHeight;
-            if (agent.status === 'running') connectToAgent(agent);
-            else { setStatus('Stopped', 'error'); inputEl.disabled = sendBtn.disabled = true; }
+            if (agent.status === 'running') {
+                console.log('[selectAgent] Agent is running, connecting...');
+                connectToAgent(agent).catch(err => {
+                    console.error('[selectAgent] Connection failed:', err);
+                });
+            } else {
+                setStatus('Stopped', 'error');
+                inputEl.disabled = sendBtn.disabled = true;
+            }
         }
-        
-        async function connectToAgent(agent) {
-            setStatus('Connecting...', 'connecting');
-            // Connect directly to agent's WebSocket (agents use host networking on port 18790)
-            const port = agent.config?.env_vars?.PORT || '18790';
-            const wsUrl = `ws://localhost:${port}/ws`;
-            console.log('[connectToAgent] connecting to', wsUrl);
-            try {
-                if (window.__TAURI__) {
-                    await window.__TAURI__.core.invoke('connect_websocket', { url: wsUrl });
+
+        function sendRawMessage(data) {
+            if (window.agentWs && window.agentWs.readyState === WebSocket.OPEN) {
+                window.agentWs.send(JSON.stringify(data));
+                console.log('[WS] Sent:', data);
+            } else {
+                console.warn('[WS] Cannot send message - websocket not ready');
+            }
+        }
+
+        function handleAgentMessage(data) {
+            console.log('[Agent Message] Type:', data.type, 'Event:', data.event);
+
+            // Handle health events (heartbeat)
+            if (data.type === 'event' && data.event === 'health') {
+                return;
+            }
+
+            // Handle tick events
+            if (data.type === 'event' && data.event === 'tick') {
+                return;
+            }
+
+            // Handle agent lifecycle start (show replying indicator)
+            if (data.type === 'event' && data.event === 'agent' && data.payload?.stream === 'lifecycle' && data.payload?.data?.phase === 'start') {
+                showReplying();
+                // Only reset if we're starting a NEW message (not a re-stream)
+                if (!window.lastAssistantMessage || window.lastAssistantMessage !== '') {
+                    window.lastAssistantMessage = '';  // Reset for new message
                 }
-            } catch (e) { 
-                console.error('[connectToAgent] error:', e);
-                setStatus('Error: ' + e, 'error'); 
+                return;
+            }
+
+            // Handle agent lifecycle end (hide replying indicator)
+            if (data.type === 'event' && data.event === 'agent' && data.payload?.stream === 'lifecycle' && data.payload?.data?.phase === 'end') {
+                hideReplying();
+                document.getElementById('sendBtn').disabled = false;
+                // Don't reset lastAssistantMessage here - we might still get final stream events
+                return;
+            }
+
+            // Handle agent assistant stream (streaming text responses)
+            // This is the PRIMARY source of agent text - chat events are duplicates
+            if (data.type === 'event' && data.event === 'agent' && data.payload?.stream === 'assistant' && data.payload?.data?.text) {
+                const text = data.payload.data.text;
+
+                // Check if this is a truly NEW message (not duplicate)
+                // If we haven't started a message yet, or if this is different from the last
+                if (!window.messageStarted) {
+                    // First message of the sequence
+                    console.log('[WS] Starting new message:', text.substring(0, 50));
+                    addMessage(text, 'agent');
+                    window.lastAssistantMessage = text;
+                    window.messageStarted = true;
+                } else if (text !== window.lastAssistantMessage) {
+                    // Update existing message with new content
+                    console.log('[WS] Updating message:', text.substring(0, 50));
+                    updateLastMessage(text, 'agent');
+                    window.lastAssistantMessage = text;
+                } else {
+                    console.log('[WS] Skipping duplicate message:', text.substring(0, 50));
+                }
+                return;
+            }
+
+            // Ignore chat events - they're duplicates of the agent stream events
+            if (data.type === 'event' && data.event === 'chat') {
+                console.log('[WS] 🚫 Ignoring chat event (duplicate of agent stream)');
+                return;
+            }
+
+            // Handle response acknowledgments
+            if (data.type === 'res' && data.ok) {
+                console.log('[WS] ✅ Request acknowledged');
+                return;
+            }
+
+            console.log('[WS] ⚠️ Unhandled message type:', data.type, data.event);
+        }
+
+        async function connectToAgent(agent) {
+            // Prevent reconnection attempts when switching agents
+            if (window.switchingAgents) {
+                console.log('[connectToAgent] Already switching, skipping...');
+                return;
+            }
+
+            console.log('[connectToAgent] Starting connection for:', agent.name, 'ID:', agent.id);
+            setStatus('Connecting...', 'connecting');
+
+            // Check if token exists
+            const token = localStorage.getItem('clawpen_token');
+            if (!token) {
+                console.error('[connectToAgent] No auth token found!');
+                setStatus('Authentication required', 'error');
+                return;
+            }
+
+            // Connect through orchestrator's websocket proxy for multi-agent support
+            const wsUrl = `ws://127.0.0.1:8081/api/agents/${agent.id}/chat?token=${token}`;
+            console.log('[connectToAgent] Connecting through orchestrator:', wsUrl.substring(0, 80) + '...');
+
+            try {
+                // Close existing websocket if any
+                if (window.agentWs) {
+                    console.log('[connectToAgent] Closing existing connection...');
+                    window.switchingAgents = true;  // Set flag to prevent reconnect
+
+                    // Remove event handlers to prevent them from firing
+                    window.agentWs.onopen = null;
+                    window.agentWs.onclose = null;
+                    window.agentWs.onerror = null;
+                    window.agentWs.onmessage = null;
+
+                    window.agentWs.close(1000, 'Switching agents');
+                    window.agentWs = null;
+
+                    // Small delay to ensure clean close
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+
+                // Reset streaming state
+                window.lastAssistantMessage = '';
+                window.currentStreamEl = null;
+                window.messageStarted = false;
+
+                // Create new WebSocket connection
+                console.log('[connectToAgent] Creating new WebSocket...');
+                window.agentWs = new WebSocket(wsUrl);
+
+                window.agentWs.onopen = () => {
+                    console.log('[connectToAgent] ✅ WebSocket connected, sending connect message');
+                    window.switchingAgents = false;  // Clear flag after successful connection
+                    // Send connect message required by OpenClaw gateway
+                    sendRawMessage({
+                        type: 'connect',
+                        payload: {
+                            userAgent: 'claw-pen-desktop/1.0'
+                        }
+                    });
+                    setConnected(true);
+                };
+
+                window.agentWs.onclose = (event) => {
+                    console.log('[connectToAgent] ❌ WebSocket disconnected, code:', event.code, 'reason:', event.reason);
+                    setConnected(false);
+                    hideReplying();
+
+                    // Only auto-reconnect if we're not intentionally switching agents
+                    if (!window.switchingAgents && event.code !== 1000 && selectedAgent && selectedAgent.status === 'running') {
+                        console.log('[connectToAgent] Scheduling reconnect in 2s...');
+                        setTimeout(() => {
+                            if (!window.switchingAgents && selectedAgent && selectedAgent.status === 'running') {
+                                console.log('[connectToAgent] Reconnecting...');
+                                connectToAgent(selectedAgent);
+                            }
+                        }, 2000);
+                    } else {
+                        window.switchingAgents = false;  // Clear flag if reconnect not needed
+                    }
+                };
+
+                window.agentWs.onerror = (e) => {
+                    console.error('[connectToAgent] ❌ WebSocket error:', e);
+                    setStatus('Connection error', 'error');
+                    setConnected(false);
+                    hideReplying();
+                    window.switchingAgents = false;
+                };
+
+                window.agentWs.onmessage = (event) => {
+                    const preview = event.data.substring(0, 150);
+                    console.log('[WS] 📨 Received:', preview + (event.data.length > 150 ? '...' : ''));
+                    try {
+                        const data = JSON.parse(event.data);
+                        handleAgentMessage(data);
+                    } catch (e) {
+                        console.error('[WS] ❌ Failed to parse message:', e);
+                    }
+                };
+            } catch (e) {
+                console.error('[connectToAgent] ❌ Exception:', e);
+                setStatus('Error: ' + e, 'error');
+                setConnected(false);
+                hideReplying();
+                window.switchingAgents = false;
             }
         }
         
@@ -1322,13 +1502,31 @@
             addMessage(text, 'user');
             inputEl.value = '';
             showReplying();  // Show "Replying..." indicator
+            // Reset streaming state
+            window.lastAssistantMessage = '';
+            window.currentStreamEl = null;
+            window.messageStarted = false;  // Reset for new message
             try {
-                if (isFloatingMode && windowLabel) {
-                    await window.__TAURI__.core.invoke('send_floating_message', { windowLabel, text });
-                } else {
-                    await window.__TAURI__.core.invoke('send_chat_message', { text });
-                }
+                // Send via WebSocket using OpenClaw protocol
+                sendRawMessage({
+                    type: 'req',
+                    method: 'chat.send',
+                    params: {
+                        sessionKey: 'main',
+                        message: text
+                    },
+                    id: 'msg-' + Date.now()
+                });
             } catch (e) { hideReplying(); addMessage('Error: ' + e, 'system'); }
+        }
+
+        function updateLastMessage(text, type = 'agent') {
+            const messages = messagesEl.getElementsByClassName('message ' + type);
+            if (messages.length > 0) {
+                const lastMessage = messages[messages.length - 1];
+                lastMessage.textContent = text;
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+            }
         }
         
         sendBtn.addEventListener('click', sendMessage);
