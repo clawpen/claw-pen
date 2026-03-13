@@ -46,6 +46,10 @@ pub struct AppState {
     pub auth: RwLock<AuthManager>,
     /// Named volumes that can be attached to agents
     pub volumes: RwLock<Vec<types::Volume>>,
+    /// Cache container IPs to avoid Docker inspect on every connection (critical for scalability)
+    pub container_ips: RwLock<std::collections::HashMap<String, String>>,
+    /// Agent index for O(1) lookups by ID (critical for scaling to thousands of agents)
+    pub agent_index: RwLock<std::collections::HashMap<String, usize>>,
 }
 
 fn load_api_keys(data_dir: &std::path::Path) -> HashMap<String, String> {
@@ -86,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
     // Check for CLI password setting mode
     let args: Vec<String> = std::env::args().collect();
     if args.contains(&"--set-password".to_string()) {
-        let data_dir = std::path::PathBuf::from("/data/claw-pen/data");
+        let data_dir = std::path::PathBuf::from("./data");
         auth::cli_set_password(&data_dir)?;
         return Ok(());
     }
@@ -96,7 +100,8 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = config::load()?;
-    let data_dir = std::path::PathBuf::from("/data/claw-pen/data");
+    // Use relative path for cross-platform compatibility
+    let data_dir = std::path::PathBuf::from("./data");
     std::fs::create_dir_all(&data_dir).ok();
     tracing::info!("Loaded config: {:?}", config);
 
@@ -207,6 +212,13 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Total agents: {}", merged_agents.len());
 
+    // Build index for O(1) agent lookups by ID (critical for scaling)
+    let agent_index: std::collections::HashMap<String, usize> = merged_agents
+        .iter()
+        .enumerate()
+        .map(|(idx, agent)| (agent.id.clone(), idx))
+        .collect();
+
     // Initialize secrets manager
     let secrets = SecretsManager::new()?;
     tracing::info!("Secrets manager initialized");
@@ -238,6 +250,8 @@ async fn main() -> anyhow::Result<()> {
         data_dir,
         auth: RwLock::new(auth_manager),
         volumes: RwLock::new(volumes),
+        container_ips: RwLock::new(std::collections::HashMap::new()),
+        agent_index: RwLock::new(agent_index),
     });
 
     // Create the protected API routes with auth middleware
@@ -333,8 +347,9 @@ async fn main() -> anyhow::Result<()> {
                     if origin_str.starts_with("http://localhost:")
                         || origin_str.starts_with("http://127.0.0.1:")
                         || origin_str.starts_with("https://localhost")
+                        || origin_str.starts_with("http://tauri.localhost")
+                        || origin_str.starts_with("https://tauri.localhost")
                         || origin_str == "tauri://localhost"
-                        || origin_str == "https://tauri.localhost"
                     {
                         return true;
                     }

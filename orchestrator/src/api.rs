@@ -1348,12 +1348,15 @@ pub async fn chat_websocket(
         .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {}", e)))?;
     drop(auth);
 
-    // Check if agent exists and is running
+    // Check if agent exists and is running - use index for O(1) lookup (critical for scalability)
+    let index = state.agent_index.read().await;
     let containers = state.containers.read().await;
-    let agent = containers
-        .iter()
-        .find(|c| c.id == id)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
+
+    let agent = if let Some(&idx) = index.get(&id) {
+        containers.get(idx).ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?
+    } else {
+        return Err((StatusCode::NOT_FOUND, "Agent not found".to_string()));
+    };
 
     if agent.status != AgentStatus::Running {
         tracing::warn!("Agent {} is not running: {:?}", id, agent.status);
@@ -1364,14 +1367,24 @@ pub async fn chat_websocket(
     let agent_name = agent.name.clone();
     let gateway_port = agent.gateway_port;
     drop(containers);
+    drop(index);
 
     tracing::info!("Upgrading WebSocket connection for agent '{}' (ID: {}, port: {})", agent_name, id, gateway_port);
 
     Ok(ws.on_upgrade(move |socket| handle_chat_stream(socket, state, agent_id, gateway_port)))
 }
 
-/// Get the IP address of a container from Docker
-async fn get_container_ip(_runtime: &crate::container::RuntimeClient, container_id: &str) -> anyhow::Result<String> {
+/// Get the IP address of a container from Docker with caching for scalability
+async fn get_container_ip(state: &Arc<AppState>, container_id: &str) -> anyhow::Result<String> {
+    // Check cache first - O(1) lookup (critical for scalability with thousands of agents)
+    {
+        let cache = state.container_ips.read().await;
+        if let Some(ip) = cache.get(container_id) {
+            return Ok(ip.clone());
+        }
+    }
+
+    // Cache miss - fetch from Docker and cache it
     use bollard::container::InspectContainerOptions;
     use bollard::Docker;
     use bollard::API_DEFAULT_VERSION;
@@ -1393,7 +1406,13 @@ async fn get_container_ip(_runtime: &crate::container::RuntimeClient, container_
     if let Some(networks) = inspect.network_settings.and_then(|n| n.networks) {
         for (_name, network) in networks {
             if let Some(ip) = network.ip_address {
-                return Ok(ip.to_string());
+                let ip_string = ip.to_string();
+
+                // Cache the IP for future requests (avoids repeated Docker inspect calls)
+                let mut cache = state.container_ips.write().await;
+                cache.insert(container_id.to_string(), ip_string.clone());
+
+                return Ok(ip_string);
             }
         }
     }
@@ -1415,7 +1434,7 @@ async fn handle_chat_stream(socket: WebSocket, state: Arc<AppState>, agent_id: S
     #[cfg(windows)]
     let agent_ip = "127.0.0.1";
     #[cfg(not(windows))]
-    let agent_ip = match get_container_ip(&state.runtime, &agent_id).await {
+    let agent_ip = match get_container_ip(&state, &agent_id).await {
         Ok(ip) => ip,
         Err(e) => {
             tracing::warn!("Failed to get container IP for {}: {}", agent_id, e);
