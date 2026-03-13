@@ -1,0 +1,5 @@
+# Claw Pen Configuration - Windows
+deployment-mode = "all-windows"
+network-backend = "local"
+runtime-socket = ""
+container-runtime = "docker"

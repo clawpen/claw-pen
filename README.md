@@ -2,18 +2,19 @@
 
 > Multi-agent orchestration platform. Run isolated AI agents in containers with a Tauri desktop UI.
 
-![Status](https://img.shields.io/badge/status-alpha-orange) ![Version](https://img.shields.io/badge/version-0.1.0-blue) ![Rust](https://img.shields.io/badge/rust-1.70+-93450d?logo=rust)
+![Status](https://img.shields.io/badge/status-strong%20alpha-orange) ![Version](https://img.shields.io/badge/version-0.2.0-blue) ![Rust](https://img.shields.io/badge/rust-1.70+-93450d?logo=rust)
 
 ## What is Claw Pen?
 
 Claw Pen is a **container-based multi-agent orchestrator** with a desktop GUI. It lets you:
 
 - **Create isolated AI agents** — Each runs in its own container with configurable resources
+- **Volume management** — Attach external data to agents with read-only or read-write access
 - **Chat with agents** — Built-in WebSocket chat interface via Tauri desktop app
 - **Manage multiple LLM providers** — OpenAI, Anthropic, Kimi, z.ai, Ollama, LM Studio, and more
 - **Organize agents into teams** — Router agents intelligently route messages to specialists
 - **Persist agent memory** — SQLite-backed memory with export/import capabilities
-- **Secure by default** — JWT auth, secrets management, input validation
+- **Secure by default** — Container escape prevention, seccomp filters, JWT auth, secrets management
 
 ## Architecture
 
@@ -63,6 +64,23 @@ Claw Pen is a **container-based multi-agent orchestrator** with a desktop GUI. I
 - Session persistence per agent
 - Typing indicators and real-time responses
 - Message history export
+
+### Volume Management
+- Attach external directories to agents
+- Managed volumes (stored in orchestrator data directory)
+- Bind mounts (host paths)
+- Read-only or read-write access modes
+- Automatic agent restart when volumes change
+- Visual security indicators in GUI
+
+### Container Security
+- Privileged mode disabled (prevents container escape)
+- Seccomp and AppArmor security filters
+- Capability dropping (drop ALL, only add NET_BIND_SERVICE)
+- Device cgroup restrictions (whitelist only required devices)
+- User namespace isolation
+- Resource limits (memory, CPU, process count)
+- OOM killer enabled (prevents DoS)
 
 ### Security
 - JWT-based authentication with Argon2 password hashing
@@ -248,6 +266,11 @@ The orchestrator exposes a REST API:
 | `/api/agents/:id/stop` | POST | Stop agent |
 | `/api/agents/:id/chat` | WS | Chat WebSocket |
 | `/api/agents/:id/logs` | WS | Log stream |
+| `/api/volumes` | GET | List volumes |
+| `/api/volumes` | POST | Create volume |
+| `/api/agents/:id/volumes` | GET | List agent volumes |
+| `/api/agents/:id/volumes/attach` | POST | Attach volume |
+| `/api/agents/:id/volumes/detach` | POST | Detach volume |
 | `/api/templates` | GET | List templates |
 | `/api/teams` | GET | List teams |
 | `/api/system/stats` | GET | Resource usage |
@@ -256,24 +279,50 @@ Full API docs: [docs/API.md](docs/API.md) (TODO)
 
 ## Security
 
+> **🔒 Strong Alpha Status**: The system is functional and includes comprehensive security hardening, but has not yet undergone a professional security audit. Use in production at your own risk.
+
 See [docs/SECURITY_FIXES.md](docs/SECURITY_FIXES.md) for security audit history.
 
 Key security features:
-- Argon2id password hashing
-- JWT with short expiry + refresh tokens
-- Per-agent secret isolation
-- Container network isolation
-- Input validation on all endpoints
-- No secrets in environment (mounted at runtime)
+- **Container Escape Prevention**: Privileged mode disabled, seccomp/AppArmor filters, capability dropping
+- **Volume Isolation**: Agents cannot access host filesystem outside mounted volumes
+- **Argon2id password hashing**: Industry-best password hashing
+- **JWT authentication**: Short expiry + refresh tokens
+- **Per-agent secret isolation**: Secrets never shared between agents
+- **Container network isolation**: Agents isolated in dedicated network
+- **Input validation**: All endpoints validate and sanitize input
+- **No secrets in environment**: Secrets mounted as files at runtime
+
+### Security Audit Recommendations
+
+Before production deployment, we recommend:
+1. **Professional security audit** of container escape prevention
+2. **Penetration testing** of volume attachment/detachment flows
+3. **Review of seccomp/AppArmor profiles** for completeness
+4. **Audit of authentication/authorization** flows
+5. **Testing of race conditions** in volume attachment (synchronous operations implemented)
+6. **Review of error handling** for information disclosure
+7. **Performance testing** under load with multiple agents/volumes
 
 ## Roadmap
 
+### Completed ✅
+- [x] Volume management and attachment
+- [x] Container security hardening (seccomp, AppArmor, capability dropping)
+- [x] Visual security indicators in GUI
+- [x] Synchronous agent restarts for volume changes
+- [x] Agent index management and ID tracking
+
+### In Progress 🚧
+- [ ] Custom runtime (Containment)
+- [ ] GPU passthrough for local models
+
+### Planned 📋
 - [ ] Web UI (Yew/WASM)
 - [ ] Multi-node cluster support
 - [ ] GitHub/GitLab CI integration
 - [ ] Agent marketplace
-- [ ] Custom runtime (Containment)
-- [ ] GPU passthrough for local models
+- [ ] **Professional security audit** (priority for production)
 
 ## License
 

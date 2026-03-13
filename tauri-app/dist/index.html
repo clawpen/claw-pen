@@ -140,6 +140,7 @@
         .btn-start { background: #22c55e33; color: #22c55e; }
         .btn-stop { background: #ef444433; color: #ef4444; }
         .btn-delete { background: #66666633; color: #888; }
+        .btn-volumes { background: #2a2a4a; color: #e94560; }
         .agent-actions button:hover { opacity: 0.8; }
         
         /* Volume section styles */
@@ -544,6 +545,33 @@
         .emoji, .sidebar-header h1, .btn-refresh {
             font-family: 'Emoji', 'Noto Color Emoji', -apple-system, BlinkMacSystemFont, sans-serif;
         }
+
+        /* Security badges and volume indicators */
+        .security-badge {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            margin-left: 8px;
+        }
+
+        .security-warning {
+            background: #ef444433;
+            color: #ef4444;
+        }
+
+        .security-safe {
+            background: #22c55e33;
+            color: #22c55e;
+        }
+
+        .volume-indicator {
+            background: #2a2a4a;
+            color: #e94560;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            margin-left: 4px;
+        }
 </style>
 
 
@@ -759,6 +787,37 @@
         </div>
     </div>
 
+    <!-- Agent Volumes Modal -->
+    <div class="modal-overlay" id="agent-volumes-modal">
+        <div class="modal" style="max-width: 500px;">
+            <h3>📦 Manage Volumes</h3>
+            <p id="agent-volumes-agent-name" style="color: #666; font-size: 13px; margin-bottom: 16px;"></p>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; color: #aaa;">Current Volumes</label>
+                <div id="agent-current-volumes" style="min-height: 60px; background: #0f0f1a; border-radius: 6px; padding: 12px;">
+                    <div style="color: #666; font-size: 12px;">No volumes attached</div>
+                </div>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; color: #aaa;">Attach Volume</label>
+                <select id="attach-volume-select" style="width: 100%; padding: 10px; background: #0f0f1a; border: 1px solid #2a2a4a; color: #fff; border-radius: 6px; margin-bottom: 12px;">
+                    <option value="">Select a volume...</option>
+                </select>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="text" id="attach-volume-target" placeholder="/data" style="flex: 1; padding: 10px; background: #0f0f1a; border: 1px solid #2a2a4a; color: #fff; border-radius: 6px;">
+                    <button class="btn btn-primary" onclick="attachVolumeToAgent()">Attach & Restart</button>
+                </div>
+                <div style="font-size: 11px; color: #666; margin-top: 6px;">⚠️ Agent will restart to apply volume</div>
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="hideAgentVolumesModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let agents = [], selectedAgent = null, isConnected = false, currentStreamEl = null, chatHistory = {};
         let volumes = [];  // Volume list
@@ -832,18 +891,132 @@
             }
         }
         
-        async function authFetch(url, options = {}) {
-            console.log('[authFetch]', url, authToken ? 'with token' : 'no token');
-            if (authToken) {
-                options.headers = options.headers || {};
-                options.headers['Authorization'] = `Bearer ${authToken}`;
+        // Track if we're currently refreshing the token to prevent loops
+        let refreshingToken = false;
+        let tokenRefreshPromise = null;
+
+        // Decode JWT to get expiration time
+        function getTokenExpiration(token) {
+            try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                return payload.exp * 1000;  // Convert to milliseconds
+            } catch (e) {
+                return null;
             }
-            const res = await fetch(url, options);
-            if (res.status === 401) {
+        }
+
+        // Check if token will expire soon (within 1 hour)
+        function isTokenExpiringSoon(token) {
+            const exp = getTokenExpiration(token);
+            if (!exp) return true;  // Can't determine, assume expiring
+            const oneHour = 60 * 60 * 1000;
+            return exp - Date.now() < oneHour;
+        }
+
+        // Proactive token refresh (runs every 30 minutes)
+        async function proactiveTokenRefresh() {
+            if (!authToken || refreshingToken) {
+                return;
+            }
+
+            if (isTokenExpiringSoon(authToken)) {
+                console.log('[Token] ⏰ Token expiring soon, refreshing proactively...');
+                try {
+                    await refreshToken();
+                } catch (e) {
+                    console.log('[Token] Proactive refresh failed, will try on next request');
+                }
+            }
+        }
+
+        async function refreshToken() {
+            // If already refreshing, return the existing promise
+            if (refreshingToken) {
+                return tokenRefreshPromise;
+            }
+
+            refreshingToken = true;
+            console.log('[Token] 🔄 Refreshing authentication token...');
+
+            try {
+                // Use stored credentials to get a new token
+                const password = localStorage.getItem('clawpen_password');
+                if (!password) {
+                    throw new Error('No stored credentials');
+                }
+
+                const res = await fetch(`${ORCHESTRATOR_URL}/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: 'admin', password })
+                });
+
+                if (!res.ok) {
+                    throw new Error('Token refresh failed');
+                }
+
+                const data = await res.json();
+                const newToken = data.token || data.access_token;
+
+                // Update token in memory and localStorage
+                authToken = newToken;
+                localStorage.setItem('clawpen_token', newToken);
+
+                console.log('[Token] ✅ Token refreshed successfully');
+                return newToken;
+            } catch (error) {
+                console.error('[Token] ❌ Refresh failed:', error);
+                // Clear everything and show login modal
                 authToken = null;
                 localStorage.removeItem('clawpen_token');
-                checkAuthAndShowModal();
+                localStorage.removeItem('clawpen_password');
+                showLoginModal();
+                throw error;
+            } finally {
+                refreshingToken = false;
+                tokenRefreshPromise = null;
             }
+        }
+
+        async function authFetch(url, options = {}) {
+            console.log('[authFetch]', url, authToken ? 'with token' : 'no token');
+
+            // Check if token exists
+            if (!authToken) {
+                const stored = localStorage.getItem('clawpen_token');
+                if (stored) {
+                    authToken = stored;
+                } else {
+                    // No token at all, show login
+                    showLoginModal();
+                    return new Response('{"error":"Not authenticated"}', { status: 401 });
+                }
+            }
+
+            // Add token to request
+            options.headers = options.headers || {};
+            options.headers['Authorization'] = `Bearer ${authToken}`;
+
+            // Make the request
+            let res = await fetch(url, options);
+
+            // If 401, try to refresh token and retry once
+            if (res.status === 401) {
+                console.log('[authFetch] Got 401, attempting token refresh...');
+
+                try {
+                    const newToken = await refreshToken();
+
+                    // Retry the original request with new token
+                    options.headers['Authorization'] = `Bearer ${newToken}`;
+                    res = await fetch(url, options);
+                    console.log('[authFetch] ✅ Retry successful after token refresh');
+                } catch (error) {
+                    console.error('[authFetch] ❌ Token refresh failed, showing login');
+                    return new Response('{"error":"Authentication failed"}', { status: 401 });
+                }
+            }
+
             return res;
         }
         
@@ -863,9 +1036,12 @@
             // Now fetch data after successful login
             fetchAgents();
             fetchSystemStats();
+            fetchVolumes();  // Fetch volumes on login
             if (!intervalsSet) {
                 setInterval(fetchAgents, 5000);
                 setInterval(fetchSystemStats, 3000);
+                // Proactive token refresh every 30 minutes (before 24h expiry)
+                setInterval(proactiveTokenRefresh, 30 * 60 * 1000);
                 intervalsSet = true;
             }
         }
@@ -895,7 +1071,7 @@
         async function login(password) {
             console.log('[login] attempting login...');
             hideLoginError();
-            
+
             // If first-time setup, register first
             if (authStatus && !authStatus.has_admin) {
                 const regRes = await fetch(`${ORCHESTRATOR_URL}/auth/register`, {
@@ -909,18 +1085,22 @@
                     return false;
                 }
             }
-            
+
             try {
                 const res = await fetch(`${ORCHESTRATOR_URL}/auth/login`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password })
+                    body: JSON.stringify({ username: 'admin', password })
                 });
                 if (res.ok) {
                     const data = await res.json();
-                    authToken = data.access_token;
+                    authToken = data.token || data.access_token;  // Handle both response formats
                     console.log('[login] success');
+
+                    // Save token AND password for automatic refresh
                     localStorage.setItem('clawpen_token', authToken);
+                    localStorage.setItem('clawpen_password', password);
+
                     hideLoginModal();
                     return true;
                 } else {
@@ -1125,7 +1305,154 @@
                 else alert('Failed: ' + await res.text());
             } catch (e) { alert('Error: ' + e); }
         }
-        
+
+        // Agent Volume Management
+        let currentAgentVolumesId = null;
+
+        async function showAgentVolumesModal(agentId, agentName) {
+            currentAgentVolumesId = agentId;
+            document.getElementById('agent-volumes-agent-name').textContent = `Agent: ${agentName}`;
+            document.getElementById('agent-volumes-modal').classList.add('active');
+
+            // Load available volumes
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/volumes`);
+                if (res.ok) {
+                    const allVolumes = await res.json();
+                    const select = document.getElementById('attach-volume-select');
+                    select.innerHTML = '<option value="">Select a volume...</option>' +
+                        allVolumes.map(v => `<option value="${v.name}">${v.name} (${v.host_path || 'managed'})</option>`).join('');
+                }
+            } catch (e) {
+                console.error('[showAgentVolumesModal] failed to load volumes:', e);
+            }
+
+            // Load agent's current volumes
+            await loadAgentVolumes(agentId);
+        }
+
+        async function loadAgentVolumes(agentId) {
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents/${agentId}/volumes`);
+                if (res.ok) {
+                    const volumes = await res.json();
+                    const container = document.getElementById('agent-current-volumes');
+                    if (volumes.length === 0) {
+                        container.innerHTML = '<div style="color: #666; font-size: 12px;">No volumes attached</div>';
+                    } else {
+                        container.innerHTML = volumes.map(v => `
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; background: #1a1a2e; border-radius: 4px; margin-bottom: 6px;">
+                                <div>
+                                    <div style="font-size: 12px; color: #ccc;">${v.source}</div>
+                                    <div style="font-size: 10px; color: #666;">→ ${v.target} ${v.read_only ? '(read-only)' : '(read-write)'}</div>
+                                </div>
+                                <button onclick="detachVolumeFromAgent('${agentId}', '${v.target}')" style="background: #e94560; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px;">Detach</button>
+                            </div>
+                        `).join('');
+                    }
+                }
+            } catch (e) {
+                console.error('[loadAgentVolumes] error:', e);
+            }
+        }
+
+        function hideAgentVolumesModal() {
+            document.getElementById('agent-volumes-modal').classList.remove('active');
+            currentAgentVolumesId = null;
+        }
+
+        async function attachVolumeToAgent() {
+            if (!currentAgentVolumesId) return;
+
+            const volumeName = document.getElementById('attach-volume-select').value;
+            const target = document.getElementById('attach-volume-target').value.trim() || '/data';
+
+            if (!volumeName) {
+                alert('Please select a volume');
+                return;
+            }
+
+            // Security warning with detailed information
+            const volume = volumes.find(v => v.name === volumeName);
+            const isReadOnly = volume?.read_only || false;
+            const sourcePath = volume?.host_path || 'Managed volume';
+
+            if (!confirm(
+                `📦 Attach Volume to Agent\n\n` +
+                `Volume: ${volumeName}\n` +
+                `Source: ${sourcePath}\n` +
+                `Target: ${target}\n` +
+                `Access: ${isReadOnly ? 'Read-only' : 'Read/Write'}\n\n` +
+                `⚠️  Security Information:\n` +
+                `• Agent will have ${isReadOnly ? 'read-only' : 'full'} access to this data\n` +
+                `• Agent will be restarted to apply the volume\n` +
+                `• Data is isolated - agent cannot escape the volume\n` +
+                `• Root filesystem is protected\n` +
+                `• All container escape attempts are blocked\n` +
+                `• Process count limited (1024 max processes)\n` +
+                `• Seccomp filters restrict dangerous system calls\n` +
+                `• No privilege escalation possible\n\n` +
+                `Continue?`
+            )) {
+                return;
+            }
+
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents/${currentAgentVolumesId}/volumes`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        volume_id: volumeName,
+                        target: target
+                    })
+                });
+
+                if (res.ok) {
+                    alert('Volume attached! Agent is restarting...');
+                    hideAgentVolumesModal();
+                    setTimeout(() => {
+                        fetchAgents();
+                        fetchSystemStats();
+                    }, 3000);
+                } else {
+                    alert('Failed to attach volume: ' + await res.text());
+                }
+            } catch (e) {
+                console.error('[attachVolumeToAgent] error:', e);
+                alert('Error: ' + e);
+            }
+        }
+
+        async function detachVolumeFromAgent(agentId, target) {
+            if (!confirm(`Detach volume from target "${target}"?\n\nThe agent will be restarted to apply the change.`)) {
+                return;
+            }
+
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents/${agentId}/volumes/detach`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        target: target
+                    })
+                });
+
+                if (res.ok) {
+                    alert('Volume detached! Agent is restarting...');
+                    hideAgentVolumesModal();
+                    setTimeout(() => {
+                        fetchAgents();
+                        fetchSystemStats();
+                    }, 3000);
+                } else {
+                    alert('Failed to detach volume: ' + await res.text());
+                }
+            } catch (e) {
+                console.error('[detachVolumeFromAgent] error:', e);
+                alert('Error: ' + e);
+            }
+        }
+
         function updateModelOptions() {
             const provider = document.getElementById('new-agent-provider').value;
             document.getElementById('new-agent-model').innerHTML = 
@@ -1140,27 +1467,63 @@
             try {
                 const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents`);
                 agents = await res.json();
+
+                // Update selectedAgent if it exists (handles agent ID changes after restart)
+                if (selectedAgent) {
+                    const updatedAgent = agents.find(a => a.name === selectedAgent.name);
+                    if (updatedAgent && updatedAgent.id !== selectedAgent.id) {
+                        console.log(`[fetchAgents] Updating agent ID for ${selectedAgent.name}: ${selectedAgent.id.substring(0, 12)}... -> ${updatedAgent.id.substring(0, 12)}...`);
+                        selectedAgent = updatedAgent;
+                    }
+                }
+
                 renderAgents();
             } catch (e) {}
         }
         
         function renderAgents() {
             if (isFloatingMode) return;  // Skip in floating mode
-            
-            document.getElementById('agent-list').innerHTML = agents.map(a => `
+
+            document.getElementById('agent-list').innerHTML = agents.map(a => {
+                // Count volumes and calculate security level
+                const volumeCount = a.config?.volumes?.length || 0;
+                const hasWriteAccess = a.config?.volumes?.some(v => !v.read_only) || false;
+
+                // Determine security badge
+                let securityBadge = '';
+                if (volumeCount > 0) {
+                    if (hasWriteAccess) {
+                        securityBadge = `<span class="security-badge security-warning" title="Has write access to volumes">🔓 Write Access</span>`;
+                    } else {
+                        securityBadge = `<span class="security-badge security-safe" title="Read-only volume access">🛡️ Read Only</span>`;
+                    }
+                }
+
+                // Volume indicator
+                const volumeIndicator = volumeCount > 0
+                    ? `<span class="volume-indicator" title="${volumeCount} volume(s) attached">📦 ${volumeCount}</span>`
+                    : '';
+
+                return `
                 <div class="agent-card${selectedAgent?.id === a.id ? ' selected' : ''}" onclick="selectAgent(agents.find(x => x.id === '${a.id}'))">
                     <div class="agent-name">${a.name} <span class="agent-status ${a.status}">${a.status}</span></div>
                     <div class="agent-model">${a.config?.llm_provider}/${a.config?.llm_model}</div>
-                    <div class="agent-resources"><span>💾 ${(a.config?.memory_mb / 1024 || 2).toFixed(1)} GB</span></div>
+                    <div class="agent-resources">
+                        <span>💾 ${(a.config?.memory_mb / 1024 || 2).toFixed(1)} GB</span>
+                        ${volumeIndicator}
+                        ${securityBadge}
+                    </div>
                     <div class="agent-actions">
-                        ${a.status === 'running' 
+                        ${a.status === 'running'
                             ? `<button class="btn-stop" onclick="event.stopPropagation();stopAgent('${a.id}')">Stop</button>`
                             : `<button class="btn-start" onclick="event.stopPropagation();startAgent('${a.id}')">Start</button>`}
+                        <button class="btn-volumes" onclick="event.stopPropagation();showAgentVolumesModal('${a.id}','${a.name}')" title="Manage Volumes">📦</button>
                         <button class="btn-delete" onclick="event.stopPropagation();deleteAgent('${a.id}','${a.name}')">Delete</button>
                     </div>
                 </div>
-            `).join('');
-            
+                `;
+            }).join('');
+
             renderTabs();  // Update tab bar when agents change
         }
         
@@ -1374,14 +1737,29 @@
                     hideReplying();
 
                     // Only auto-reconnect if we're not intentionally switching agents
-                    if (!window.switchingAgents && event.code !== 1000 && selectedAgent && selectedAgent.status === 'running') {
-                        console.log('[connectToAgent] Scheduling reconnect in 2s...');
+                    // Allow reconnect for running, stopping, or starting agents (handles restart scenarios)
+                    const canReconnect = !window.switchingAgents && event.code !== 1000 && selectedAgent &&
+                                        ['running', 'stopping', 'starting'].includes(selectedAgent.status);
+
+                    if (canReconnect) {
+                        const retryDelay = selectedAgent.status === 'stopping' ? 3000 : 2000;
+                        console.log(`[connectToAgent] Agent is ${selectedAgent.status}, scheduling reconnect in ${retryDelay}ms...`);
                         setTimeout(() => {
-                            if (!window.switchingAgents && selectedAgent && selectedAgent.status === 'running') {
+                            if (!window.switchingAgents && selectedAgent) {
                                 console.log('[connectToAgent] Reconnecting...');
-                                connectToAgent(selectedAgent);
+                                // Refresh agent status before reconnecting
+                                fetchAgents().then(() => {
+                                    // Find agent by name (ID might have changed after restart)
+                                    const refreshedAgent = agents.find(a => a.name === selectedAgent.name);
+                                    if (refreshedAgent && ['running', 'stopping', 'starting'].includes(refreshedAgent.status)) {
+                                        console.log(`[connectToAgent] Found refreshed agent: ${refreshedAgent.name} (${refreshedAgent.status})`);
+                                        connectToAgent(refreshedAgent);
+                                    } else {
+                                        console.log('[connectToAgent] Agent no longer available, skipping reconnect');
+                                    }
+                                });
                             }
-                        }, 2000);
+                        }, retryDelay);
                     } else {
                         window.switchingAgents = false;  // Clear flag if reconnect not needed
                     }
@@ -1389,10 +1767,29 @@
 
                 window.agentWs.onerror = (e) => {
                     console.error('[connectToAgent] ❌ WebSocket error:', e);
-                    setStatus('Connection error', 'error');
+                    setStatus('Connection error - retrying...', 'connecting');
                     setConnected(false);
                     hideReplying();
-                    window.switchingAgents = false;
+
+                    // Auto-retry on connection errors (common during agent restarts)
+                    if (!window.switchingAgents && selectedAgent && ['running', 'stopping', 'starting'].includes(selectedAgent.status)) {
+                        const retryDelay = selectedAgent.status === 'stopping' ? 4000 : 3000;
+                        console.log(`[connectToAgent] Connection failed, retrying in ${retryDelay}ms...`);
+                        setTimeout(() => {
+                            if (!window.switchingAgents && selectedAgent) {
+                                fetchAgents().then(() => {
+                                    // Find agent by name (ID might have changed after restart)
+                                    const refreshedAgent = agents.find(a => a.name === selectedAgent.name);
+                                    if (refreshedAgent && ['running', 'stopping', 'starting'].includes(refreshedAgent.status)) {
+                                        console.log('[connectToAgent] Retrying connection...');
+                                        connectToAgent(refreshedAgent);
+                                    }
+                                });
+                            }
+                        }, retryDelay);
+                    } else {
+                        window.switchingAgents = false;
+                    }
                 };
 
                 window.agentWs.onmessage = (event) => {
