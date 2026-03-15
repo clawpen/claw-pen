@@ -549,6 +549,51 @@ pub async fn delete_agent(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Execute a command in an agent container (e.g., open a shell)
+pub async fn exec_agent(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<ExecRequest>,
+) -> Result<Json<ExecResponse>, (StatusCode, String)> {
+    // Check if agent exists
+    let (agent_exists, agent_runtime, agent_name) = {
+        let containers = state.containers.read().await;
+        containers
+            .iter()
+            .find(|a| a.id == id)
+            .map(|a| (true, a.runtime.clone(), a.name.clone()))
+            .unwrap_or((false, None, String::new()))
+    };
+
+    if !agent_exists {
+        return Err((StatusCode::NOT_FOUND, "Agent not found".to_string()));
+    }
+
+    // Choose the right runtime based on agent's runtime setting
+    let runtime: &dyn ContainerRuntime = if agent_runtime.as_deref() == Some("exo") {
+        &state.exo_runtime
+    } else {
+        &state.runtime
+    };
+
+    // Build command - default to /bin/bash or /bin/sh
+    let cmd = if let Some(command) = req.command {
+        command
+    } else {
+        vec!["/bin/bash".to_string()]
+    };
+
+    // Execute command in container
+    match runtime.exec_container(&id, cmd).await {
+        Ok(output) => Ok(Json(ExecResponse {
+            output,
+            container_id: id,
+            container_name: agent_name,
+        })),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Exec failed: {}", e))),
+    }
+}
+
 pub async fn start_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -1342,6 +1387,7 @@ pub async fn chat_websocket(
     tracing::info!("WebSocket connection request for agent: {}", id);
 
     // Validate JWT token from query parameter
+    tracing::info!("Validating token...");
     let token = params.get("token").ok_or((
         StatusCode::UNAUTHORIZED,
         "Missing authentication token".to_string(),
@@ -1350,18 +1396,30 @@ pub async fn chat_websocket(
     let auth = state.auth.read().await;
     let _claims = auth
         .validate_token(token)
-        .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {}", e)))?;
+        .map_err(|e| {
+            tracing::warn!("Token validation failed: {}", e);
+            (StatusCode::UNAUTHORIZED, format!("Invalid token: {}", e))
+        })?;
     drop(auth);
+    tracing::info!("Token validated successfully");
 
     // Check if agent exists and is running - use index for O(1) lookup (critical for scalability)
+    tracing::info!("Looking up agent in index...");
     let index = state.agent_index.read().await;
     let containers = state.containers.read().await;
 
     let agent = if let Some(&idx) = index.get(&id) {
-        containers.get(idx).ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?
+        tracing::info!("Found agent at index {}", idx);
+        containers.get(idx).ok_or_else(|| {
+            tracing::error!("Agent not found in containers at index {}", idx);
+            (StatusCode::NOT_FOUND, "Agent not found".to_string())
+        })?
     } else {
+        tracing::warn!("Agent ID not found in index");
         return Err((StatusCode::NOT_FOUND, "Agent not found".to_string()));
     };
+
+    tracing::info!("Agent found: {} (status: {:?})", agent.name, agent.status);
 
     if agent.status != AgentStatus::Running {
         tracing::warn!("Agent {} is not running: {:?}", id, agent.status);
@@ -1375,8 +1433,12 @@ pub async fn chat_websocket(
     drop(index);
 
     tracing::info!("Upgrading WebSocket connection for agent '{}' (ID: {}, port: {})", agent_name, id, gateway_port);
+    tracing::info!("Calling on_upgrade...");
 
-    Ok(ws.on_upgrade(move |socket| handle_chat_stream(socket, state, agent_id, gateway_port)))
+    let response = ws.on_upgrade(move |socket| handle_chat_stream(socket, state, agent_id, gateway_port));
+    tracing::info!("on_upgrade called, returning response");
+
+    Ok(response)
 }
 
 /// Get the IP address of a container from Docker with caching for scalability
@@ -1449,9 +1511,9 @@ async fn handle_chat_stream(socket: WebSocket, state: Arc<AppState>, agent_id: S
     };
 
     // Connect to agent websocket using OpenClaw protocol
-    // OpenClaw uses RPC protocol: type="req"/"res"/"event", not "action"
+    // OpenClaw uses /ws endpoint (not /chat which is the web UI)
     // Password auth: wait for challenge, respond with connect request
-    let agent_ws_url = format!("ws://{}:{}/chat", agent_ip, gateway_port);
+    let agent_ws_url = format!("ws://{}:{}/ws", agent_ip, gateway_port);
     println!("[handle_chat_stream] Connecting to agent at: {}", agent_ws_url);
 
     // Configure websocket with more lenient settings
@@ -1631,6 +1693,20 @@ async fn handle_chat_stream(socket: WebSocket, state: Arc<AppState>, agent_id: S
     }
 
     tracing::info!("Connected to agent gateway, starting message proxy");
+
+    // Send immediate acknowledgment to browser to complete WebSocket handshake
+    let connect_ack = serde_json::json!({
+        "role": "system",
+        "content": "Connected to agent",
+        "type": "event",
+        "event": "connection.established",
+        "timestamp": chrono::Utc::now().timestamp()
+    });
+    if let Err(e) = client_tx.send(Message::Text(connect_ack.to_string())).await {
+        tracing::error!("Failed to send connection acknowledgment: {}", e);
+        return;
+    }
+    tracing::info!("Sent connection acknowledgment to browser");
 
     // Spawn a task to forward messages from agent to client
     let agent_to_client = tokio::spawn(async move {

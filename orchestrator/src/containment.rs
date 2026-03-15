@@ -117,10 +117,13 @@ impl ContainmentClient {
         validation::validate_cpu_cores(config.cpu_cores)
             .map_err(|e| anyhow::anyhow!("Invalid CPU config: {}", e))?;
 
+        // Use custom image if specified, otherwise default to node:20-alpine
+        let image = config.image.as_deref().unwrap_or("node:20-alpine");
+
         let spec = serde_json::json!({
             "name": name,
-            "image": "openclaw-agent:latest",
-            "command": ["openclaw", "agent", "--local"],
+            "image": image,
+            "command": ["sh", "-c", "tail -f /dev/null"],
             "env": self.build_env_vars(config),
             "resources": {
                 "memory": format!("{}M", config.memory_mb),
@@ -446,6 +449,11 @@ impl ContainerRuntime for ContainmentClient {
 
     async fn health_check(&self, id: &str) -> Result<bool> {
         self.health_check(id).await
+    }
+
+    async fn exec_container(&self, id: &str, cmd: Vec<String>) -> Result<String> {
+        // Containment doesn't support direct exec - return error
+        Err(anyhow::anyhow!("Exec not supported for Containment runtime. Use Docker runtime for shell access."))
     }
 }
 

@@ -141,6 +141,8 @@
         .btn-stop { background: #ef444433; color: #ef4444; }
         .btn-delete { background: #66666633; color: #888; }
         .btn-volumes { background: #2a2a4a; color: #e94560; }
+        .btn-shell { background: #3b82f633; color: #3b82f6; }
+        .btn-shell:disabled { opacity: 0.3; cursor: not-allowed; }
         .agent-actions button:hover { opacity: 0.8; }
         
         /* Volume section styles */
@@ -597,7 +599,10 @@
     <div id="sidebar">
         <div class="sidebar-header">
             <h1>🦀 Claw Pen</h1>
-            <button class="settings-btn" onclick="showSettingsModal()" title="Settings">⚙️</button>
+            <div style="display: flex; gap: 8px;">
+                <button class="settings-btn" onclick="doLogout()" title="Logout">🚪</button>
+                <button class="settings-btn" onclick="showSettingsModal()" title="Settings">⚙️</button>
+            </div>
         </div>
         
         <div class="system-stats">
@@ -622,7 +627,11 @@
                 <span class="stat-value" id="agent-count">0 / 0</span>
             </div>
         </div>
-        
+
+        <div style="padding: 10px 20px; text-align: center;">
+            <a href="#" onclick="doLogout(); return false;" style="color: #e94560; text-decoration: none; font-size: 14px;">🚪 Logout</a>
+        </div>
+
         <button class="create-agent-btn" onclick="showCreateModal()">+ Create Agent</button>
         
         <div class="volume-section">
@@ -1045,6 +1054,21 @@
                 intervalsSet = true;
             }
         }
+
+        function doLogout() {
+            localStorage.removeItem('clawpen_token');
+            localStorage.removeItem('clawpen_password');
+            authToken = null;
+            location.reload();
+        }
+
+        // Keyboard shortcut for logout: Ctrl+L
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'l') {
+                e.preventDefault();
+                doLogout();
+            }
+        });
         
         function showLoginError(msg) {
             const el = document.getElementById('login-error');
@@ -1517,6 +1541,7 @@
                         ${a.status === 'running'
                             ? `<button class="btn-stop" onclick="event.stopPropagation();stopAgent('${a.id}')">Stop</button>`
                             : `<button class="btn-start" onclick="event.stopPropagation();startAgent('${a.id}')">Start</button>`}
+                        <button class="btn-shell" onclick="event.stopPropagation();openShell('${a.id}','${a.name}')" ${a.status !== 'running' ? 'disabled' : ''} title="Open Shell">🖥️</button>
                         <button class="btn-volumes" onclick="event.stopPropagation();showAgentVolumesModal('${a.id}','${a.name}')" title="Manage Volumes">📦</button>
                         <button class="btn-delete" onclick="event.stopPropagation();deleteAgent('${a.id}','${a.name}')">Delete</button>
                     </div>
@@ -1567,7 +1592,47 @@
                 setStatus('Not connected', '');
             }
         }
-        
+
+        async function openShell(id, name) {
+            try {
+                console.log('[openShell] Attempting to launch shell for', name, '(', id, ')');
+                console.log('[openShell] window.__TAURI__:', window.__TAURI__);
+
+                // Check if running in Tauri
+                if (window.__TAURI__) {
+                    console.log('[openShell] Tauri detected, invoking launch_shell command');
+                    // Use Tauri command to launch terminal directly
+                    const { invoke } = window.__TAURI__.core;
+                    console.log('[openShell] invoke function:', invoke);
+                    await invoke('launch_shell', { containerId: id, containerName: name });
+                    console.log('[openShell] Command completed successfully');
+                } else {
+                    console.log('[openShell] Tauri not detected, showing fallback modal');
+                    // Fallback for non-Tauri environment: show instructions
+                    const shellWindow = window.open('', '_blank', 'width=800,height=600');
+                    shellWindow.document.write(`
+                        <html>
+                        <head><title>Shell: ${name}</title></head>
+                        <body style="font-family: monospace; padding: 20px; background: #1a1a2e; color: #eee;">
+                            <h2>🖥️ Shell Access: ${name}</h2>
+                            <p style="color: #22c55e;">Container ID: ${id}</p>
+                            <hr style="border-color: #2a2a4a;">
+                            <p>To access this container's shell, run:</p>
+                            <pre style="background: #0f0f1a; padding: 15px; border-radius: 8px; border: 1px solid #2a2a4a; overflow-x: auto;">
+docker exec -it ${id} /bin/bash
+                            </pre>
+                            <button onclick="window.close()" style="padding: 10px 20px; background: #e94560; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+                        </body>
+                        </html>
+                    `);
+                    shellWindow.document.close();
+                }
+            } catch (e) {
+                console.error('[openShell] error:', e);
+                alert(`Failed to launch shell: ${e}`);
+            }
+        }
+
         function selectAgent(agent) {
             console.log('[selectAgent] Switching to:', agent.name, 'ID:', agent.id);
             hideReplying();  // Hide indicator when switching agents

@@ -174,162 +174,13 @@ fn build_connect_request(req_id: &str, nonce: &str, device_keys: &DeviceKeys) ->
 #[tauri::command]
 async fn connect_websocket(
     app: AppHandle,
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
     url: String,
 ) -> Result<(), String> {
-    // Cancel any existing connection
-    {
-        let mut token_guard = state.cancel_token.lock().await;
-        if let Some(token) = token_guard.take() {
-            eprintln!("[WS] Canceling previous connection");
-            token.cancel();
-        }
-    }
-
-    // Create new cancellation token
-    let cancel_token = CancellationToken::new();
-    let cancel_token_clone = cancel_token.clone();
-    {
-        let mut token_guard = state.cancel_token.lock().await;
-        *token_guard = Some(cancel_token.clone());
-    }
-
-    let app_handle = app.clone();
-
-    let device_keys =
-        load_or_create_device_keys().map_err(|e| format!("Failed to load device keys: {}", e))?;
-    eprintln!("[Device] ID: {}", device_keys.device_id);
-
-    let (tx, mut rx) = channel::<String>(100);
-    *state.ws_sender.lock().await = Some(tx);
-
-    eprintln!("[WS] Connecting to: {}", url);
-
-    let signing_key_bytes = device_keys.signing_key.to_bytes();
-    let device_id = device_keys.device_id.clone();
-
-    tokio::spawn(async move {
-        loop {
-            // Check if cancelled
-            if cancel_token_clone.is_cancelled() {
-                eprintln!("[WS] Connection cancelled, exiting");
-                break;
-            }
-
-            eprintln!("[WS] Attempting connection to {}", url);
-
-            let request = Request::builder()
-                .uri(&url)
-                .header("Host", "127.0.0.1:18790")
-                .header("Connection", "Upgrade")
-                .header("Upgrade", "websocket")
-                .header("Sec-WebSocket-Version", "13")
-                .header("Sec-WebSocket-Key", generate_key())
-                .header("Origin", "http://127.0.0.1:18790")
-                .body(())
-                .unwrap();
-
-            match connect_async_with_config(request, None, false).await {
-                Ok((ws_stream, _)) => {
-                    eprintln!("[WS] Connected successfully");
-                    let _ = app_handle.emit("ws-connected", true);
-
-                    let (mut write, mut read) = ws_stream.split();
-                    let mut authenticated = false;
-                    let mut connect_sent = false;
-
-                    let signing_key = SigningKey::from_bytes(&signing_key_bytes);
-                    let dk = DeviceKeys {
-                        signing_key,
-                        device_id: device_id.clone(),
-                    };
-
-                    loop {
-                        tokio::select! {
-                            // Check for cancellation
-                            _ = cancel_token_clone.cancelled() => {
-                                eprintln!("[WS] Connection cancelled during loop");
-                                break;
-                            }
-                            // Timeout for no-auth mode: if no challenge after 2s, assume auth disabled
-                            _ = tokio::time::sleep(std::time::Duration::from_secs(2)), if !connect_sent && !authenticated => {
-                                eprintln!("[WS] No challenge received - assuming no-auth mode");
-                                authenticated = true;
-                                connect_sent = true;
-                                let _ = app_handle.emit("ws-authenticated", true);
-                            }
-                            msg = read.next() => {
-                                match msg {
-                                    Some(Ok(m)) => {
-                                        if m.is_text() {
-                                            let text = m.to_string();
-
-                                            if !connect_sent && text.contains("\"event\":\"connect.challenge\"") {
-                                                let nonce = extract_nonce(&text).unwrap_or("");
-                                                eprintln!("[WS] Got challenge, nonce: {}", nonce);
-
-                                                let id = REQUEST_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
-                                                let response = build_connect_request(
-                                                    &format!("cp-{}", id),
-                                                    nonce,
-                                                    &dk
-                                                );
-                                                eprintln!("[WS] Sending connect");
-                                                if let Err(e) = write.send(tungstenite::Message::Text(response)).await {
-                                                    eprintln!("[WS] Send error: {}", e);
-                                                    break;
-                                                }
-                                                connect_sent = true;
-                                            } else if text.contains("\"ok\":true") && text.contains("\"id\":\"cp-") {
-                                                eprintln!("[WS] Authenticated!");
-                                                authenticated = true;
-                                                let _ = app_handle.emit("ws-authenticated", true);
-                                            } else if text.contains("\"error\"") {
-                                                eprintln!("[WS] Error: {}", &text[..text.len().min(200)]);
-                                                let _ = app_handle.emit("ws-error", &text);
-                                            } else if authenticated {
-                                                eprintln!("[WS] Event: {}", &text[..text.len().min(100)]);
-                                                let _ = app_handle.emit("ws-message", &text);
-                                            }
-                                        } else if m.is_close() {
-                                            eprintln!("[WS] Server closed");
-                                            break;
-                                        }
-                                    }
-                                    Some(Err(e)) => {
-                                        eprintln!("[WS] Read error: {}", e);
-                                        break;
-                                    }
-                                    None => break,
-                                }
-                            }
-                            msg = rx.recv() => {
-                                if let Some(text) = msg {
-                                    if authenticated {
-                                        eprintln!("[WS] TX: {}", &text);
-                                        if let Err(e) = write.send(tungstenite::Message::Text(text)).await {
-                                            eprintln!("[WS] Send error: {}", e);
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    let _ = app_handle.emit("ws-connected", false);
-                }
-                Err(e) => {
-                    eprintln!("[WS] Connection failed: {}", e);
-                    let _ = app_handle.emit("ws-connected", false);
-                }
-            }
-
-            eprintln!("[WS] Reconnecting in 3s...");
-            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-        }
-    });
-
+    // Simplified: just emit success for HTTP API mode
+    // The frontend handles all communication via HTTP fetch
+    eprintln!("[HTTP] Using HTTP API mode, orchestrator at: {}", url);
+    let _ = app.emit("ws-authenticated", true);
     Ok(())
 }
 
@@ -614,6 +465,53 @@ async fn send_floating_message(
     }
 }
 
+#[tauri::command]
+async fn launch_shell(container_id: String, _container_name: String) -> Result<(), String> {
+    use std::process::Command;
+
+    let docker_command = format!("docker exec -it {} /bin/bash", container_id);
+
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows, use cmd /c start to launch PowerShell in a new window
+        Command::new("cmd")
+            .args([
+                "/c",
+                "start",
+                "powershell.exe",
+                "-NoExit",
+                "-Command",
+                &docker_command,
+            ])
+            .spawn()
+            .map_err(|e| format!("Failed to launch PowerShell: {}", e))?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // On Unix-like systems, launch the default terminal with the docker command
+        #[cfg(target_os = "macos")]
+        let terminal_cmd = "osascript";
+        #[cfg(target_os = "macos")]
+        let terminal_args = [
+            "-e",
+            &format!("tell application \"Terminal\" to do script \"{}\"", docker_command.replace("\"", "\\\\\"")),
+        ];
+
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        let terminal_cmd = "gnome-terminal";
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        let terminal_args = ["--", "sh", "-c", &docker_command];
+
+        Command::new(terminal_cmd)
+            .args(&terminal_args)
+            .spawn()
+            .map_err(|e| format!("Failed to launch terminal: {}", e))?;
+    }
+
+    Ok(())
+}
+
 // URL encoding for query params
 mod urlencoding {
     pub fn encode(s: &str) -> String {
@@ -643,6 +541,7 @@ fn main() {
             pop_out_agent,
             connect_floating_window,
             send_floating_message,
+            launch_shell,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

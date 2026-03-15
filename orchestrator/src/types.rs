@@ -614,3 +614,22 @@ pub struct DetachVolumeRequest {
     /// Target path to detach (or specify volume_id instead)
     pub target: Option<String>,
 }
+
+/// Request to execute a command in an agent container
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecRequest {
+    /// Command to execute (e.g., ["/bin/bash"] for shell)
+    /// If None, defaults to ["/bin/bash"]
+    pub command: Option<Vec<String>>,
+}
+
+/// Response from container exec
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecResponse {
+    /// Command output
+    pub output: String,
+    /// Container ID
+    pub container_id: String,
+    /// Container name
+    pub container_name: String,
+}
