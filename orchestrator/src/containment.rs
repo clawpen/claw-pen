@@ -451,9 +451,14 @@ impl ContainerRuntime for ContainmentClient {
         self.health_check(id).await
     }
 
-    async fn exec_container(&self, id: &str, cmd: Vec<String>) -> Result<String> {
+    async fn exec_container(&self, id: &str, _cmd: Vec<String>) -> Result<String> {
         // Containment doesn't support direct exec - return error
         Err(anyhow::anyhow!("Exec not supported for Containment runtime. Use Docker runtime for shell access."))
+    }
+
+    async fn container_logs(&self, _container_name: &str, _tail_lines: usize) -> Result<String> {
+        // Containment doesn't support raw logs access - use get_logs instead
+        Err(anyhow::anyhow!("Raw logs not supported for Containment runtime. Use get_logs API instead."))
     }
 }
 
