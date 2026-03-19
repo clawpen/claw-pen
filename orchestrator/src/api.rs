@@ -2730,3 +2730,96 @@ async fn handle_websocket_proxy(
 
     tracing::info!("WebSocket proxy session ended: {} -> {}", from_id, target_id);
 }
+
+// === Workflows ===
+
+/// Create a new workflow
+pub async fn create_workflow(
+    State(state): State<Arc<AppState>>,
+    Json(workflow): Json<crate::workflow::Workflow>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let mut workflows = state.workflows.write().await;
+
+    workflows.register_workflow(workflow.clone())
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    tracing::info!("Created workflow: {}", workflow.id);
+
+    Ok(Json(serde_json::json!({
+        "id": workflow.id,
+        "name": workflow.name,
+        "status": "created"
+    })))
+}
+
+/// List all workflows
+pub async fn list_workflows(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<crate::workflow::Workflow>> {
+    let workflows = state.workflows.read().await;
+    Json(workflows.list_workflows().into_iter().cloned().collect())
+}
+
+/// Get a workflow by ID
+pub async fn get_workflow(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::workflow::Workflow>, (StatusCode, String)> {
+    let workflows = state.workflows.read().await;
+    
+    let workflow = workflows.get_workflow(&id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Workflow not found".to_string()))?;
+    
+    Ok(Json(workflow.clone()))
+}
+
+/// Execute a workflow
+pub async fn execute_workflow(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(params): Json<Option<serde_json::Value>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let request = crate::workflow::WorkflowExecutionRequest {
+        workflow_id: id,
+        parameters: params.map(|p| serde_json::from_value(p).unwrap_or_default()).unwrap_or_default(),
+        strategy: None,
+    };
+    
+    let execution_id = state.executor.execute_workflow(request).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to execute workflow: {}", e)))?;
+    
+    tracing::info!("Started workflow execution: {}", execution_id);
+    
+    Ok(Json(serde_json::json!({
+        "execution_id": execution_id,
+        "status": "started"
+    })))
+}
+
+/// Get workflow execution status
+pub async fn get_workflow_execution(
+    State(state): State<Arc<AppState>>,
+    Path(execution_id): Path<String>,
+) -> Result<Json<crate::workflow::WorkflowExecution>, (StatusCode, String)> {
+    let workflows = state.workflows.read().await;
+
+    let execution = workflows.get_execution(&execution_id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Execution not found".to_string()))?;
+
+    Ok(Json(execution.clone()))
+}
+
+/// List workflow executions
+pub async fn list_workflow_executions(
+    State(state): State<Arc<AppState>>,
+    Path(workflow_id): Path<String>,
+) -> Json<Vec<crate::workflow::WorkflowExecution>> {
+    let workflows = state.workflows.read().await;
+    
+    let executions: Vec<_> = workflows.executions.values()
+        .filter(|e| e.workflow_id == workflow_id)
+        .cloned()
+        .collect();
+    
+    Json(executions)
+}

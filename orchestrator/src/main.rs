@@ -16,6 +16,8 @@ mod templates;
 mod types;
 mod validation;
 mod volume_attachment;
+mod workflow;
+mod executor;
 // mod code_index;  // TODO: fix dependencies
 
 use axum::http::{header, HeaderValue, Method};
@@ -34,7 +36,7 @@ use crate::snapshots::SnapshotManager;
 
 pub struct AppState {
     pub config: config::Config,
-    pub containers: RwLock<Vec<types::AgentContainer>>,
+    pub containers: std::sync::Arc<RwLock<Vec<types::AgentContainer>>>,
     pub runtime: container::RuntimeClient,
     /// Exo-specific runtime for agents that use exo
     pub exo_runtime: container::RuntimeClient,
@@ -54,6 +56,10 @@ pub struct AppState {
     pub agent_index: RwLock<std::collections::HashMap<String, usize>>,
     /// RPC client for agent-to-agent communication
     pub rpc_client: rpc::RpcClient,
+    /// Workflow registry for managing workflow definitions
+    pub workflows: std::sync::Arc<tokio::sync::RwLock<workflow::WorkflowRegistry>>,
+    /// Workflow executor for running workflows
+    pub executor: std::sync::Arc<executor::WorkflowExecutor>,
 }
 
 fn load_api_keys(data_dir: &std::path::Path) -> HashMap<String, String> {
@@ -241,9 +247,22 @@ async fn main() -> anyhow::Result<()> {
     let volumes = load_volumes(&data_dir);
     tracing::info!("Loaded {} volumes", volumes.len());
 
+    // Initialize workflow registry
+    let workflows = std::sync::Arc::new(tokio::sync::RwLock::new(workflow::WorkflowRegistry::new()));
+    tracing::info!("Workflow registry initialized");
+
+    // Initialize workflow executor
+    let rpc_client = rpc::create_rpc_client();
+    let containers_arc = std::sync::Arc::new(RwLock::new(merged_agents));
+    let executor = std::sync::Arc::new(executor::WorkflowExecutor::new(
+        std::sync::Arc::clone(&workflows),
+        std::sync::Arc::clone(&containers_arc),
+    ));
+    tracing::info!("Workflow executor initialized");
+
     let state = Arc::new(AppState {
         config,
-        containers: RwLock::new(merged_agents),
+        containers: containers_arc,
         runtime,
         exo_runtime,
         templates: template_registry,
@@ -257,7 +276,9 @@ async fn main() -> anyhow::Result<()> {
         volumes: RwLock::new(volumes),
         container_ips: RwLock::new(std::collections::HashMap::new()),
         agent_index: RwLock::new(agent_index),
-        rpc_client: rpc::create_rpc_client(),
+        rpc_client,
+        workflows,
+        executor,
     });
 
     // Create the protected API routes with auth middleware
@@ -349,6 +370,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/teams", get(api::list_teams))
         .route("/api/teams/:id", get(api::get_team))
         .route("/api/teams/:id/classify", post(api::classify_message))
+        // Workflows
+        .route("/api/workflows", post(api::create_workflow).get(api::list_workflows))
+        .route("/api/workflows/:id", get(api::get_workflow))
+        .route("/api/workflows/:id/execute", post(api::execute_workflow))
+        .route("/api/workflows/:id/executions", get(api::list_workflow_executions))
+        .route("/api/workflows/executions/:id", get(api::get_workflow_execution))
         // Import
         .route("/api/agents/import", post(api::import_agent))
         // Runtime status
