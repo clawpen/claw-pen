@@ -4,4 +4,5 @@ network-backend = "tailscale"
 runtime-socket = ""
 container-runtime = "docker"
 # Tailscale authentication key for agent mesh networking
-tailscale_auth_key = 'tskey-auth-kQ146DCst611CNTRL-1emEbhwpvTHHEVAK5BaCUHDkZTnmDRZN7'
+# Set via environment variable: TAILSCALE_AUTH_KEY
+# tailscale_auth_key = 'tskey-auth-xxx'

@@ -17,6 +17,11 @@ data/
 # Secrets and sensitive files
 docs/SECRETS.md
 
+# Configuration files with secrets
+claw-pen.toml
+*.toml.local
+
+
 # Python cache
 __pycache__/
 *.pyc
