@@ -6,6 +6,7 @@ mod config;
 mod container;
 mod containment;
 mod network;
+mod rpc;
 mod secret_manager;
 mod shared_memory;
 mod snapshots;
@@ -51,6 +52,8 @@ pub struct AppState {
     pub container_ips: RwLock<std::collections::HashMap<String, String>>,
     /// Agent index for O(1) lookups by ID (critical for scaling to thousands of agents)
     pub agent_index: RwLock<std::collections::HashMap<String, usize>>,
+    /// RPC client for agent-to-agent communication
+    pub rpc_client: rpc::RpcClient,
 }
 
 fn load_api_keys(data_dir: &std::path::Path) -> HashMap<String, String> {
@@ -254,6 +257,7 @@ async fn main() -> anyhow::Result<()> {
         volumes: RwLock::new(volumes),
         container_ips: RwLock::new(std::collections::HashMap::new()),
         agent_index: RwLock::new(agent_index),
+        rpc_client: rpc::create_rpc_client(),
     });
 
     // Create the protected API routes with auth middleware
