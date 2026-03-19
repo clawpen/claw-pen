@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_tungstenite::{tungstenite::Message as TungsteniteMessage, WebSocketStream};
 use futures_util::{SinkExt, StreamExt};
 
-use crate::types::{AgentContainer, AgentMessage, DirectMessage, RequestMessage, ResponseMessage};
+use crate::types::{AgentContainer, AgentMessage, DirectMessage};
 
 /// Response waiting for a specific request
 struct PendingResponse {

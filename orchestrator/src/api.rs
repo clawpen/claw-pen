@@ -1492,7 +1492,7 @@ async fn handle_chat_stream(socket: WebSocket, state: Arc<AppState>, agent_id: S
     use axum::extract::ws::Message;
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::{connect_async_with_config, tungstenite::protocol::WebSocketConfig, tungstenite::Message as TungsteniteMessage};
-    use std::time::Duration;
+    
 
     println!("[handle_chat_stream] Starting for agent {} on port {}", agent_id, gateway_port);
     let (mut client_tx, mut client_rx) = socket.split();
@@ -2253,14 +2253,14 @@ pub async fn update_agent_tailscale_ip(
     agent.tailscale_ip = Some(ip.clone());
 
     // Convert to StoredAgent format and persist
-    let status = format!("{:?}", agent.status);
-    let config = agent.config.clone();
-    let runtime = agent.runtime.clone();
-    let gateway_port = agent.gateway_port;
+    let _status = format!("{:?}", agent.status);
+    let _config = agent.config.clone();
+    let _runtime = agent.runtime.clone();
+    let _gateway_port = agent.gateway_port;
 
     // Need to drop the mutable borrow before creating the stored_agents vector
     let agent_id = agent.id.clone();
-    let agent_name = agent.name.clone();
+    let _agent_name = agent.name.clone();
     let agent_tailscale_ip = agent.tailscale_ip.clone();
 
     // Now convert all containers to StoredAgent format

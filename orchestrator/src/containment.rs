@@ -451,7 +451,7 @@ impl ContainerRuntime for ContainmentClient {
         self.health_check(id).await
     }
 
-    async fn exec_container(&self, id: &str, _cmd: Vec<String>) -> Result<String> {
+    async fn exec_container(&self, _id: &str, _cmd: Vec<String>) -> Result<String> {
         // Containment doesn't support direct exec - return error
         Err(anyhow::anyhow!("Exec not supported for Containment runtime. Use Docker runtime for shell access."))
     }
