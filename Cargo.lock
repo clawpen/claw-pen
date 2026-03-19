@@ -527,6 +527,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bollard",
+ "cc",
  "chrono",
  "config",
  "dirs 5.0.1",

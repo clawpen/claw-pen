@@ -380,8 +380,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/agents/import", post(api::import_agent))
         // Runtime status
         .route("/api/runtime/status", get(api::runtime_status))
-        .route("/api/auth/refresh", post(auth::refresh))
-        .with_state(state.clone());
+        .route("/api/auth/refresh", post(auth::refresh));
 
     // Public routes (no auth required)
     let public_routes = Router::new()
@@ -391,8 +390,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/auth/status", get(auth::auth_status))
         // WebSocket chat routes (handle their own auth via query parameter)
         .route("/api/agents/:id/chat", get(api::chat_websocket))
-        .route("/api/teams/:id/chat", get(api::team_chat_websocket))
-        .with_state(state.clone());
+        .route("/api/teams/:id/chat", get(api::team_chat_websocket));
     // Configure CORS to allow requests from Tauri app and development servers
     // Note: When using allow_credentials(true), we cannot use wildcard origin
     let cors = CorsLayer::new()
