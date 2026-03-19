@@ -19,6 +19,7 @@
 //!
 //! 4. Refresh tokens with `POST /auth/refresh` when the access token expires
 
+use crate::storage;
 use crate::validation;
 use axum::extract::ws::{WebSocket, WebSocketUpgrade};
 use axum::{
@@ -1496,24 +1497,43 @@ async fn handle_chat_stream(socket: WebSocket, state: Arc<AppState>, agent_id: S
     println!("[handle_chat_stream] Starting for agent {} on port {}", agent_id, gateway_port);
     let (mut client_tx, mut client_rx) = socket.split();
 
-    // On Windows, use 127.0.0.1 to force IPv4 (Windows Firewall may block IPv6 localhost)
-    // On Linux, use the container's bridge network IP
-    #[cfg(windows)]
-    let agent_ip = "127.0.0.1";
-    #[cfg(not(windows))]
-    let agent_ip = match get_container_ip(&state, &agent_id).await {
-        Ok(ip) => ip,
-        Err(e) => {
-            tracing::warn!("Failed to get container IP for {}: {}", agent_id, e);
-            // Fall back to localhost
-            "127.0.0.1".to_string()
+    // Use localhost for orchestrator-to-agent connections (via Docker port forwarding)
+    // Tailscale IPs are preserved for agent-to-agent communication
+    let agent_ip = {
+        let containers = state.containers.read().await;
+        if let Some(agent) = containers.iter().find(|a| a.id == agent_id) {
+            // Always use localhost for orchestrator-to-agent connections
+            // The agent's gateway port is forwarded to localhost by Docker
+            #[cfg(windows)]
+            let ip = "127.0.0.1".to_string();
+            #[cfg(not(windows))]
+            let ip = match get_container_ip(&state, &agent_id).await {
+                Ok(container_ip) => container_ip,
+                Err(e) => {
+                    tracing::warn!("Failed to get container IP for {}: {}", agent_id, e);
+                    "127.0.0.1".to_string()
+                }
+            };
+            println!("[handle_chat_stream] Using local IP {} for orchestrator-to-agent connection", ip);
+            println!("[handle_chat_stream] Agent Tailscale IP {} preserved for agent-to-agent communication",
+                agent.tailscale_ip.as_deref().unwrap_or("none"));
+            ip
+        } else {
+            tracing::error!("Agent {} not found", agent_id);
+            let error_msg = serde_json::json!({
+                "role": "system",
+                "error": "Agent not found",
+                "content": format!("Agent {} not found in orchestrator", agent_id),
+                "timestamp": chrono::Utc::now().timestamp()
+            });
+            let _ = client_tx.send(Message::Text(error_msg.to_string())).await;
+            return;
         }
     };
 
     // Connect to agent websocket using OpenClaw protocol
-    // OpenClaw uses /ws endpoint (not /chat which is the web UI)
-    // Password auth: wait for challenge, respond with connect request
-    let agent_ws_url = format!("ws://{}:{}/ws", agent_ip, gateway_port);
+    // OpenClaw gateway listens on the root path (no /ws or /chat path)
+    let agent_ws_url = format!("ws://{}:{}", agent_ip, gateway_port);
     println!("[handle_chat_stream] Connecting to agent at: {}", agent_ws_url);
 
     // Configure websocket with more lenient settings
@@ -2195,4 +2215,518 @@ pub async fn delete_volume(
 
     tracing::info!("Deleted volume {}", id);
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ============================================================================
+// SERVICE DISCOVERY & TAILSCALE IP MANAGEMENT
+// ============================================================================
+
+/// Get an agent's Tailscale IP address
+pub async fn get_agent_tailscale_ip(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Option<String>>, (StatusCode, String)> {
+    let containers = state.containers.read().await;
+
+    let agent = containers
+        .iter()
+        .find(|a| a.id == id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
+
+    Ok(Json(agent.tailscale_ip.clone()))
+}
+
+/// Update an agent's Tailscale IP address
+/// Called automatically when an agent connects to Tailscale
+pub async fn update_agent_tailscale_ip(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(ip): Json<String>,
+) -> Result<Json<Option<String>>, (StatusCode, String)> {
+    let mut containers = state.containers.write().await;
+
+    let agent = containers
+        .iter_mut()
+        .find(|a| a.id == id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
+
+    agent.tailscale_ip = Some(ip.clone());
+
+    // Convert to StoredAgent format and persist
+    let status = format!("{:?}", agent.status);
+    let config = agent.config.clone();
+    let runtime = agent.runtime.clone();
+    let gateway_port = agent.gateway_port;
+
+    // Need to drop the mutable borrow before creating the stored_agents vector
+    let agent_id = agent.id.clone();
+    let agent_name = agent.name.clone();
+    let agent_tailscale_ip = agent.tailscale_ip.clone();
+
+    // Now convert all containers to StoredAgent format
+    let stored_agents: Vec<storage::StoredAgent> = containers
+        .iter()
+        .map(|c| storage::StoredAgent {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            status: format!("{:?}", c.status),
+            config: c.config.clone(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            runtime: c.runtime.clone(),
+            gateway_port: Some(c.gateway_port),
+            tailscale_ip: c.tailscale_ip.clone(),
+        })
+        .collect();
+
+    if let Err(e) = storage::save_agents(&stored_agents) {
+        tracing::error!("Failed to save agents: {}", e);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save agent data: {}", e)));
+    }
+
+    tracing::info!("Updated agent {} Tailscale IP to {}", agent_id, ip);
+    Ok(Json(agent_tailscale_ip))
+}
+
+/// List all agents with their Tailscale IPs (for service discovery)
+pub async fn list_agents_with_tailscale(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<TailscaleQueryParams>,
+) -> Result<Json<Vec<AgentContainer>>, (StatusCode, String)> {
+    let containers = state.containers.read().await;
+
+    let agents: Vec<AgentContainer> = if params.only_with_tailscale.unwrap_or(false) {
+        containers
+            .iter()
+            .filter(|a| a.tailscale_ip.is_some())
+            .cloned()
+            .collect()
+    } else {
+        containers.clone()
+    };
+
+    Ok(Json(agents))
+}
+
+/// Query parameters for Tailscale agent listing
+#[derive(Debug, serde::Deserialize)]
+pub struct TailscaleQueryParams {
+    /// Only return agents that have Tailscale IPs
+    only_with_tailscale: Option<bool>,
+}
+
+/// Extract Tailscale IP from a running container's logs
+pub async fn extract_tailscale_ip_from_container(
+    state: &Arc<AppState>,
+    container_name: &str,
+) -> anyhow::Result<Option<String>> {
+    use crate::container::ContainerRuntime;
+
+    // Get container logs and search for Tailscale IP
+    let logs = state.runtime.container_logs(container_name, 100).await?;
+
+    // Look for the Tailscale connection line
+    for line in logs.lines() {
+        if line.contains("=== Tailscale connected ===") {
+            // Next line should have the IP
+            continue;
+        }
+        if line.chars().all(|c| c.is_numeric() || c == '.') {
+            // This looks like an IP address
+            if line.starts_with("100.") || line.starts_with("fd") {
+                // Tailscale IPs start with 100. or fd
+                return Ok(Some(line.trim().to_string()));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+/// Automatically discover and register Tailscale IPs for all running agents
+/// This should be called periodically or triggered by container start events
+pub async fn discover_tailscale_ips(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<DiscoveredAgents>, (StatusCode, String)> {
+    let containers = state.containers.read().await;
+    let mut discovered = Vec::new();
+
+    // Collect agents that need Tailscale IP discovery
+    let agents_to_update: Vec<_> = containers
+        .iter()
+        .filter(|a| a.status == AgentStatus::Running && a.tailscale_ip.is_none())
+        .map(|a| (a.id.clone(), a.name.clone()))
+        .collect();
+
+    // Release the lock before doing expensive operations
+    drop(containers);
+
+    // Process each agent
+    for (agent_id, agent_name) in agents_to_update {
+        // Try to extract Tailscale IP from the container
+        if let Ok(Some(ip)) = extract_tailscale_ip_from_container(&state, &agent_name).await {
+            tracing::info!("Discovered Tailscale IP {} for agent {}", ip, agent_name);
+
+            // Use the update function to persist the IP
+            let _ = update_agent_tailscale_ip(
+                Path(agent_id.clone()),
+                State(state.clone()),
+                Json(ip.clone()),
+            ).await;
+
+            discovered.push(DiscoveredAgent {
+                agent_id,
+                agent_name,
+                tailscale_ip: ip,
+            });
+        }
+    }
+
+    Ok(Json(DiscoveredAgents { agents: discovered }))
+}
+
+/// Response format for Tailscale IP discovery
+#[derive(Debug, serde::Serialize)]
+pub struct DiscoveredAgents {
+    pub agents: Vec<DiscoveredAgent>,
+}
+
+/// A discovered agent with its Tailscale IP
+#[derive(Debug, serde::Serialize)]
+pub struct DiscoveredAgent {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub tailscale_ip: String,
+}
+
+/// Trigger Tailscale IP discovery for all running agents
+pub async fn trigger_discovery(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<DiscoveredAgents>, (StatusCode, String)> {
+    discover_tailscale_ips(State(state.clone())).await
+}
+
+/// Get service registry - all agents that can communicate via Tailscale
+pub async fn get_service_registry(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ServiceRegistry>, (StatusCode, String)> {
+    let containers = state.containers.read().await;
+
+    let services: Vec<AgentService> = containers
+        .iter()
+        .filter(|a| a.status == AgentStatus::Running && a.tailscale_ip.is_some())
+        .map(|agent| {
+            let ip = agent.tailscale_ip.as_ref().unwrap();
+            AgentService {
+                id: agent.id.clone(),
+                name: agent.name.clone(),
+                tailscale_ip: ip.clone(),
+                gateway_url: format!("ws://{}:{}", ip, agent.gateway_port),
+                status: format!("{:?}", agent.status),
+                capabilities: vec!["chat".to_string(), "rpc".to_string(), "workflow".to_string()], // TODO: Make this dynamic
+            }
+        })
+        .collect();
+
+    Ok(Json(ServiceRegistry { agents: services }))
+}
+
+/// Service registry response
+#[derive(Debug, serde::Serialize)]
+pub struct ServiceRegistry {
+    pub agents: Vec<AgentService>,
+}
+
+/// An agent in the service registry
+#[derive(Debug, serde::Serialize)]
+pub struct AgentService {
+    pub id: String,
+    pub name: String,
+    pub tailscale_ip: String,
+    pub gateway_url: String,
+    pub status: String,
+    pub capabilities: Vec<String>,
+}
+
+// ============================================================================
+// AGENT-TO-AGENT MESSAGE ROUTING
+// ============================================================================
+
+/// Send a message from one agent to another
+pub async fn send_message(
+    Path(from_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<SendMessageRequest>,
+) -> Result<Json<SendMessageResponse>, (StatusCode, String)> {
+    use crate::types::{AgentMessage, DirectMessage, MessageStatus, RequestMessage};
+    use uuid::Uuid;
+
+    // Verify sender agent exists
+    let containers = state.containers.read().await;
+    let sender = containers
+        .iter()
+        .find(|a| a.id == from_id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Sender agent not found".to_string()))?;
+
+    if sender.status != crate::types::AgentStatus::Running {
+        return Err((StatusCode::BAD_REQUEST, "Sender agent is not running".to_string()));
+    }
+
+    // Find recipient agent (by ID or name)
+    let recipient = containers
+        .iter()
+        .find(|a| a.id == request.to || a.name == request.to)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Recipient agent not found".to_string()))?;
+
+    // Check if recipient has a Tailscale IP
+    let recipient_ip = recipient.tailscale_ip.as_ref()
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "Recipient agent is not on Tailscale network".to_string()))?;
+
+    // Generate message ID
+    let message_id = Uuid::new_v4().to_string();
+    let timestamp = chrono::Utc::now().to_rfc3339();
+
+    // Create the message based on type
+    let message = match request.message_type.as_str() {
+        "request" => AgentMessage::Request(RequestMessage {
+            id: message_id.clone(),
+            from: from_id.clone(),
+            to: recipient.id.clone(),
+            content: request.content.clone(),
+            timestamp: timestamp.clone(),
+            timeout: request.timeout.unwrap_or(30),
+            metadata: request.metadata.clone(),
+        }),
+        _ => AgentMessage::Direct(DirectMessage {
+            id: message_id.clone(),
+            from: from_id.clone(),
+            to: recipient.id.clone(),
+            content: request.content.clone(),
+            timestamp: timestamp.clone(),
+            metadata: request.metadata.clone(),
+        }),
+    };
+
+    // Serialize the message
+    let message_json = serde_json::to_string(&message)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to serialize message: {}", e)))?;
+
+    // Send the message to the recipient via Tailscale
+    let client = reqwest::Client::new();
+    let url = format!("http://{}:{}/api/message", recipient_ip, recipient.gateway_port);
+
+    let send_result = tokio::time::timeout(
+        tokio::time::Duration::from_secs(5),
+        client.post(&url)
+            .header("Content-Type", "application/json")
+            .body(message_json.clone())
+            .send()
+    ).await;
+
+    match send_result {
+        Ok(Ok(response)) => {
+            if response.status().is_success() {
+                tracing::info!("Message {} delivered from {} to {}", message_id, from_id, recipient.id);
+                Ok(Json(SendMessageResponse {
+                    message_id: message_id.clone(),
+                    status: MessageStatus::Delivered,
+                    response: None,
+                    error: None,
+                }))
+            } else {
+                let error_text = response.text().await.unwrap_or_default();
+                tracing::warn!("Failed to deliver message {}: {}", message_id, error_text);
+                Ok(Json(SendMessageResponse {
+                    message_id: message_id.clone(),
+                    status: MessageStatus::Failed,
+                    response: None,
+                    error: Some(format!("Recipient rejected message: {}", error_text)),
+                }))
+            }
+        }
+        Ok(Err(e)) => {
+            tracing::error!("Network error sending message {}: {}", message_id, e);
+            Ok(Json(SendMessageResponse {
+                message_id: message_id.clone(),
+                status: MessageStatus::Failed,
+                response: None,
+                error: Some(format!("Network error: {}", e)),
+            }))
+        }
+        Err(_) => {
+            tracing::error!("Timeout sending message {}", message_id);
+            Ok(Json(SendMessageResponse {
+                message_id: message_id.clone(),
+                status: MessageStatus::Failed,
+                response: None,
+                error: Some("Request timeout".to_string()),
+            }))
+        }
+    }
+}
+
+/// Get messages for an agent
+pub async fn get_agent_messages(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<TrackedMessage>>, (StatusCode, String)> {
+    // Verify agent exists
+    let containers = state.containers.read().await;
+    let _agent = containers
+        .iter()
+        .find(|a| a.id == id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
+
+    // TODO: Implement message persistence and retrieval
+    // For now, return empty list
+    Ok(Json(vec![]))
+}
+
+/// Tracked message wrapper for API responses
+#[derive(Debug, serde::Serialize)]
+pub struct TrackedMessage {
+    pub id: String,
+    pub from: String,
+    pub to: Option<String>,
+    pub message_type: String,
+    pub content: String,
+    pub status: String,
+    pub created_at: String,
+    pub delivered_at: Option<String>,
+    pub error: Option<String>,
+}
+
+// ============================================================================
+// WEBSOCKET PROXY FOR AGENT-TO-AGENT COMMUNICATION
+// ============================================================================
+
+/// WebSocket proxy for agent-to-agent communication
+/// Route: GET /api/agents/:id/ws/:target_id
+/// This endpoint upgrades the connection to WebSocket and proxies to the target agent
+pub async fn websocket_proxy(
+    Path((from_id, target_id)): Path<(String, String)>,
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    ws.on_upgrade(move |socket| handle_websocket_proxy(socket, from_id, target_id, state))
+}
+
+/// Handle the WebSocket proxy connection
+async fn handle_websocket_proxy(
+    client_socket: WebSocket,
+    from_id: String,
+    target_id: String,
+    state: Arc<AppState>,
+) {
+    use axum::extract::ws::Message as AxumMessage;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
+
+    // Verify both agents exist and are running
+    let containers = state.containers.read().await;
+
+    let from_agent = match containers.iter().find(|a| a.id == from_id) {
+        Some(agent) => agent,
+        None => {
+            tracing::error!("Source agent {} not found", from_id);
+            return;
+        }
+    };
+
+    let target_agent = match containers.iter().find(|a| a.id == target_id || a.name == target_id) {
+        Some(agent) => agent,
+        None => {
+            tracing::error!("Target agent {} not found", target_id);
+            return;
+        }
+    };
+
+    // Get target agent's Tailscale IP and gateway port
+    let target_ip = match target_agent.tailscale_ip.as_ref() {
+        Some(ip) => ip,
+        None => {
+            tracing::error!("Target agent {} is not on Tailscale network", target_id);
+            return;
+        }
+    };
+
+    let target_url = format!("ws://{}:{}/gateway", target_ip, target_agent.gateway_port);
+    tracing::info!("Proxying WebSocket: {} -> {} ({})", from_agent.name, target_agent.name, target_url);
+
+    // Drop the read lock before connecting
+    drop(containers);
+
+    // Connect to target agent's WebSocket gateway
+    let target_ws = match tokio_tungstenite::connect_async(&target_url).await {
+        Ok((socket, _)) => socket,
+        Err(e) => {
+            tracing::error!("Failed to connect to target agent {}: {}", target_id, e);
+            return;
+        }
+    };
+
+    let (mut client_sender, mut client_receiver) = client_socket.split();
+    let (mut target_sender, mut target_receiver) = target_ws.split();
+
+    // Spawn task to forward messages from client to target
+    let client_to_target = tokio::spawn(async move {
+        while let Some(result) = client_receiver.next().await {
+            match result {
+                Ok(AxumMessage::Text(text)) => {
+                    tracing::debug!("Client -> Target: {}", text);
+                    if let Err(e) = target_sender.send(TungsteniteMessage::Text(text)).await {
+                        tracing::error!("Failed to send to target: {}", e);
+                        break;
+                    }
+                }
+                Ok(AxumMessage::Close(_)) => {
+                    tracing::info!("Client closed connection");
+                    let _ = target_sender.send(TungsteniteMessage::Close(None)).await;
+                    break;
+                }
+                Err(e) => {
+                    tracing::error!("Error receiving from client: {}", e);
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+
+    // Spawn task to forward messages from target to client
+    let target_to_client = tokio::spawn(async move {
+        while let Some(result) = target_receiver.next().await {
+            match result {
+                Ok(TungsteniteMessage::Text(text)) => {
+                    tracing::debug!("Target -> Client: {}", text);
+                    if let Err(e) = client_sender.send(AxumMessage::Text(text)).await {
+                        tracing::error!("Failed to send to client: {}", e);
+                        break;
+                    }
+                }
+                Ok(TungsteniteMessage::Close(_)) => {
+                    tracing::info!("Target closed connection");
+                    let _ = client_sender.send(AxumMessage::Close(None)).await;
+                    break;
+                }
+                Err(e) => {
+                    tracing::error!("Error receiving from target: {}", e);
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+
+    // Wait for either direction to complete
+    tokio::select! {
+        _ = client_to_target => {
+            tracing::info!("Client to target forwarding completed");
+        }
+        _ = target_to_client => {
+            tracing::info!("Target to client forwarding completed");
+        }
+    }
+
+    tracing::info!("WebSocket proxy session ended: {} -> {}", from_id, target_id);
 }

@@ -29,6 +29,9 @@ pub struct StoredAgent {
     /// Gateway port for this agent
     #[serde(default)]
     pub gateway_port: Option<u16>,
+    /// Tailscale IP address (for agent-to-agent communication)
+    #[serde(default)]
+    pub tailscale_ip: Option<String>,
 }
 
 /// Load all persisted agents from disk
@@ -122,6 +125,7 @@ pub fn to_stored_agent(container: &crate::types::AgentContainer) -> StoredAgent 
         updated_at: now,
         runtime: container.runtime.clone(),
         gateway_port: Some(container.gateway_port),
+        tailscale_ip: container.tailscale_ip.clone(),
     }
 }
 

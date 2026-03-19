@@ -46,6 +46,9 @@ pub trait ContainerRuntime: Send + Sync {
 
     /// Execute a command in a running container
     async fn exec_container(&self, id: &str, cmd: Vec<String>) -> Result<String>;
+
+    /// Get raw container logs as a string (for parsing)
+    async fn container_logs(&self, container_name: &str, tail_lines: usize) -> Result<String>;
 }
 
 /// Runtime client that uses Docker, Containment, or Exo based on configuration
@@ -124,6 +127,7 @@ impl RuntimeClient {
     pub fn with_network_config(
         mut self,
         network_backend: NetworkBackend,
+        tailscale_auth_key: Option<String>,
         headscale_url: Option<String>,
         headscale_auth_key: Option<String>,
         headscale_namespace: Option<String>,
@@ -138,6 +142,7 @@ impl RuntimeClient {
             let new_docker = DockerClient::with_network_backend(
                 docker.docker.clone(),
                 network_backend,
+                tailscale_auth_key,
                 headscale_url,
                 headscale_auth_key,
                 headscale_namespace,
@@ -243,6 +248,14 @@ impl ContainerRuntime for RuntimeClient {
             RuntimeClientInner::Exo(client) => client.exec_container(id, cmd).await,
         }
     }
+
+    async fn container_logs(&self, container_name: &str, tail_lines: usize) -> Result<String> {
+        match &self.inner {
+            RuntimeClientInner::Docker(client) => client.container_logs(container_name, tail_lines).await,
+            RuntimeClientInner::Containment(client) => client.container_logs(container_name, tail_lines).await,
+            RuntimeClientInner::Exo(client) => client.container_logs(container_name, tail_lines).await,
+        }
+    }
 }
 
 // ============================================================================
@@ -264,6 +277,7 @@ const CLAW_PEN_NETWORK: &str = "claw-pen-network";
 pub struct DockerClient {
     docker: bollard::Docker,
     network_backend: NetworkBackend,
+    tailscale_auth_key: Option<String>,
     headscale_url: Option<String>,
     headscale_auth_key: Option<String>,
     headscale_namespace: Option<String>,
@@ -296,6 +310,7 @@ impl DockerClient {
         Ok(Self {
             docker,
             network_backend: NetworkBackend::default(),
+            tailscale_auth_key: None,
             headscale_url: None,
             headscale_auth_key: None,
             headscale_namespace: None,
@@ -306,6 +321,7 @@ impl DockerClient {
     pub fn with_network_backend(
         docker: bollard::Docker,
         network_backend: NetworkBackend,
+        tailscale_auth_key: Option<String>,
         headscale_url: Option<String>,
         headscale_auth_key: Option<String>,
         headscale_namespace: Option<String>,
@@ -313,6 +329,7 @@ impl DockerClient {
         Self {
             docker,
             network_backend,
+            tailscale_auth_key,
             headscale_url,
             headscale_auth_key,
             headscale_namespace,
@@ -373,7 +390,23 @@ impl DockerClient {
             _ => {}
         }
         // Pass provider and model to container
-        env.push(format!("LLM_PROVIDER={:?}", config.llm_provider));
+        // Convert LlmProvider to lowercase string for OpenClaw
+        let provider_str = match config.llm_provider {
+            LlmProvider::OpenAI => "openai",
+            LlmProvider::Anthropic => "anthropic",
+            LlmProvider::Gemini => "gemini",
+            LlmProvider::Ollama => "ollama",
+            LlmProvider::Kimi => "kimi",
+            LlmProvider::Zai => "zai",
+            LlmProvider::KimiCode => "kimi-code",
+            LlmProvider::Access => "access",
+            LlmProvider::Huggingface => "huggingface",
+            LlmProvider::LlamaCpp => "llama-cpp",
+            LlmProvider::Vllm => "vllm",
+            LlmProvider::Lmstudio => "lmstudio",
+            LlmProvider::Custom { .. } => "custom",
+        };
+        env.push(format!("LLM_PROVIDER={}", provider_str));
         if let Some(ref model) = config.llm_model {
             env.push(format!("LLM_MODEL={}", model));
         }
@@ -430,13 +463,37 @@ impl DockerClient {
         env
     }
 
-    fn get_image_for_provider(provider: &LlmProvider) -> &'static str {
+    /// Generate environment variables for Tailscale network backend
+    /// These are passed to containers so they can join the Tailnet
+    fn build_tailscale_env_vars(&self) -> Vec<String> {
+        let mut env = Vec::new();
+
+        if matches!(self.network_backend, NetworkBackend::Tailscale) {
+            if let Some(ref key) = self.tailscale_auth_key {
+                // Tailscale auth key for automatic mesh joining
+                env.push(format!("TAILSCALE_AUTH_KEY={}", key));
+            }
+            // Configure OpenClaw to bind to 0.0.0.0 for Tailnet access
+            env.push("OPENCLAW_BIND=0.0.0.0".to_string());
+        }
+
+        env
+    }
+
+    fn get_image_for_provider(provider: &LlmProvider, network_backend: NetworkBackend) -> &'static str {
         match provider {
             LlmProvider::OpenAI => "node:20-alpine",
             LlmProvider::Anthropic => "node:20-alpine",
             LlmProvider::Gemini => "node:20-alpine",
             LlmProvider::Kimi => "node:20-alpine",
-            LlmProvider::Zai => "node:20-alpine",
+            // For Zai provider, use openclaw-agent image when Tailscale is enabled
+            LlmProvider::Zai => {
+                if matches!(network_backend, NetworkBackend::Tailscale) {
+                    "openclaw-agent:latest"
+                } else {
+                    "node:20-alpine"
+                }
+            }
             LlmProvider::Huggingface => "node:20-alpine",
             LlmProvider::Ollama => "node:20-alpine",
             LlmProvider::KimiCode => "node:20-alpine",
@@ -580,7 +637,7 @@ impl ContainerRuntime for DockerClient {
 
         // Use custom image if specified, otherwise default to provider image
         let image = config.image.as_deref()
-            .unwrap_or_else(|| Self::get_image_for_provider(&config.llm_provider));
+            .unwrap_or_else(|| Self::get_image_for_provider(&config.llm_provider, self.network_backend));
 
         // Check if this is an openclaw-agent image (needs special handling)
         let is_openclaw_agent = image.contains("openclaw-agent");
@@ -590,6 +647,10 @@ impl ContainerRuntime for DockerClient {
         // Add Headscale environment variables if using Headscale backend
         let headscale_env = self.build_headscale_env_vars();
         env.extend(headscale_env);
+
+        // Add Tailscale environment variables if using Tailscale backend
+        let tailscale_env = self.build_tailscale_env_vars();
+        env.extend(tailscale_env);
 
         let labels = Self::build_labels(name, &config.llm_provider);
 
@@ -651,7 +712,7 @@ impl ContainerRuntime for DockerClient {
 
         // Container configuration with bridge network (isolated from host)
         // Build volume binds from config
-        let binds = if !config.volumes.is_empty() {
+        let mut binds = if !config.volumes.is_empty() {
             Some(
                 config
                     .volumes
@@ -675,14 +736,31 @@ impl ContainerRuntime for DockerClient {
             None
         };
 
+        // For Tailscale agents, mount the startup script
+        if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent {
+            let script_path = format!("{}/tailscale-startup.sh", env!("CARGO_MANIFEST_DIR"));
+            let mut bind_list = binds.unwrap_or_default();
+            bind_list.push(format!("{}:/tmp/tailscale-startup.sh:ro", script_path));
+            binds = Some(bind_list);
+        }
+
         let container_config = Config {
             image: Some(image.to_string()),
             env: Some(env),
             labels: Some(labels),
             exposed_ports: Some(exposed_ports),
-            // For openclaw-agent, use default entrypoint/cmd (environment variables control config)
-            cmd: None,
-            entrypoint: None,
+            // For openclaw-agent with Tailscale, mount and run the startup script
+            cmd: if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent {
+                Some(vec!["sh".to_string(), "/tmp/tailscale-startup.sh".to_string()])
+            } else {
+                None
+            },
+            // Override entrypoint for Tailscale agents so our cmd runs directly
+            entrypoint: if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent {
+                Some(vec!["".to_string()])  // Empty entrypoint to override image default
+            } else {
+                None
+            },
             host_config: Some(bollard::models::HostConfig {
                 memory: Some((config.memory_mb * 1024 * 1024) as i64),
                 nano_cpus: Some((config.cpu_cores * 1_000_000_000.0) as i64),
@@ -698,15 +776,37 @@ impl ContainerRuntime for DockerClient {
                 privileged: Some(false),
 
                 // 2. Security options
-                security_opt: Some(vec![
-                    "no-new-privileges:true".to_string(),  // Disallow gaining privileges
-                    "seccomp=default".to_string(),      // Use default seccomp profile
-                    "apparmor=docker-default".to_string(), // Use AppArmor profile
-                ]),
+                // Note: Using seccomp=unconfined for compatibility with Docker Desktop on Windows
+                // Docker Desktop uses a Linux VM backend, so seccomp is actually supported
+                security_opt: if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent {
+                    // Relax security for Tailscale agents to allow package installation
+                    Some(vec![
+                        "seccomp=unconfined".to_string(),      // Disable seccomp filtering
+                    ])
+                } else {
+                    Some(vec![
+                        "no-new-privileges:true".to_string(),  // Disallow gaining privileges
+                        "seccomp=unconfined".to_string(),      // Disable seccomp filtering for compatibility
+                    ])
+                },
 
                 // 3. Drop all capabilities, add only what is absolutely needed
-                cap_drop: Some(vec!["ALL".to_string()]),
-                cap_add: Some(vec!["NET_BIND_SERVICE".to_string()]), // Only allow binding ports
+                // For Tailscale agents, keep more capabilities to allow package installation
+                cap_drop: if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent {
+                    None  // Don't drop capabilities for Tailscale agents
+                } else {
+                    Some(vec!["ALL".to_string()])
+                },
+                cap_add: if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent {
+                    Some(vec![
+                        "NET_BIND_SERVICE".to_string(),    // Allow binding ports
+                        "NET_ADMIN".to_string(),           // Required for Tailscale
+                        "NET_RAW".to_string(),             // Required for Tailscale
+                        "SYS_ADMIN".to_string(),           // Required for network configuration
+                    ])
+                } else {
+                    Some(vec!["NET_BIND_SERVICE".to_string()]) // Only allow binding ports
+                },
 
                 // 4. Read-only root filesystem (agents write to /tmp and mounted volumes only)
                 readonly_rootfs: Some(false), // Keep writable root for now, but add read-only paths below
@@ -716,16 +816,17 @@ impl ContainerRuntime for DockerClient {
                 oom_kill_disable: Some(false), // Allow OOM killer to prevent DoS
 
                 // 6. Device restrictions (cgroup device whitelist)
-                device_cgroup_rules: Some(vec![
-                    // Allow only specific devices
-                    "c 1:5 mrwm".into(),      // /dev/null
-                    "c 1:3 mrwm".into(),      // /dev/zero
-                    "c 1:8 mrwm".into(),      // /dev/random
-                    "c 1:9 mrwm".into(),      // /dev/urandom
-                    "c 5:0 mrwm".into(),      // /dev/tty
-                    "c 1:7 mrwm".into(),      // /dev/full
-                    "c 10:200 rwm".into(),    // /dev/snd (if needed for audio)
-                ]),
+                // Note: Temporarily disabled for Windows compatibility
+                // TODO: Re-enable with correct format for Windows Docker
+                // device_cgroup_rules: Some(vec![
+                //     "c 1:5 mrwm".into(),      // /dev/null
+                //     "c 1:3 mrwm".into(),      // /dev/zero
+                //     "c 1:8 mrwm".into(),      // /dev/random
+                //     "c 1:9 mrwm".into(),      // /dev/urandom
+                //     "c 5:0 mrwm".into(),      // /dev/tty
+                //     "c 1:7 mrwm".into(),      // /dev/full
+                //     "c 10:200 rwm".into(),    // /dev/snd
+                // ]),
 
                 // 7. Mount tmpfs for security
                 // Prevent modification of critical system directories
@@ -898,6 +999,44 @@ impl ContainerRuntime for DockerClient {
 
         Ok(format!("Shell access initiated for container {}", id))
     }
+
+    async fn container_logs(&self, container_name: &str, tail_lines: usize) -> Result<String> {
+        use bollard::container::LogsOptions;
+        use futures_util::StreamExt;
+
+        // Create options - only the tail field needs to be String in bollard's API
+        let options = LogsOptions::<String> {
+            tail: tail_lines.to_string(),
+            follow: false,
+            stdout: true,
+            stderr: true,
+            since: 0,
+            until: 0,
+            timestamps: false,
+        };
+
+        // logs() returns a Stream directly (boxed), not a Result
+        let mut stream = self.docker.logs(container_name, Some(options));
+
+        let mut logs = String::new();
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(log_output) => {
+                    // Convert LogOutput to string (variants are StdOut and StdErr)
+                    if let bollard::container::LogOutput::StdOut { message } = log_output {
+                        logs.push_str(&String::from_utf8_lossy(&message));
+                    } else if let bollard::container::LogOutput::StdErr { message } = log_output {
+                        logs.push_str(&String::from_utf8_lossy(&message));
+                    }
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!("Error reading log stream: {}", e));
+                }
+            }
+        }
+
+        Ok(logs)
+    }
 }
 
 // ============================================================================
@@ -910,6 +1049,7 @@ use std::process::Command;
 #[derive(Clone)]
 pub struct ExoClient {
     exo_path: String,
+    network_backend: NetworkBackend,
 }
 
 impl ExoClient {
@@ -942,12 +1082,16 @@ impl ExoClient {
         let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
         tracing::info!("Connected to Exo runtime: {}", version);
 
-        Ok(Self { exo_path })
+        Ok(Self {
+            exo_path,
+            network_backend: NetworkBackend::Local, // Exo doesn't support Tailscale yet
+        })
     }
 
     /// Get the image name for a provider
-    fn get_image_for_provider(provider: &LlmProvider) -> &'static str {
+    fn get_image_for_provider(provider: &LlmProvider, _network_backend: NetworkBackend) -> &'static str {
         // Exo uses the same images as Docker for compatibility
+        // Note: Tailscale integration not yet supported for Exo
         match provider {
             LlmProvider::OpenAI => "node:20-alpine",
             LlmProvider::Anthropic => "node:20-alpine",
@@ -1093,7 +1237,7 @@ impl ContainerRuntime for ExoClient {
 
         // Use custom image if specified, otherwise default to provider image
         let image = config.image.as_deref()
-            .unwrap_or_else(|| Self::get_image_for_provider(&config.llm_provider));
+            .unwrap_or_else(|| Self::get_image_for_provider(&config.llm_provider, self.network_backend));
         let mut args = vec![
             "run".to_string(),
             "--name".to_string(),
@@ -1235,5 +1379,11 @@ impl ContainerRuntime for ExoClient {
     async fn exec_container(&self, id: &str, cmd: Vec<String>) -> Result<String> {
         // Exo doesn't support direct exec - use SSH or other method
         Err(anyhow::anyhow!("Exec not supported for Exo runtime. Use SSH to access the agent."))
+    }
+
+    async fn container_logs(&self, container_name: &str, _tail_lines: usize) -> Result<String> {
+        // Exo doesn't support direct log access
+        // Would need to SSH into the container to get logs
+        Err(anyhow::anyhow!("Container logs not supported for Exo runtime"))
     }
 }

@@ -9,7 +9,7 @@ pub enum DeploymentMode {
     AllWindows,
 }
 
-#[derive(Debug, Deserialize, Clone, PartialEq, Default)]
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum NetworkBackend {
     #[default]
