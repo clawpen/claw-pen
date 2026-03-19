@@ -633,3 +633,180 @@ pub struct ExecResponse {
     /// Container name
     pub container_name: String,
 }
+
+// ============================================================================
+// AGENT-TO-AGENT COMMUNICATION TYPES
+// ============================================================================
+
+/// Message type for agent-to-agent communication
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum AgentMessage {
+    /// Direct message (one-way communication)
+    Direct(DirectMessage),
+    /// Request (expects a response)
+    Request(RequestMessage),
+    /// Response (reply to a request)
+    Response(ResponseMessage),
+    /// Notification (broadcast to multiple agents)
+    Notification(NotificationMessage),
+}
+
+/// Direct message from one agent to another (one-way)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectMessage {
+    /// Unique message ID
+    pub id: String,
+    /// Sender agent ID
+    pub from: String,
+    /// Recipient agent ID
+    pub to: String,
+    /// Message content
+    pub content: String,
+    /// Timestamp (ISO 8601)
+    pub timestamp: String,
+    /// Optional metadata
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+}
+
+/// Request message (expects a response)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestMessage {
+    /// Unique request ID
+    pub id: String,
+    /// Sender agent ID
+    pub from: String,
+    /// Recipient agent ID
+    pub to: String,
+    /// Request content
+    pub content: String,
+    /// Timestamp (ISO 8601)
+    pub timestamp: String,
+    /// Timeout in seconds (default: 30)
+    #[serde(default = "default_request_timeout")]
+    pub timeout: u64,
+    /// Optional metadata
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+}
+
+fn default_request_timeout() -> u64 {
+    30
+}
+
+/// Response message (reply to a request)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponseMessage {
+    /// Original request ID
+    pub request_id: String,
+    /// Responder agent ID
+    pub from: String,
+    /// Recipient agent ID (original sender)
+    pub to: String,
+    /// Response content
+    pub content: String,
+    /// Timestamp (ISO 8601)
+    pub timestamp: String,
+    /// Whether the request was successful
+    pub success: bool,
+    /// Error message if unsuccessful
+    #[serde(default)]
+    pub error: Option<String>,
+    /// Optional metadata
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+}
+
+/// Notification message (broadcast to multiple agents)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationMessage {
+    /// Unique notification ID
+    pub id: String,
+    /// Sender agent ID
+    pub from: String,
+    /// Notification content
+    pub content: String,
+    /// Timestamp (ISO 8601)
+    pub timestamp: String,
+    /// Recipient agent IDs (empty = broadcast to all)
+    #[serde(default)]
+    pub to: Vec<String>,
+    /// Optional metadata
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+}
+
+/// Message delivery status
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageStatus {
+    /// Message is queued for delivery
+    Queued,
+    /// Message is being delivered
+    Delivering,
+    /// Message was successfully delivered
+    Delivered,
+    /// Message delivery failed
+    Failed,
+    /// Message was read by recipient
+    Read,
+}
+
+/// Tracked message in the orchestrator
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackedMessage {
+    /// Unique message ID
+    pub id: String,
+    /// Sender agent ID
+    pub from: String,
+    /// Recipient agent ID (or empty for broadcasts)
+    pub to: Option<String>,
+    /// Message type
+    pub message_type: String,
+    /// Message content (serialized)
+    pub content: String,
+    /// Delivery status
+    pub status: MessageStatus,
+    /// Timestamp when created
+    pub created_at: String,
+    /// Timestamp when delivered (if applicable)
+    #[serde(default)]
+    pub delivered_at: Option<String>,
+    /// Error message if failed
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Request to send a message from one agent to another
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendMessageRequest {
+    /// Recipient agent ID or name
+    pub to: String,
+    /// Message content
+    pub content: String,
+    /// Message type (direct or request)
+    #[serde(default)]
+    pub message_type: String,
+    /// Timeout for requests (seconds)
+    #[serde(default)]
+    pub timeout: Option<u64>,
+    /// Optional metadata
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+}
+
+/// Response from sending a message
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendMessageResponse {
+    /// Message ID
+    pub message_id: String,
+    /// Delivery status
+    pub status: MessageStatus,
+    /// For request messages, the response (if already received)
+    #[serde(default)]
+    pub response: Option<String>,
+    /// Error message if failed
+    #[serde(default)]
+    pub error: Option<String>,
+}

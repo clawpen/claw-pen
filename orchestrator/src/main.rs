@@ -14,6 +14,7 @@ mod teams;
 mod templates;
 mod types;
 mod validation;
+mod volume_attachment;
 // mod code_index;  // TODO: fix dependencies
 
 use axum::http::{header, HeaderValue, Method};
@@ -131,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
     .await?
     .with_network_config(
         config.network_backend.clone(),
+        config.tailscale_auth_key.clone(),
         config.headscale_url.clone(),
         config.headscale_auth_key.clone(),
         config.headscale_namespace.clone(),
@@ -190,7 +192,7 @@ async fn main() -> anyhow::Result<()> {
             name: stored.name,
             status,
             config: stored.config,
-            tailscale_ip: None,
+            tailscale_ip: stored.tailscale_ip,  // Use persisted Tailscale IP
             resource_usage: None,
             project: None,
             tags: vec![],
@@ -261,7 +263,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/agents/:id/stop", post(api::stop_agent))
         .route("/api/agents/:id/logs", get(api::get_logs))
         .route("/api/agents/:id/logs/stream", get(api::logs_websocket))
-        .route("/api/agents/:id/chat", get(api::chat_websocket))
         .route("/api/agents/:id/metrics", get(api::get_metrics))
         .route("/api/agents/:id/health", post(api::run_health_check))
         .route(
@@ -282,6 +283,16 @@ async fn main() -> anyhow::Result<()> {
             delete(api::delete_snapshot),
         )
         .route("/api/agents/:id/export", get(api::export_agent))
+        // Volume attachment for agents
+        .route(
+            "/api/agents/:id/volumes",
+            get(api::list_agent_volumes)
+                .post(api::attach_volume_to_agent),
+        )
+        .route(
+            "/api/agents/:id/volumes/detach",
+            post(api::detach_volume_from_agent),
+        )
         // Generic :id routes come after all specific routes
         .route(
             "/api/agents/:id",
@@ -289,10 +300,23 @@ async fn main() -> anyhow::Result<()> {
                 .put(api::update_agent)
                 .delete(api::delete_agent),
         )
+        .route(
+            "/api/agents/:id/exec",
+            post(api::exec_agent),
+        )
         .route("/api/agents", get(api::list_agents).post(api::create_agent))
         // Batch operations
         .route("/api/agents/start-all", post(api::start_all))
         .route("/api/agents/stop-all", post(api::stop_all))
+        // Service Discovery & Tailscale
+        .route("/api/agents/:id/tailscale-ip", get(api::get_agent_tailscale_ip).put(api::update_agent_tailscale_ip))
+        .route("/api/agents/tailscale", get(api::list_agents_with_tailscale))
+        .route("/api/discovery/trigger", post(api::trigger_discovery))
+        .route("/api/services/registry", get(api::get_service_registry))
+        // Agent-to-Agent Communication
+        .route("/api/agents/:id/send", post(api::send_message))
+        .route("/api/agents/:id/messages", get(api::get_agent_messages))
+        .route("/api/agents/:id/ws/:target_id", get(api::websocket_proxy))
         // Global metrics
         .route("/api/metrics", get(api::get_all_metrics))
         .route("/api/system/stats", get(api::get_system_stats))
@@ -320,7 +344,6 @@ async fn main() -> anyhow::Result<()> {
         // Teams
         .route("/api/teams", get(api::list_teams))
         .route("/api/teams/:id", get(api::get_team))
-        .route("/api/teams/:id/chat", get(api::team_chat_websocket))
         .route("/api/teams/:id/classify", post(api::classify_message))
         // Import
         .route("/api/agents/import", post(api::import_agent))
@@ -335,25 +358,30 @@ async fn main() -> anyhow::Result<()> {
         .route("/auth/login", post(auth::login))
         .route("/auth/register", post(auth::register))
         .route("/auth/status", get(auth::auth_status))
+        // WebSocket chat routes (handle their own auth via query parameter)
+        .route("/api/agents/:id/chat", get(api::chat_websocket))
+        .route("/api/teams/:id/chat", get(api::team_chat_websocket))
         .with_state(state.clone());
-    // Configure CORS with explicit allowed origins (not permissive)
-    // Allowed origins: Claw Pen UI domains and localhost for development
+    // Configure CORS to allow requests from Tauri app and development servers
+    // Note: When using allow_credentials(true), we cannot use wildcard origin
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(
             |origin: &HeaderValue, _req_parts| {
-                // Check if origin is in allowed list
+                // Allow requests with no Origin header (same-origin, curl, etc.)
                 if let Ok(origin_str) = origin.to_str() {
-                    // Allow any localhost origin for development (with any port)
+                    // Allow any localhost origin for development
                     if origin_str.starts_with("http://localhost:")
                         || origin_str.starts_with("http://127.0.0.1:")
                         || origin_str.starts_with("https://localhost")
                         || origin_str.starts_with("http://tauri.localhost")
                         || origin_str.starts_with("https://tauri.localhost")
                         || origin_str == "tauri://localhost"
+                        || origin_str == "null"  // Some browsers send "null" for file://
                     {
                         return true;
                     }
                 }
+                // Allow requests with no Origin header (same-origin)
                 false
             },
         ))
@@ -371,7 +399,8 @@ async fn main() -> anyhow::Result<()> {
             header::ACCEPT,
             header::ORIGIN,
         ])
-        .allow_credentials(true);
+        .allow_credentials(true)
+        .max_age(std::time::Duration::from_secs(86400));
 
     let app = Router::new()
         .merge(public_routes)
