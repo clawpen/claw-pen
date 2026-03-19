@@ -7,9 +7,9 @@ use tokio::sync::RwLock;
 use chrono::Utc;
 use futures_util::future;
 
-use crate::types::{AgentContainer, AgentMessage, DirectMessage};
+use crate::types::AgentContainer;
 use crate::workflow::{
-    Workflow, WorkflowExecution, WorkflowExecutionRequest, ExecutionStatus, StepResult,
+    Workflow, WorkflowExecutionRequest, ExecutionStatus, StepResult,
     StepTask, ExecutionStrategy, WorkflowRegistry,
 };
 
@@ -221,7 +221,7 @@ async fn execute_dag(
 async fn execute_step(
     step: &crate::workflow::WorkflowStep,
     step_outputs: &HashMap<String, serde_json::Value>,
-    execution_id: &str,
+    _execution_id: &str,
     agents: Arc<RwLock<Vec<AgentContainer>>>,
 ) -> Result<StepResult> {
     let start_time = std::time::Instant::now();
@@ -297,8 +297,7 @@ async fn resolve_agent(
         return agents
             .iter()
             .find(|a| &a.id == agent_id)
-            .ok_or_else(|| anyhow::anyhow!("Agent {} not found", agent_id))
-            .map(|a| a.clone());
+            .ok_or_else(|| anyhow::anyhow!("Agent {} not found", agent_id)).cloned();
     }
 
     // Otherwise, find an agent matching the pattern
@@ -311,16 +310,14 @@ async fn resolve_agent(
                 a.name.contains(pattern)
                     || a.tags.iter().any(|t| t.contains(pattern))
             })
-            .ok_or_else(|| anyhow::anyhow!("No agent matching pattern {}", pattern))
-            .map(|a| a.clone());
+            .ok_or_else(|| anyhow::anyhow!("No agent matching pattern {}", pattern)).cloned();
     }
 
     // Default: use first available running agent
     agents
         .iter()
         .find(|a| a.status == crate::types::AgentStatus::Running)
-        .ok_or_else(|| anyhow::anyhow!("No running agents available"))
-        .map(|a| a.clone())
+        .ok_or_else(|| anyhow::anyhow!("No running agents available")).cloned()
 }
 
 /// Prepare task with inputs from previous steps

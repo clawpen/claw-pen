@@ -132,7 +132,7 @@ impl RuntimeClient {
         headscale_auth_key: Option<String>,
         headscale_namespace: Option<String>,
     ) -> Self {
-        self.network_backend = network_backend.clone();
+        self.network_backend = network_backend;
         self.headscale_url = headscale_url.clone();
         self.headscale_auth_key = headscale_auth_key.clone();
         self.headscale_namespace = headscale_namespace.clone();
@@ -1376,12 +1376,12 @@ impl ContainerRuntime for ExoClient {
             .any(|c| (c.id == id || c.name == id) && c.status == AgentStatus::Running))
     }
 
-    async fn exec_container(&self, id: &str, cmd: Vec<String>) -> Result<String> {
+    async fn exec_container(&self, _id: &str, _cmd: Vec<String>) -> Result<String> {
         // Exo doesn't support direct exec - use SSH or other method
         Err(anyhow::anyhow!("Exec not supported for Exo runtime. Use SSH to access the agent."))
     }
 
-    async fn container_logs(&self, container_name: &str, _tail_lines: usize) -> Result<String> {
+    async fn container_logs(&self, _container_name: &str, _tail_lines: usize) -> Result<String> {
         // Exo doesn't support direct log access
         // Would need to SSH into the container to get logs
         Err(anyhow::anyhow!("Container logs not supported for Exo runtime"))

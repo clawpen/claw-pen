@@ -140,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?
     .with_network_config(
-        config.network_backend.clone(),
+        config.network_backend,
         config.tailscale_auth_key.clone(),
         config.headscale_url.clone(),
         config.headscale_auth_key.clone(),

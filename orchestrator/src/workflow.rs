@@ -353,7 +353,7 @@ impl WorkflowRegistry {
         // Build dependency graph using owned Strings
         let mut graph: HashMap<String, Vec<String>> = HashMap::new();
         for step in &workflow.steps {
-            graph.insert(step.id.clone(), step.depends_on.iter().map(|s| s.clone()).collect());
+            graph.insert(step.id.clone(), step.depends_on.iter().cloned().collect());
         }
 
         // Detect cycles using DFS

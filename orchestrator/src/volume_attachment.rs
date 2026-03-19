@@ -149,7 +149,7 @@ pub async fn attach_volume_to_agent(
     // Wait for container to be fully removed
     for _ in 0..10 {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        if runtime.container_exists(&agent_name).await.unwrap_or(true) == false {
+        if !runtime.container_exists(&agent_name).await.unwrap_or(true) {
             break;
         }
     }
@@ -300,7 +300,7 @@ pub async fn detach_volume_from_agent(
     // Wait for container to be fully removed
     for _ in 0..10 {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        if runtime.container_exists(&agent_name).await.unwrap_or(true) == false {
+        if !runtime.container_exists(&agent_name).await.unwrap_or(true) {
             break;
         }
     }
