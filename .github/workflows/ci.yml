@@ -29,15 +29,18 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      
+
+      - name: Build runtime
+        run: cd runtime && cargo build --verbose
+
       - name: Build orchestrator
         run: cd orchestrator && cargo build --verbose
-      
-      - name: Check orchestrator
-        run: cd orchestrator && cargo check --verbose
-      
+
       - name: Build UI
-        run: cd ui && cargo check --verbose
+        run: cd ui && cargo build --verbose
+
+      - name: Test orchestrator
+        run: cd orchestrator && cargo test --verbose
 
   lint:
     runs-on: ubuntu-latest
@@ -48,9 +51,15 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-      
+
       - name: Check formatting
         run: cargo fmt --all -- --check
-      
-      - name: Clippy
-        run: cargo clippy --workspace --exclude claw-pen-desktop --exclude claw-pen-ui --all-targets --all-features -- -D warnings
+
+      - name: Clippy orchestrator
+        run: cd orchestrator && cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Clippy runtime
+        run: cd runtime && cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Clippy UI
+        run: cd ui && cargo clippy --all-targets --all-features -- -D warnings
