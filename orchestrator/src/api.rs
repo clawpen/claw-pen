@@ -1443,6 +1443,7 @@ pub async fn chat_websocket(
 }
 
 /// Get the IP address of a container from Docker with caching for scalability
+#[allow(dead_code)]
 async fn get_container_ip(state: &Arc<AppState>, container_id: &str) -> anyhow::Result<String> {
     // Check cache first - O(1) lookup (critical for scalability with thousands of agents)
     {
@@ -1538,7 +1539,6 @@ async fn handle_chat_stream(socket: WebSocket, state: Arc<AppState>, agent_id: S
 
     // Configure websocket with more lenient settings
     let config = WebSocketConfig {
-        max_send_queue: Some(100),
         accept_unmasked_frames: true,  // Be lenient with protocol
         ..Default::default()
     };

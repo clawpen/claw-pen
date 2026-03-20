@@ -6,14 +6,13 @@ use std::collections::HashMap;
 use std::sync::Arc as StdArc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_tungstenite::{tungstenite::Message as TungsteniteMessage, WebSocketStream};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::SinkExt;
 
 use crate::types::{AgentContainer, AgentMessage, DirectMessage};
 
 /// Response waiting for a specific request
 struct PendingResponse {
     response_tx: mpsc::Sender<AgentMessage>,
-    timeout: std::time::Instant,
 }
 
 // Type alias for the WebSocket stream type to avoid complex generic nesting
@@ -213,7 +212,6 @@ impl RpcClient {
                 request_id.to_string(),
                 PendingResponse {
                     response_tx,
-                    timeout: start + timeout,
                 },
             );
         }
