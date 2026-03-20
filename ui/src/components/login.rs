@@ -99,7 +99,7 @@ pub fn login(props: &LoginProps) -> Html {
         <div class="login-container">
             <div class="login-box">
                 <h1>{"🦀 Claw Pen"}</h1>
-                if let Some(status) = &*auth_status {
+                if let Some(_status) = &*auth_status {
                     if *is_setup {
                         <div class="setup-message">
                             <h2>{"Welcome!"}</h2>

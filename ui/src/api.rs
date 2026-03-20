@@ -14,8 +14,11 @@ pub struct LoginRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TokenResponse {
     pub access_token: String,
+    #[allow(dead_code)]
     pub refresh_token: String,
+    #[allow(dead_code)]
     pub token_type: String,
+    #[allow(dead_code)]
     pub expires_in: i64,
 }
 
@@ -23,6 +26,7 @@ pub struct TokenResponse {
 pub struct AuthStatus {
     pub auth_enabled: bool,
     pub has_admin: bool,
+    #[allow(dead_code)]
     pub registration_enabled: bool,
 }
 
