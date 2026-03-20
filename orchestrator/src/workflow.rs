@@ -447,7 +447,7 @@ mod tests {
                     },
                     depends_on: vec!["step2".to_string()],
                     inputs: StepInputs {
-                        static: HashMap::new(),
+                        static_values: HashMap::new(),
                         from_steps: HashMap::new(),
                     },
                     outputs: StepOutputs {
@@ -470,7 +470,7 @@ mod tests {
                     },
                     depends_on: vec!["step1".to_string()],
                     inputs: StepInputs {
-                        static: HashMap::new(),
+                        static_values: HashMap::new(),
                         from_steps: HashMap::new(),
                     },
                     outputs: StepOutputs {
