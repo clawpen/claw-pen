@@ -755,6 +755,7 @@ pub enum MessageStatus {
 
 /// Tracked message in the orchestrator
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct TrackedMessage {
     /// Unique message ID
     pub id: String,
