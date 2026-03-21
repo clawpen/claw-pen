@@ -35,7 +35,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            orchestrator_url: "http://localhost:8081".to_string(),
+            orchestrator_url: "http://localhost:3001".to_string(),
             agent_gateway_url: "ws://127.0.0.1:18790/ws".to_string(),
         }
     }

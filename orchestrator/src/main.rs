@@ -239,7 +239,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Snapshots manager initialized");
 
     // Initialize teams registry
-    let teams = teams::TeamRegistry::new("./teams");
+    let teams = teams::TeamRegistry::new("../teams");
     let teams_count = teams.load_all().await?;
     tracing::info!("Loaded {} teams", teams_count);
 
@@ -370,6 +370,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/teams", get(api::list_teams))
         .route("/api/teams/:id", get(api::get_team))
         .route("/api/teams/:id/classify", post(api::classify_message))
+        // Team Role Assignments
+        .route("/api/teams/:team_id/roles/:intent", post(api::assign_team_role))
+        .route("/api/teams/:team_id/roles/:intent", get(api::get_team_role))
+        .route("/api/teams/:team_id/roles/:intent", delete(api::remove_team_role))
+        .route("/api/teams/:team_id/roles", get(api::list_team_roles))
+        .route("/api/teams/:team_id/resolve/:intent", get(api::resolve_team_role))
         // Workflows
         .route("/api/workflows", post(api::create_workflow).get(api::list_workflows))
         .route("/api/workflows/:id", get(api::get_workflow))
@@ -437,7 +443,7 @@ async fn main() -> anyhow::Result<()> {
         .layer(cors)
         .with_state(state);
 
-    let addr = format!("{}:{}", "0.0.0.0", 8081);
+    let addr = format!("{}:{}", "127.0.0.1", 3001);
     tracing::info!("🦀 Claw Pen orchestrator listening on {}", addr);
     tracing::info!("🔐 JWT authentication enabled - all API endpoints require Bearer token");
     tracing::info!("   GET /auth/status to check auth configuration");

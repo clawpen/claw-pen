@@ -4,6 +4,7 @@
 //! incoming messages and routes them to the appropriate specialist agent.
 
 use anyhow::{Context, Result};
+use chrono::Utc;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -59,6 +60,8 @@ struct RouterConfigRaw {
 pub struct TeamRegistry {
     teams: RwLock<HashMap<String, Team>>,
     teams_dir: String,
+    /// Dynamic role assignments: (team_id, intent) -> agent_id
+    role_assignments: RwLock<HashMap<(String, String), TeamRoleAssignment>>,
 }
 
 impl TeamRegistry {
@@ -66,6 +69,7 @@ impl TeamRegistry {
         Self {
             teams: RwLock::new(HashMap::new()),
             teams_dir: teams_dir.to_string(),
+            role_assignments: RwLock::new(HashMap::new()),
         }
     }
 
@@ -164,6 +168,80 @@ impl TeamRegistry {
     pub async fn remove(&self, id: &str) -> Option<Team> {
         let mut teams = self.teams.write().await;
         teams.remove(id)
+    }
+
+    // ========================================================================
+    // DYNAMIC ROLE ASSIGNMENT
+    // ========================================================================
+
+    /// Assign an agent to a team role
+    pub async fn assign_role(&self, team_id: &str, intent: &str, agent_id: &str, assigned_by: &str) -> Result<TeamRoleAssignment> {
+        // Verify team exists
+        let teams = self.teams.read().await;
+        if !teams.contains_key(team_id) {
+            return Err(anyhow::anyhow!("Team not found: {}", team_id));
+        }
+        drop(teams);
+
+        // Verify intent exists in team
+        let teams = self.teams.read().await;
+        let team = teams.get(team_id).unwrap();
+        if !team.agents.contains_key(intent) {
+            return Err(anyhow::anyhow!("Intent '{}' not found in team '{}'", intent, team_id));
+        }
+        drop(teams);
+
+        // Create assignment
+        let assignment = TeamRoleAssignment {
+            id: uuid::Uuid::new_v4().to_string(),
+            team_id: team_id.to_string(),
+            intent: intent.to_string(),
+            agent_id: agent_id.to_string(),
+            assigned_at: Utc::now().to_rfc3339(),
+            assigned_by: assigned_by.to_string(),
+        };
+
+        // Store assignment
+        let mut assignments = self.role_assignments.write().await;
+        assignments.insert((team_id.to_string(), intent.to_string()), assignment.clone());
+
+        Ok(assignment)
+    }
+
+    /// Remove an agent from a team role
+    pub async fn remove_role(&self, team_id: &str, intent: &str) -> Option<TeamRoleAssignment> {
+        let mut assignments = self.role_assignments.write().await;
+        assignments.remove(&(team_id.to_string(), intent.to_string()))
+    }
+
+    /// Get the agent assigned to a specific role
+    pub async fn get_role_assignment(&self, team_id: &str, intent: &str) -> Option<TeamRoleAssignment> {
+        let assignments = self.role_assignments.read().await;
+        assignments.get(&(team_id.to_string(), intent.to_string())).cloned()
+    }
+
+    /// List all role assignments for a team
+    pub async fn list_team_assignments(&self, team_id: &str) -> Vec<TeamRoleAssignment> {
+        let assignments = self.role_assignments.read().await;
+        assignments
+            .iter()
+            .filter(|((tid, _intent), _assignment)| tid == team_id)
+            .map(|(_key, assignment)| assignment.clone())
+            .collect()
+    }
+
+    /// Get the actual agent ID for a team intent (returns assigned agent or default)
+    pub async fn resolve_agent(&self, team_id: &str, intent: &str) -> Option<String> {
+        // First check if there's a dynamic assignment
+        if let Some(assignment) = self.get_role_assignment(team_id, intent).await {
+            return Some(assignment.agent_id);
+        }
+
+        // Fall back to default agent from team config
+        let teams = self.teams.read().await;
+        let team = teams.get(team_id)?;
+        let agent_config = team.agents.get(intent)?;
+        Some(agent_config.agent.clone())
     }
 }
 
@@ -389,5 +467,211 @@ mod tests {
         let clarification = router.generate_clarification();
         assert!(clarification.contains("receipts"));
         assert!(clarification.contains("payables"));
+    }
+
+    #[test]
+    fn test_load_design_build_firm() {
+        let registry = TeamRegistry::new("../teams");
+        let team = registry.load_team_config(Path::new("../teams/design-build-firm.toml"));
+
+        assert!(team.is_ok());
+        let team = team.unwrap();
+
+        assert_eq!(team.name, "Design-Build Firm");
+        assert_eq!(team.version, "1.0.0");
+        assert_eq!(team.agents.len(), 7);
+
+        // Check that all expected agents exist
+        assert!(team.agents.contains_key("time_analyst"));
+        assert!(team.agents.contains_key("design_assistant"));
+        assert!(team.agents.contains_key("site_coordinator"));
+        assert!(team.agents.contains_key("scheduler"));
+        assert!(team.agents.contains_key("client_shield"));
+        assert!(team.agents.contains_key("northern_envelope"));
+        assert!(team.agents.contains_key("the_closer"));
+
+        // Check routing rules exist
+        assert_eq!(team.routing.len(), 7);
+
+        // Check agent descriptions
+        let time_analyst = &team.agents["time_analyst"];
+        assert!(time_analyst.description.contains("Time & Value Analyst"));
+        assert!(time_analyst.description.contains("estimates"));
+
+        let design_assistant = &team.agents["design_assistant"];
+        assert!(design_assistant.description.contains("Design Assistant"));
+        assert!(design_assistant.description.contains("RevitMCP"));
+
+        let northern_envelope = &team.agents["northern_envelope"];
+        assert!(northern_envelope.description.contains("Northern Envelope"));
+        assert!(northern_envelope.description.contains("cold climates"));
+    }
+
+    #[test]
+    fn test_the_closer_routing_simple() {
+        let registry = TeamRegistry::new("../teams");
+        let team = registry.load_team_config(Path::new("../teams/design-build-firm.toml")).unwrap();
+        let router = Router::new(team);
+
+        // Test with a simple message
+        let result = router.classify("generate the punch list");
+        assert_eq!(result.intent, "the_closer");
+
+        let result = router.classify("complete the work");
+        assert_eq!(result.intent, "the_closer");
+    }
+
+    #[test]
+    fn test_design_build_firm_routing() {
+        let registry = TeamRegistry::new("../teams");
+        let team = registry.load_team_config(Path::new("../teams/design-build-firm.toml")).unwrap();
+        let router = Router::new(team);
+
+        // Test time analyst routing
+        let result = router.classify("How long will this bathroom reno take and what's the cost estimate?");
+        assert_eq!(result.intent, "time_analyst");
+
+        // Test design assistant routing
+        let result = router.classify("Can you help me design and create a 3D Revit model for the new addition?");
+        assert_eq!(result.intent, "design_assistant");
+
+        // Test northern envelope routing
+        let result = router.classify("Will this wall assembly meet SB-12 thermal compliance requirements?");
+        assert_eq!(result.intent, "northern_envelope");
+
+        // Test site coordinator routing
+        let result = router.classify("What's happening on the job site today with the electrician and plumber?");
+        assert_eq!(result.intent, "site_coordinator");
+
+        // Test scheduler routing
+        let result = router.classify("What's the critical path schedule timeline for finishing on time?");
+        assert_eq!(result.intent, "scheduler");
+
+        // Test client shield routing
+        let result = router.classify("Send the customer a communication about scope changes");
+        assert_eq!(result.intent, "client_shield");
+
+        // Test the closer routing
+        let result = router.classify("Generate the warranty package and final punch list for handoff");
+        assert_eq!(result.intent, "the_closer");
+    }
+
+    #[test]
+    fn test_role_assignment() {
+        let registry = TeamRegistry::new("../teams");
+        let team = registry.load_team_config(Path::new("../teams/design-build-firm.toml")).unwrap();
+
+        // Create a test runtime for async operations
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        // Test assigning a role
+        rt.block_on(async {
+            // First add the team to the registry
+            registry.upsert(team.clone()).await;
+
+            let assignment = registry
+                .assign_role("design-build-firm", "time_analyst", "custom-agent-123", "test-user")
+                .await
+                .unwrap();
+            let _assignment = registry
+                .assign_role("design-build-firm", "time_analyst", "custom-agent-123", "test-user")
+                .await
+                .unwrap();
+
+            assert_eq!(_assignment.team_id, "design-build-firm");
+            assert_eq!(assignment.intent, "time_analyst");
+            assert_eq!(assignment.agent_id, "custom-agent-123");
+
+            // Test retrieving the assignment
+            let retrieved = registry
+                .get_role_assignment("design-build-firm", "time_analyst")
+                .await
+                .unwrap();
+
+            assert_eq!(retrieved.agent_id, "custom-agent-123");
+
+            // Test resolving agent (should return assigned agent, not default)
+            let resolved = registry
+                .resolve_agent("design-build-firm", "time_analyst")
+                .await
+                .unwrap();
+
+            assert_eq!(resolved, "custom-agent-123");
+
+            // Test removing assignment
+            let removed = registry
+                .remove_role("design-build-firm", "time_analyst")
+                .await
+                .unwrap();
+
+            assert_eq!(removed.agent_id, "custom-agent-123");
+
+            // After removal, should fall back to default agent
+            let resolved = registry
+                .resolve_agent("design-build-firm", "time_analyst")
+                .await
+                .unwrap();
+
+            assert_eq!(resolved, "time-analyst"); // Default from config
+        });
+    }
+
+    #[test]
+    fn test_list_team_assignments() {
+        let registry = TeamRegistry::new("../teams");
+        let team = registry.load_team_config(Path::new("../teams/design-build-firm.toml")).unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        rt.block_on(async {
+            // First add the team to the registry
+            registry.upsert(team.clone()).await;
+
+            // Assign multiple roles
+            // Assign multiple roles
+            registry
+                .assign_role("design-build-firm", "time_analyst", "agent-1", "test-user")
+                .await
+                .unwrap();
+            registry
+                .assign_role("design-build-firm", "design_assistant", "agent-2", "test-user")
+                .await
+                .unwrap();
+            registry
+                .assign_role("design-build-firm", "site_coordinator", "agent-3", "test-user")
+                .await
+                .unwrap();
+
+            // List all assignments
+            let assignments = registry.list_team_assignments("design-build-firm").await;
+
+            assert_eq!(assignments.len(), 3);
+
+            // Verify each assignment
+            let assignment_map: std::collections::HashMap<_, _> = assignments
+                .iter()
+                .map(|a| (a.intent.clone(), a.agent_id.clone()))
+                .collect();
+
+            assert_eq!(assignment_map.get("time_analyst").unwrap(), "agent-1");
+            assert_eq!(assignment_map.get("design_assistant").unwrap(), "agent-2");
+            assert_eq!(assignment_map.get("site_coordinator").unwrap(), "agent-3");
+        });
+    }
+
+    #[test]
+    fn test_assign_invalid_role() {
+        let registry = TeamRegistry::new("../teams");
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        rt.block_on(async {
+            // Try to assign to non-existent intent
+            let result = registry
+                .assign_role("design-build-firm", "nonexistent_intent", "agent-1", "test-user")
+                .await;
+
+            assert!(result.is_err());
+        });
     }
 }
