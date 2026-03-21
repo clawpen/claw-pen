@@ -1,0 +1,158 @@
+# Design-Build Firm Team Configuration
+# Northern Ontario Solo Operator
+
+[team]
+name = "Design-Build Firm"
+description = "Specialized team for design-build residential construction in Northern Ontario"
+version = "1.0.0"
+
+[router]
+name = "Project Router"
+mode = "hybrid"
+confidence_threshold = 0.7
+clarify_on_low_confidence = true
+
+# ============================================================================
+# SPECIALIST AGENTS
+# Map intents to agent IDs (agents must exist in the orchestrator)
+# ============================================================================
+
+[agents]
+time_analyst = { agent = "time-analyst", description = "Time & Value Analyst - Tracks time, costs, and provides realistic estimates based on historical data" }
+design_assistant = { agent = "design-assistant", description = "Design Assistant - 3D modeling and design exploration with RevitMCP integration" }
+site_coordinator = { agent = "site-coordinator", description = "Site Coordinator - Daily operations and logistics management" }
+scheduler = { agent = "scheduler", description = "Scheduler - Timeline management and critical path tracking" }
+client_shield = { agent = "client-shield", description = "Client Shield - Client relationship management and communication buffer" }
+northern_envelope = { agent = "northern-envelope", description = "Northern Envelope - Technical quality control and building code compliance for cold climates" }
+the_closer = { agent = "the-closer", description = "The Closer - Project completion and handoff management" }
+
+# ============================================================================
+# ROUTING RULES
+# Keywords and examples for message classification
+# ============================================================================
+
+# Time & Value Analyst routing
+[routing.time_analyst]
+keywords = [
+  "estimate", "how long", "cost", "price", "bid", "quote", "hours", "budget",
+  "rate", "tracking", "logged", "history", "project", "financial", "earnings",
+  "profitability", "variance", "past", "previous", "average", "typical", "usually"
+]
+examples = [
+  "How long will this bathroom reno take?",
+  "What's a realistic budget for this project?",
+  "Can you give me a quote for the kitchen remodel?",
+  "How much did we spend on materials last month?",
+  "What's my average hourly rate on site work?",
+]
+
+# Design Assistant routing
+[routing.design_assistant]
+keywords = [
+  "design", "model", "3d", "revit", "bim", "cad", "drawing", "plan", "elevation",
+  "section", "detail", "visualization", "material", "takeoff", "quantity", "specification"
+]
+examples = [
+  "Can you show me a 3D model of the addition?",
+  "Design a new kitchen layout",
+  "How many 2x4s do I need for the walls?",
+  "Generate a material takeoff for the foundation",
+  "Update the Revit model with the new window sizes",
+]
+
+# Northern Envelope routing (technical/performance)
+[routing.northern_envelope]
+keywords = [
+  "thermal", "performance", "energy", "sb12", "envelope", "insulation", "air barrier",
+  "continuity", "compliance", "verification", "blower", "door", "heating", "cold",
+  "climate", "assembly", "connection", "bridging", "code", "inspection"
+]
+examples = [
+  "Will this wall assembly meet SB-12 requirements?",
+  "Check the air barrier continuity at this window detail",
+  "What's the R-value of this roof assembly?",
+  "Is this insulation detail adequate for -35°C?",
+  "Review this detail for thermal bridging",
+]
+
+# Site Coordinator routing
+[routing.site_coordinator]
+keywords = [
+  "site", "today", "trade", "electrician", "plumber", "delivery", "coordination",
+  "logistics", "photo", "progress", "weather", "daily", "briefing", "inspection",
+  "checklist", "on site", "at the site"
+]
+examples = [
+  "What's happening on site today?",
+  "When is the electrician arriving?",
+  "Take progress photos of the framing",
+  "Check if the insulation delivery is scheduled",
+  "What's the weather forecast for tomorrow?",
+]
+
+# Scheduler routing
+[routing.scheduler]
+keywords = [
+  "schedule", "timeline", "when", "deadline", "milestone", "critical", "path",
+  "dependency", "depend", "after", "before", "sequence", "order", "block", "waiting",
+  "weather", "window", "booking", "lead", "time", "delivery", "delay", "behind",
+  "ahead", "recovery", "seasonal"
+]
+examples = [
+  "What's the critical path for finishing on time?",
+  "When should we book the HVAC installer?",
+  "We're behind schedule - what are our options?",
+  "What's the weather window for exterior painting?",
+  "Update the project timeline with the new delays",
+]
+
+# Client Shield routing
+[routing.client_shield]
+keywords = [
+  "client", "customer", "communication", "update", "inform", "communicate",
+  "scope", "change", "request", "modification", "additional", "expectation",
+  "calibrate", "deliver", "message", "send", "tell", "owner"
+]
+examples = [
+  "Send the client a weekly progress update",
+  "The client wants to add a bathroom - what's the impact?",
+  "How do I tell the client we're behind schedule?",
+  "Draft a change request for the owner",
+  "The client is asking about scope creep - help me respond",
+]
+
+# The Closer routing
+[routing.the_closer]
+keywords = [
+  "finish", "complete", "done", "remaining", "punch", "list", "warranty", "handoff",
+  "document", "manual", "final", "closeout", "completion", "percentage", "keys",
+  "handover", "wrap up", "finalizing"
+]
+examples = [
+  "What's left to finish the project?",
+  "Generate the punch list for final inspection",
+  "Create the warranty package for the client",
+  "What percentage complete are we?",
+  "Prepare final handoff documentation",
+]
+
+# ============================================================================
+# CLARIFICATION CONFIGURATION
+# When the router is unsure, it asks for clarification
+# ============================================================================
+
+[clarification]
+prompts = [
+  "I need clarification to route your request efficiently. Which aspect is most important?",
+]
+options_format = "• {intent}: {description}"
+
+# ============================================================================
+# RESPONSE TEMPLATES
+# Standardized responses for common scenarios
+# ============================================================================
+
+[responses]
+routing_ack = "Routing to {agent_name} who specializes in this area."
+clarification_needed = "I need a bit more info to help you best."
+agent_response_prefix = "[{agent_name}] "

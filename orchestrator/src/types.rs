@@ -419,6 +419,24 @@ pub struct TeamAgent {
     pub description: String,
 }
 
+/// Dynamic role assignment - maps team intents to actual agents
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamRoleAssignment {
+    pub id: String,
+    pub team_id: String,
+    pub intent: String,  // e.g., "time_analyst", "design_assistant"
+    pub agent_id: String,
+    pub assigned_at: String,
+    pub assigned_by: String,  // User who made the assignment
+}
+
+/// Request to assign an agent to a team role
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssignRoleRequest {
+    pub agent_id: String,
+    pub assigned_by: String,
+}
+
 /// Routing rules for a specific intent
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingRule {

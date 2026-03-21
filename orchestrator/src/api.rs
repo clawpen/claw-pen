@@ -1900,6 +1900,74 @@ pub struct ClassifyRequest {
     pub message: String,
 }
 
+// === Team Role Assignments ===
+
+/// Assign an agent to a team role
+pub async fn assign_team_role(
+    State(state): State<Arc<AppState>>,
+    Path((team_id, intent)): Path<(String, String)>,
+    Json(req): Json<crate::types::AssignRoleRequest>,
+) -> Result<Json<crate::types::TeamRoleAssignment>, (StatusCode, String)> {
+    state
+        .teams
+        .assign_role(&team_id, &intent, &req.agent_id, &req.assigned_by)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
+}
+
+/// Remove an agent from a team role
+pub async fn remove_team_role(
+    State(state): State<Arc<AppState>>,
+    Path((team_id, intent)): Path<(String, String)>,
+) -> Result<Json<crate::types::TeamRoleAssignment>, (StatusCode, String)> {
+    state
+        .teams
+        .remove_role(&team_id, &intent)
+        .await
+        .map(Json)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Role assignment not found".to_string()))
+}
+
+/// Get the current assignment for a specific role
+pub async fn get_team_role(
+    State(state): State<Arc<AppState>>,
+    Path((team_id, intent)): Path<(String, String)>,
+) -> Result<Json<crate::types::TeamRoleAssignment>, (StatusCode, String)> {
+    state
+        .teams
+        .get_role_assignment(&team_id, &intent)
+        .await
+        .map(Json)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Role assignment not found".to_string()))
+}
+
+/// List all role assignments for a team
+pub async fn list_team_roles(
+    State(state): State<Arc<AppState>>,
+    Path(team_id): Path<String>,
+) -> Json<Vec<crate::types::TeamRoleAssignment>> {
+    Json(state.teams.list_team_assignments(&team_id).await)
+}
+
+/// Resolve the actual agent ID for a team role
+pub async fn resolve_team_role(
+    State(state): State<Arc<AppState>>,
+    Path((team_id, intent)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let agent_id = state
+        .teams
+        .resolve_agent(&team_id, &intent)
+        .await
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Role not found".to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "team_id": team_id,
+        "intent": intent,
+        "agent_id": agent_id
+    })))
+}
+
 /// WebSocket endpoint for team chat with routing
 ///
 /// Authentication: Pass JWT token via `?token=<jwt>` query parameter

@@ -143,6 +143,7 @@
         .btn-volumes { background: #2a2a4a; color: #e94560; }
         .btn-shell { background: #3b82f633; color: #3b82f6; }
         .btn-shell:disabled { opacity: 0.3; cursor: not-allowed; }
+        .btn-teams { background: #8b5cf633; color: #8b5cf6; }
         .agent-actions button:hover { opacity: 0.8; }
         
         /* Volume section styles */
@@ -827,10 +828,36 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="teams-modal">
+        <div class="modal" style="max-width: 500px;">
+            <h3>👥 Assign Team</h3>
+            <p id="teams-agent-name" style="color: #666; font-size: 13px; margin-bottom: 16px;"></p>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; color: #aaa;">Select Team</label>
+                <select id="team-select" style="width: 100%; padding: 10px; background: #0f0f1a; border: 1px solid #2a2a4a; color: #fff; border-radius: 6px; margin-bottom: 12px;" onchange="onTeamChange()">
+                    <option value="">Select a team...</option>
+                </select>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; color: #aaa;">Select Role</label>
+                <select id="role-select" style="width: 100%; padding: 10px; background: #0f0f1a; border: 1px solid #2a2a4a; color: #fff; border-radius: 6px; margin-bottom: 12px;">
+                    <option value="">Select a role...</option>
+                </select>
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="hideTeamsModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="assignTeam()">Assign</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let agents = [], selectedAgent = null, isConnected = false, currentStreamEl = null, chatHistory = {};
         let volumes = [];  // Volume list
-        const ORCHESTRATOR_URL = 'http://localhost:8081';
+        const ORCHESTRATOR_URL = 'http://localhost:3001';
         let authToken = localStorage.getItem('clawpen_token');
         let globalKeys = {};  // Store global API key status
         let intervalsSet = false;  // Track if we've started polling
@@ -1477,6 +1504,103 @@
             }
         }
 
+        // Teams functionality
+        let teamsData = [];
+        let currentTeamsAgentId = null;
+        const TEAMS_API_URL = 'http://localhost:3001/api';
+
+        async function showTeamsModal(agentId, agentName) {
+            currentTeamsAgentId = agentId;
+            document.getElementById('teams-agent-name').textContent = `Agent: ${agentName}`;
+
+            // Load teams
+            try {
+                const token = localStorage.getItem('clawpen_token');
+                const res = await fetch(`${TEAMS_API_URL}/teams`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (res.ok) {
+                    teamsData = await res.json();
+                    const teamSelect = document.getElementById('team-select');
+                    teamSelect.innerHTML = '<option value="">Select a team...</option>' +
+                        teamsData.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+                } else {
+                    console.error('[showTeamsModal] Failed to load teams:', await res.text());
+                    alert('Failed to load teams. Please ensure Teams API is running on port 3001.');
+                }
+            } catch (e) {
+                console.error('[showTeamsModal] Error loading teams:', e);
+                alert('Failed to connect to Teams API. Please ensure it is running on port 3001.');
+            }
+
+            // Reset role select
+            document.getElementById('role-select').innerHTML = '<option value="">Select a role...</option>';
+
+            document.getElementById('teams-modal').classList.add('active');
+        }
+
+        function hideTeamsModal() {
+            document.getElementById('teams-modal').classList.remove('active');
+            currentTeamsAgentId = null;
+            document.getElementById('team-select').value = '';
+            document.getElementById('role-select').innerHTML = '<option value="">Select a role...</option>';
+        }
+
+        function onTeamChange() {
+            const teamId = document.getElementById('team-select').value;
+            const roleSelect = document.getElementById('role-select');
+
+            if (!teamId) {
+                roleSelect.innerHTML = '<option value="">Select a role...</option>';
+                return;
+            }
+
+            const team = teamsData.find(t => t.id === teamId);
+            if (team && team.roles) {
+                roleSelect.innerHTML = '<option value="">Select a role...</option>' +
+                    team.roles.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+            } else {
+                roleSelect.innerHTML = '<option value="">No roles available</option>';
+            }
+        }
+
+        async function assignTeam() {
+            const teamId = document.getElementById('team-select').value;
+            const roleId = document.getElementById('role-select').value;
+
+            if (!teamId || !roleId) {
+                alert('Please select both a team and a role');
+                return;
+            }
+
+            try {
+                const token = localStorage.getItem('clawpen_token');
+                const res = await fetch(`${TEAMS_API_URL}/teams/${teamId}/roles/${roleId}/agents`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ agent_id: currentTeamsAgentId })
+                });
+
+                if (res.ok) {
+                    alert('Team assigned successfully!');
+                    hideTeamsModal();
+                    // Refresh agent list to show updated team info
+                    fetchAgents();
+                } else {
+                    const error = await res.text();
+                    console.error('[assignTeam] Failed:', error);
+                    alert('Failed to assign team: ' + error);
+                }
+            } catch (e) {
+                console.error('[assignTeam] Error:', e);
+                alert('Error assigning team: ' + e);
+            }
+        }
+
         function updateModelOptions() {
             const provider = document.getElementById('new-agent-provider').value;
             document.getElementById('new-agent-model').innerHTML = 
@@ -1543,6 +1667,7 @@
                             : `<button class="btn-start" onclick="event.stopPropagation();startAgent('${a.id}')">Start</button>`}
                         <button class="btn-shell" onclick="event.stopPropagation();openShell('${a.id}','${a.name}')" ${a.status !== 'running' ? 'disabled' : ''} title="Open Shell">🖥️</button>
                         <button class="btn-volumes" onclick="event.stopPropagation();showAgentVolumesModal('${a.id}','${a.name}')" title="Manage Volumes">📦</button>
+                        <button class="btn-teams" onclick="event.stopPropagation();showTeamsModal('${a.id}','${a.name}')" title="Assign Team">👥</button>
                         <button class="btn-delete" onclick="event.stopPropagation();deleteAgent('${a.id}','${a.name}')">Delete</button>
                     </div>
                 </div>
@@ -1718,9 +1843,53 @@ docker exec -it ${id} /bin/bash
                 return;
             }
 
-            // Ignore chat events - they're duplicates of the agent stream events
-            if (data.type === 'event' && data.event === 'chat') {
-                console.log('[WS] 🚫 Ignoring chat event (duplicate of agent stream)');
+            // Handle chat events (final agent responses)
+            if (data.type === 'event' && data.event === 'chat' && data.payload?.message) {
+                const message = data.payload.message;
+                const state = data.payload.state;
+                let content = '';
+
+                // Extract text from message (could be string, array, or object)
+                if (typeof message.content === 'string') {
+                    content = message.content;
+                } else if (Array.isArray(message.content)) {
+                    // Content is an array of parts (text, images, etc.)
+                    content = message.content
+                        .filter(part => part.type === 'text' || typeof part === 'string')
+                        .map(part => typeof part === 'string' ? part : (part.text || ''))
+                        .join('');
+                } else if (message.content) {
+                    // Fallback: stringify the content object
+                    content = JSON.stringify(message.content);
+                }
+
+                console.log('[WS] 📨 Chat event:', state, content.substring ? content.substring(0, 50) : content);
+
+                if (content && state === 'final') {
+                    // Final message - add to chat
+                    if (!window.messageStarted) {
+                        addMessage(content, 'agent');
+                        window.messageStarted = true;
+                    } else {
+                        updateLastMessage(content, 'agent');
+                    }
+                    window.lastAssistantMessage = content;
+                    hideReplying();
+                    document.getElementById('sendBtn').disabled = false;
+                } else if (content && state === 'delta') {
+                    // Streaming update
+                    if (!window.messageStarted) {
+                        showReplying();
+                        addMessage(content, 'agent');
+                        window.messageStarted = true;
+                    } else {
+                        // Append to existing message
+                        const currentText = window.lastAssistantMessage || '';
+                        const newText = currentText + content;
+                        updateLastMessage(newText, 'agent');
+                        window.lastAssistantMessage = newText;
+                    }
+                }
                 return;
             }
 
@@ -1752,7 +1921,7 @@ docker exec -it ${id} /bin/bash
             }
 
             // Connect through orchestrator's websocket proxy for multi-agent support
-            const wsUrl = `ws://127.0.0.1:8081/api/agents/${agent.id}/chat?token=${token}`;
+            const wsUrl = `ws://127.0.0.1:3001/api/agents/${agent.id}/chat?token=${token}`;
             console.log('[connectToAgent] Connecting through orchestrator:', wsUrl.substring(0, 80) + '...');
 
             try {
