@@ -1,8 +1,8 @@
-use crate::types::AgentContainer;
+use crate::types::{AgentContainer, Team, TeamRoleAssignment, AssignRoleRequest};
 use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
 
-const API_BASE: &str = "http://localhost:8081/api";
+const API_BASE: &str = "http://localhost:3001/api";
 
 // === Auth Types ===
 
@@ -33,7 +33,7 @@ pub struct AuthStatus {
 // === Auth API ===
 
 pub async fn get_auth_status() -> Result<AuthStatus, String> {
-    let response = Request::get("http://localhost:8081/auth/status")
+    let response = Request::get("http://localhost:3001/auth/status")
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -46,7 +46,7 @@ pub async fn get_auth_status() -> Result<AuthStatus, String> {
 }
 
 pub async fn login(password: &str) -> Result<TokenResponse, String> {
-    let response = Request::post("http://localhost:8081/auth/login")
+    let response = Request::post("http://localhost:3001/auth/login")
         .json(&LoginRequest {
             password: password.to_string(),
         })
@@ -67,7 +67,7 @@ pub async fn login(password: &str) -> Result<TokenResponse, String> {
 }
 
 pub async fn register(password: &str) -> Result<(), String> {
-    let response = Request::post("http://localhost:8081/auth/register")
+    let response = Request::post("http://localhost:3001/auth/register")
         .json(&LoginRequest {
             password: password.to_string(),
         })
@@ -154,6 +154,126 @@ pub async fn start_agent(id: &str) -> Result<AgentContainer, String> {
 pub async fn stop_agent(id: &str) -> Result<AgentContainer, String> {
     let token = get_token();
     let mut req = Request::post(&format!("{}/agents/{}/stop", API_BASE, id));
+
+    if let Some(ref t) = token {
+        req = req.header("Authorization", &format!("Bearer {}", t));
+    }
+
+    let response = req.send().await.map_err(|e| e.to_string())?;
+
+    if response.ok() {
+        response.json().await.map_err(|e| e.to_string())
+    } else if response.status() == 401 {
+        clear_token();
+        Err("Authentication required".to_string())
+    } else {
+        Err(format!("API error: {}", response.status()))
+    }
+}
+
+// === Teams API ===
+
+pub async fn fetch_teams() -> Result<Vec<Team>, String> {
+    let token = get_token();
+    let mut req = Request::get(&format!("{}/teams", API_BASE));
+
+    if let Some(ref t) = token {
+        req = req.header("Authorization", &format!("Bearer {}", t));
+    }
+
+    let response = req.send().await.map_err(|e| e.to_string())?;
+
+    if response.ok() {
+        response.json().await.map_err(|e| e.to_string())
+    } else if response.status() == 401 {
+        clear_token();
+        Err("Authentication required".to_string())
+    } else {
+        Err(format!("API error: {}", response.status()))
+    }
+}
+
+pub async fn fetch_team(id: &str) -> Result<Team, String> {
+    let token = get_token();
+    let mut req = Request::get(&format!("{}/teams/{}", API_BASE, id));
+
+    if let Some(ref t) = token {
+        req = req.header("Authorization", &format!("Bearer {}", t));
+    }
+
+    let response = req.send().await.map_err(|e| e.to_string())?;
+
+    if response.ok() {
+        response.json().await.map_err(|e| e.to_string())
+    } else if response.status() == 401 {
+        clear_token();
+        Err("Authentication required".to_string())
+    } else {
+        Err(format!("API error: {}", response.status()))
+    }
+}
+
+pub async fn fetch_team_roles(team_id: &str) -> Result<Vec<TeamRoleAssignment>, String> {
+    let token = get_token();
+    let mut req = Request::get(&format!("{}/teams/{}/roles", API_BASE, team_id));
+
+    if let Some(ref t) = token {
+        req = req.header("Authorization", &format!("Bearer {}", t));
+    }
+
+    let response = req.send().await.map_err(|e| e.to_string())?;
+
+    if response.ok() {
+        response.json().await.map_err(|e| e.to_string())
+    } else if response.status() == 401 {
+        clear_token();
+        Err("Authentication required".to_string())
+    } else {
+        Err(format!("API error: {}", response.status()))
+    }
+}
+
+pub async fn assign_team_role(
+    team_id: &str,
+    intent: &str,
+    agent_id: &str,
+    assigned_by: &str,
+) -> Result<TeamRoleAssignment, String> {
+    let token = get_token();
+    let mut req = Request::post(&format!("{}/teams/{}/roles/{}", API_BASE, team_id, intent));
+
+    if let Some(ref t) = token {
+        req = req.header("Authorization", &format!("Bearer {}", t));
+    }
+
+    let request = AssignRoleRequest {
+        agent_id: agent_id.to_string(),
+        assigned_by: assigned_by.to_string(),
+    };
+
+    let response = req
+        .json(&request)
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if response.ok() {
+        response.json().await.map_err(|e| e.to_string())
+    } else if response.status() == 401 {
+        clear_token();
+        Err("Authentication required".to_string())
+    } else {
+        Err(format!("API error: {}", response.status()))
+    }
+}
+
+pub async fn remove_team_role(
+    team_id: &str,
+    intent: &str,
+) -> Result<TeamRoleAssignment, String> {
+    let token = get_token();
+    let mut req = Request::delete(&format!("{}/teams/{}/roles/{}", API_BASE, team_id, intent));
 
     if let Some(ref t) = token {
         req = req.header("Authorization", &format!("Bearer {}", t));

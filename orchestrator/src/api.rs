@@ -374,6 +374,14 @@ pub async fn create_agent(
         config.env_vars.insert(key_var.to_string(), key);
     }
 
+    // Setup persistent data volume for this agent
+    // This must be done before creating the container
+    let agent_name_for_volume = req.name.clone();
+    if let Err(e) = setup_persistent_data_volume(&agent_name_for_volume, "", &mut config).await {
+        tracing::warn!("Failed to setup persistent data volume: {}", e);
+        // Continue anyway - this is not critical
+    }
+
     // Determine which runtime to use
     // Priority: per-agent runtime > global config runtime
     let agent_runtime = runtime.or_else(|| match state.config.container_runtime {
@@ -445,7 +453,14 @@ pub async fn create_agent(
 
     // Add to state
     let mut containers = state.containers.write().await;
+    let agent_idx = containers.len();
     containers.push(agent.clone());
+
+    // Update agent index for O(1) lookups
+    let mut agent_index = state.agent_index.write().await;
+    agent_index.insert(agent.id.clone(), agent_idx);
+    drop(agent_index);
+    drop(containers);
 
     // Persist to storage
     if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(&agent)) {
@@ -613,8 +628,8 @@ pub async fn start_agent(
         &state.runtime
     };
 
-    // Check if container exists, if not create it
-    let container_exists = runtime.container_exists(&id).await.unwrap_or(false);
+    // Check if container exists (by agent name, not ID)
+    let container_exists = runtime.container_exists(&agent.name).await.unwrap_or(false);
 
     if !container_exists {
         // Create the container for this stored agent
@@ -659,24 +674,21 @@ pub async fn start_agent(
             .env_vars
             .insert("PORT".to_string(), agent.gateway_port.to_string());
 
-        let new_id = runtime
+        let docker_container_id = runtime
             .create_container(&agent.name, &agent.config)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-        // Update the ID in case it changed
-        if new_id != id {
-            // ID mismatch - this shouldn't happen but handle it
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Container ID mismatch".to_string(),
-            ));
-        }
+        tracing::info!(
+            "Created Docker container {} for agent {}",
+            docker_container_id,
+            agent.name
+        );
     }
 
-    // Start the container
+    // Start the container using the agent's name (Docker can find it by name)
     runtime
-        .start_container(&id)
+        .start_container(&agent.name)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -694,9 +706,17 @@ pub async fn stop_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<AgentContainer>, (StatusCode, String)> {
+    // Get the agent first to get its name
+    let mut containers = state.containers.write().await;
+
+    let agent_name = containers
+        .iter()
+        .find(|a| a.id == id)
+        .map(|a| a.name.clone())
+        .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
+
     // Get agent to find its runtime
     let agent_runtime = {
-        let containers = state.containers.read().await;
         containers
             .iter()
             .find(|a| a.id == id)
@@ -710,12 +730,11 @@ pub async fn stop_agent(
         &state.runtime
     };
 
+    // Stop using the agent's name (Docker finds containers by name)
     runtime
-        .stop_container(&id)
+        .stop_container(&agent_name)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let mut containers = state.containers.write().await;
 
     let agent = containers
         .iter_mut()
@@ -1543,19 +1562,39 @@ async fn handle_chat_stream(socket: WebSocket, state: Arc<AppState>, agent_id: S
         ..Default::default()
     };
 
-    let (agent_ws_stream, _) = match connect_async_with_config(&agent_ws_url, Some(config), false).await {
-        Ok(result) => {
-            println!("[handle_chat_stream] Successfully connected to agent!");
-            tracing::info!("Connected to agent websocket at {}", agent_ws_url);
-            result
+    // Retry connection with exponential backoff (agent might be starting up)
+    let mut agent_ws_stream = None;
+    let mut last_error_str = String::from("Unknown error");
+
+    for retry in 0..5 {
+        match connect_async_with_config(&agent_ws_url, Some(config), false).await {
+            Ok(result) => {
+                println!("[handle_chat_stream] Successfully connected to agent!");
+                tracing::info!("Connected to agent websocket at {} (attempt {})", agent_ws_url, retry + 1);
+                agent_ws_stream = Some(result);
+                break;
+            }
+            Err(e) => {
+                println!("[handle_chat_stream] ERROR connecting to agent (attempt {}): {:?}", retry + 1, e);
+                last_error_str = e.to_string();
+                if retry < 4 {
+                    // Exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms
+                    let delay = 100 * 2_u64.pow(retry as u32);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+                }
+            }
         }
-        Err(e) => {
-            println!("[handle_chat_stream] ERROR connecting to agent: {:?}", e);
-            tracing::warn!("Failed to connect to agent websocket at {}: {}", agent_ws_url, e);
+    }
+
+    let (agent_ws_stream, _) = match agent_ws_stream {
+        Some(stream) => stream,
+        None => {
+            println!("[handle_chat_stream] Failed to connect after retries: {}", last_error_str);
+            tracing::warn!("Failed to connect to agent websocket at {} after 5 retries: {}", agent_ws_url, last_error_str);
             let error_msg = serde_json::json!({
                 "role": "system",
                 "error": "Could not connect to agent",
-                "content": format!("Agent websocket unavailable: {}", e),
+                "content": format!("Agent websocket unavailable after retries: {}", last_error_str),
                 "timestamp": chrono::Utc::now().timestamp()
             });
             let _ = client_tx.send(Message::Text(error_msg.to_string())).await;
@@ -1900,7 +1939,313 @@ pub struct ClassifyRequest {
     pub message: String,
 }
 
+// === Persistent Data Volume Setup ===
+
+/// Setup persistent data volume for an agent
+/// Creates host directories and adds /data volume mount to agent config
+async fn setup_persistent_data_volume(
+    agent_name: &str,
+    agent_id: &str,
+    config: &mut crate::types::AgentConfig,
+) -> anyhow::Result<()> {
+    use tokio::fs as async_fs;
+
+    // Get current working directory for host path
+    let cwd = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+    // Create agent-specific data directory
+    let agent_data_dir = cwd
+        .join("data")
+        .join("agents")
+        .join(agent_name);
+
+    // Convert to forward slashes for Docker
+    let agent_data_dir_str = agent_data_dir.display().to_string().replace('\\', "/");
+
+    // Create subdirectories
+    let conversations_dir = agent_data_dir.join("conversations");
+    let memory_dir = agent_data_dir.join("memory");
+    let knowledge_dir = agent_data_dir.join("knowledge");
+    let cache_dir = agent_data_dir.join("cache");
+
+    async_fs::create_dir_all(&conversations_dir).await
+        .map_err(|e| anyhow::anyhow!("Failed to create conversations directory: {}", e))?;
+    async_fs::create_dir_all(&memory_dir).await
+        .map_err(|e| anyhow::anyhow!("Failed to create memory directory: {}", e))?;
+    async_fs::create_dir_all(&knowledge_dir).await
+        .map_err(|e| anyhow::anyhow!("Failed to create knowledge directory: {}", e))?;
+    async_fs::create_dir_all(&cache_dir).await
+        .map_err(|e| anyhow::anyhow!("Failed to create cache directory: {}", e))?;
+
+    // Create README in data directory
+    let readme_content = format!(
+        "# Agent Data Directory\n\n\
+        Agent: {}\n\
+        Agent ID: {}\n\n\
+        ## Directory Structure\n\
+        - `/conversations` - Chat history with users\n\
+        - `/memory` - Agent's working memory and state\n\
+        - `/knowledge` - Learned information over time\n\
+        - `/cache` - Temporary but reusable data\n\n\
+        This data persists across container restarts and role changes.\n",
+        agent_name, agent_id
+    );
+
+    async_fs::write(
+        agent_data_dir.join("README.md"),
+        readme_content
+    ).await
+        .map_err(|e| anyhow::anyhow!("Failed to create README: {}", e))?;
+
+    // Check if agent already has a /data volume mount
+    let has_data_volume = config.volumes.iter().any(|v| v.target == "/data");
+
+    if !has_data_volume {
+        // Add /data volume mount to agent config
+        config.volumes.push(crate::types::VolumeMount {
+            source: agent_data_dir_str.clone(),
+            target: "/data".to_string(),
+            read_only: false,
+        });
+
+        tracing::info!(
+            "Added persistent /data volume to agent {} (mounted from {})",
+            agent_name,
+            agent_data_dir_str
+        );
+    } else {
+        tracing::info!(
+            "Agent {} already has /data volume mounted",
+            agent_name
+        );
+    }
+
+    Ok(())
+}
+
 // === Team Role Assignments ===
+
+/// Setup role-specific volume mount for an agent
+async fn setup_role_volume(
+    state: &Arc<AppState>,
+    team_id: &str,
+    intent: &str,
+    agent_id: &str,
+) -> anyhow::Result<()> {
+    use tokio::fs as async_fs;
+
+    // Get team and role information
+    let team = state.teams.get_team(team_id).await
+        .ok_or_else(|| anyhow::anyhow!("Team not found: {}", team_id))?;
+
+    let role_info = team.agents.get(intent)
+        .ok_or_else(|| anyhow::anyhow!("Role not found: {}", intent))?;
+
+    // Extract role name from description (e.g., "Design Assistant - ..." -> "Design Assistant")
+    let role_name = role_info.description
+        .split(" - ")
+        .next()
+        .unwrap_or(intent);
+
+    // Create volume directory structure using current directory for Docker host mount
+    let cwd = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let base_path = cwd.join("teams");
+    let role_path = base_path.join(team_id).join("roles").join(intent);
+
+    // Create directories
+    async_fs::create_dir_all(&role_path).await?;
+    async_fs::create_dir_all(role_path.join("skills")).await?;
+    async_fs::create_dir_all(role_path.join("knowledge")).await?;
+
+    // Create whoami.md
+    let whoami_content = format!(
+        "# Who Am I?\n\n\
+         You are **{}**\n\
+         Team: **{}**\n\
+         Role ID: `{}`\n\
+         Team ID: `{}`\n\n\
+         ## Your Purpose\n\
+         {}\n\n\
+         ## Your Context\n\
+         You are part of a specialized team. Work collaboratively with other team members \
+         to achieve the team's goals. Each team member has a specific role - focus on yours \
+         while being aware of the bigger picture.\n\n\
+         Your agent ID is: `{}`\n",
+        role_name,
+        team.name,
+        intent,
+        team_id,
+        role_info.description,
+        agent_id
+    );
+
+    async_fs::write(
+        role_path.join("whoami.md"),
+        whoami_content
+    ).await?;
+
+    // Create instructions.md
+    let instructions_content = format!(
+        "# Role Instructions: {}\n\n\
+         ## Overview\n\
+         {}\n\n\
+         ## Key Responsibilities\n\
+         - Focus on your area of expertise\n\
+         - Collaborate with other team members\n\
+         - Ask for clarification when needed\n\
+         - Stay within your scope - don't try to do others' jobs\n\n\
+         ## How to Work with This Team\n\
+         1. **Be proactive** - Anticipate needs in your area\n\
+         2. **Communicate clearly** - Explain your reasoning\n\
+         3. **Ask for help** - When something is outside your expertise\n\
+         4. **Stay focused** - Don't get distracted by other team members' tasks\n\n\
+         ## Example Tasks\n\
+         When given a request, first determine if it's in your area. If yes, handle it. \
+         If not, suggest which team member would be better suited.\n",
+        role_name,
+        role_info.description
+    );
+
+    async_fs::write(
+        role_path.join("instructions.md"),
+        instructions_content
+    ).await?;
+
+    tracing::info!(
+        "Role volume created at {} for agent {} (team: {}, role: {})",
+        role_path.display(),
+        agent_id,
+        team_id,
+        intent
+    );
+
+    // Now update the agent's configuration to include the role volume mount
+    // and restart the container to pick up the new mount
+    let mut containers = state.containers.write().await;
+
+    let agent = containers
+        .iter_mut()
+        .find(|a| a.id == agent_id)
+        .ok_or_else(|| anyhow::anyhow!("Agent not found: {}", agent_id))?;
+
+    // Add or update role volume to agent's config
+    // Convert path to use forward slashes for Docker (Windows uses backslashes)
+    let role_volume_source = role_path.display().to_string().replace('\\', "/");
+    let role_volume_str = format!("{}:/role", role_volume_source);
+
+    // Check if this volume is already in the config
+    let existing_role_volume = agent.config.volumes.iter().position(|v| v.target == "/role");
+
+    if let Some(pos) = existing_role_volume {
+        // Update existing role volume mount to point to new role directory
+        let old_source = agent.config.volumes[pos].source.clone();
+        agent.config.volumes[pos].source = role_volume_source.clone();
+
+        // Persist the updated agent config
+        if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
+            tracing::warn!("Failed to persist agent volume config: {}", e);
+        }
+
+        tracing::info!(
+            "Updated role volume mount for agent {}: {} -> {} (team: {}, role: {})",
+            agent_id,
+            old_source,
+            role_volume_str,
+            team_id,
+            intent
+        );
+    } else {
+        // Add new role volume mount
+        agent.config.volumes.push(crate::types::VolumeMount {
+            source: role_volume_source.clone(),
+            target: "/role".to_string(),
+            read_only: false,
+        });
+
+        // Persist the updated agent config
+        if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
+            tracing::warn!("Failed to persist agent volume config: {}", e);
+        }
+
+        tracing::info!(
+            "Added role volume mount to agent {} config: {} (team: {}, role: {})",
+            agent_id,
+            role_volume_str,
+            team_id,
+            intent
+        );
+    }
+
+    // Check if container is currently running
+    let was_running = agent.status == crate::types::AgentStatus::Running;
+
+    // Choose the right runtime based on agent's runtime setting
+    let runtime: &dyn crate::container::ContainerRuntime = if agent.runtime.as_deref() == Some("exo") {
+        &state.exo_runtime
+    } else {
+        &state.runtime
+    };
+
+    // Stop the container if it's running
+    if was_running {
+        // Check if container exists
+        let container_exists = runtime.container_exists(&agent.name).await.unwrap_or(false);
+
+        if container_exists {
+            tracing::info!("Stopping agent {} to apply role volume mount", agent_id);
+
+            // Stop the container
+            if let Err(e) = runtime.stop_container(&agent.name).await {
+                tracing::warn!("Failed to stop container {}: {}", agent.name, e);
+            } else {
+                agent.status = crate::types::AgentStatus::Stopped;
+
+                // Delete the old container so it can be recreated with new volume mounts
+                if let Err(e) = runtime.delete_container(&agent.name).await {
+                    tracing::warn!("Failed to delete container {}: {}", agent.name, e);
+                }
+            }
+        }
+    }
+
+    // Start the agent again (will create container with new volume mounts)
+    tracing::info!("Starting agent {} with role volume mount", agent_id);
+
+    // The container will be created with the updated config that includes the role volume
+    let container_exists = runtime.container_exists(&agent.name).await.unwrap_or(false);
+
+    if !container_exists {
+        // Create the container with updated config
+        let new_id = runtime
+            .create_container(&agent.name, &agent.config)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create container: {}", e))?;
+
+        tracing::info!("Created container {} with role volume mount", new_id);
+    }
+
+    // Start the container
+    runtime
+        .start_container(&agent.name)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to start container: {}", e))?;
+
+    agent.status = crate::types::AgentStatus::Running;
+
+    // Persist status change
+    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
+        tracing::warn!("Failed to persist agent status: {}", e);
+    }
+
+    tracing::info!(
+        "Successfully restarted agent {} with role volume mounted at /role",
+        agent_id
+    );
+
+    Ok(())
+}
 
 /// Assign an agent to a team role
 pub async fn assign_team_role(
@@ -1908,12 +2253,20 @@ pub async fn assign_team_role(
     Path((team_id, intent)): Path<(String, String)>,
     Json(req): Json<crate::types::AssignRoleRequest>,
 ) -> Result<Json<crate::types::TeamRoleAssignment>, (StatusCode, String)> {
-    state
+    // First, assign the role
+    let assignment = state
         .teams
         .assign_role(&team_id, &intent, &req.agent_id, &req.assigned_by)
         .await
-        .map(Json)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    // Then, set up role-specific volume mount
+    if let Err(e) = setup_role_volume(&state, &team_id, &intent, &req.agent_id).await {
+        tracing::warn!("Failed to setup role volume for {}: {}", req.agent_id, e);
+        // Don't fail the assignment if volume setup fails
+    }
+
+    Ok(Json(assignment))
 }
 
 /// Remove an agent from a team role
@@ -1921,12 +2274,101 @@ pub async fn remove_team_role(
     State(state): State<Arc<AppState>>,
     Path((team_id, intent)): Path<(String, String)>,
 ) -> Result<Json<crate::types::TeamRoleAssignment>, (StatusCode, String)> {
-    state
+    // Get the current assignment before removing
+    let assignment = state
         .teams
-        .remove_role(&team_id, &intent)
+        .get_role_assignment(&team_id, &intent)
         .await
-        .map(Json)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Role assignment not found".to_string()))
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Role assignment not found".to_string()))?;
+
+    let agent_id = assignment.agent_id.clone();
+
+    // Remove the role assignment
+    state.teams.remove_role(&team_id, &intent).await;
+
+    // Remove the role volume mount from the agent's config
+    let mut containers = state.containers.write().await;
+
+    let agent = containers
+        .iter_mut()
+        .find(|a| a.id == agent_id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Agent not found: {}", agent_id)))?;
+
+    // Remove the role volume mount (find by target path "/role")
+    let original_count = agent.config.volumes.len();
+    agent.config.volumes.retain(|v| v.target != "/role");
+    let removed_count = original_count - agent.config.volumes.len();
+
+    if removed_count > 0 {
+        // Persist the updated agent config
+        if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
+            tracing::warn!("Failed to persist agent volume config: {}", e);
+        }
+
+        tracing::info!(
+            "Removed role volume mount from agent {} config",
+            agent_id
+        );
+
+        // Restart the agent to apply the changes
+        let was_running = agent.status == crate::types::AgentStatus::Running;
+
+        // Choose the right runtime based on agent's runtime setting
+        let runtime: &dyn crate::container::ContainerRuntime = if agent.runtime.as_deref() == Some("exo") {
+            &state.exo_runtime
+        } else {
+            &state.runtime
+        };
+
+        // Stop the container if it's running
+        if was_running {
+            let container_exists = runtime.container_exists(&agent_id).await.unwrap_or(false);
+
+            if container_exists {
+                tracing::info!("Stopping agent {} to remove role volume mount", agent_id);
+
+                if let Err(e) = runtime.stop_container(&agent_id).await {
+                    tracing::warn!("Failed to stop container {}: {}", agent_id, e);
+                } else {
+                    agent.status = crate::types::AgentStatus::Stopped;
+
+                    // Delete the old container so it can be recreated without the volume mount
+                    if let Err(e) = runtime.delete_container(&agent_id).await {
+                        tracing::warn!("Failed to delete container {}: {}", agent_id, e);
+                    }
+                }
+            }
+        }
+
+        // Start the agent again (will create container without the role volume mount)
+        tracing::info!("Starting agent {} without role volume mount", agent_id);
+
+        // Create the container with updated config
+        runtime
+            .create_container(&agent.name, &agent.config)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create container: {}", e)))?;
+
+        // Start the container
+        runtime
+            .start_container(&agent_id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to start container: {}", e)))?;
+
+        agent.status = crate::types::AgentStatus::Running;
+
+        // Persist status change
+        if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
+            tracing::warn!("Failed to persist agent status: {}", e);
+        }
+
+        tracing::info!(
+            "Successfully restarted agent {} without role volume mount",
+            agent_id
+        );
+    }
+
+    Ok(Json(assignment))
 }
 
 /// Get the current assignment for a specific role

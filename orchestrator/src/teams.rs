@@ -73,6 +73,12 @@ impl TeamRegistry {
         }
     }
 
+    /// Get a team by ID
+    pub async fn get_team(&self, team_id: &str) -> Option<Team> {
+        let teams = self.teams.read().await;
+        teams.get(team_id).cloned()
+    }
+
     /// Load all teams from the teams directory
     pub async fn load_all(&self) -> Result<usize> {
         let path = Path::new(&self.teams_dir);
@@ -242,6 +248,30 @@ impl TeamRegistry {
         let team = teams.get(team_id)?;
         let agent_config = team.agents.get(intent)?;
         Some(agent_config.agent.clone())
+    }
+
+    /// Get an agent's current role assignment (reverse lookup)
+    pub async fn get_agent_role(&self, agent_id: &str) -> Option<(String, String, String)> {
+        // Returns (team_id, role_id, role_name)
+        let assignments = self.role_assignments.read().await;
+
+        for ((team_id, intent), assignment) in assignments.iter() {
+            if assignment.agent_id == agent_id {
+                // Get team and role info
+                let teams = self.teams.read().await;
+                if let Some(team) = teams.get(team_id) {
+                    if let Some(role_info) = team.agents.get(intent) {
+                        let role_name = role_info.description
+                            .split(" - ")
+                            .next()
+                            .unwrap_or(intent)
+                            .to_string();
+                        return Some((team_id.clone(), intent.clone(), role_name));
+                    }
+                }
+            }
+        }
+        None
     }
 }
 

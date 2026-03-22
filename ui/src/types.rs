@@ -75,3 +75,87 @@ pub struct ResourceUsage {
     pub memory_mb: f32,
     pub cpu_percent: f32,
 }
+
+// === Team Types ===
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Team {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub version: String,
+    pub router: RouterConfig,
+    pub agents: std::collections::HashMap<String, TeamAgent>,
+    pub routing: std::collections::HashMap<String, RoutingRule>,
+    pub created_at: String,
+    pub status: TeamStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TeamStatus {
+    Active,
+    Inactive,
+    Starting,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RouterConfig {
+    pub name: String,
+    pub mode: RouterMode,
+    pub confidence_threshold: f32,
+    pub clarify_on_low_confidence: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum RouterMode {
+    Keyword,
+    Llm,
+    Hybrid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TeamAgent {
+    pub agent: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RoutingRule {
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    #[serde(default)]
+    pub examples: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TeamRoleAssignment {
+    pub id: String,
+    pub team_id: String,
+    pub intent: String,
+    pub agent_id: String,
+    pub assigned_at: String,
+    pub assigned_by: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssignRoleRequest {
+    pub agent_id: String,
+    pub assigned_by: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassifyRequest {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassificationResult {
+    pub intent: String,
+    pub confidence: f32,
+    pub matched_keywords: Vec<String>,
+    pub needs_clarification: bool,
+}
+
