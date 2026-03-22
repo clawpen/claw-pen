@@ -744,6 +744,10 @@ impl ContainerRuntime for DockerClient {
             binds = Some(bind_list);
         }
 
+        // Mount role volume if agent is assigned to a team role
+        // Note: This requires the AppState to access the teams registry
+        // For now, we'll skip this here and handle it via restart after assignment
+
         let container_config = Config {
             image: Some(image.to_string()),
             env: Some(env),

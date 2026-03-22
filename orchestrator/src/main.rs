@@ -239,7 +239,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Snapshots manager initialized");
 
     // Initialize teams registry
-    let teams = teams::TeamRegistry::new("../teams");
+    let teams = teams::TeamRegistry::new("teams");
     let teams_count = teams.load_all().await?;
     tracing::info!("Loaded {} teams", teams_count);
 

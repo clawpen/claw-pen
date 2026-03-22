@@ -32,7 +32,7 @@ pub fn chat_panel(props: &ChatPanelProps) -> Html {
         let agent_id = props.agent.id.clone();
 
         use_effect_with(agent_id.clone(), move |_| {
-            let ws_url = format!("ws://localhost:8081/api/agents/{}/chat", agent_id);
+            let ws_url = format!("ws://localhost:3001/api/agents/{}/chat", agent_id);
 
             match WebSocket::open(&ws_url) {
                 Ok(_ws) => {

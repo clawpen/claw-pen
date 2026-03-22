@@ -133,6 +133,8 @@
         .agent-status.stopped { background: #66666633; color: #888; }
         
         .agent-model { font-size: 12px; color: #888; margin-bottom: 8px; }
+        .agent-team { font-size: 11px; color: #8b5cf6; margin-bottom: 8px; }
+        .team-indicator { display: inline-flex; align-items: center; gap: 4px; background: #8b5cf633; padding: 2px 8px; border-radius: 4px; }
         .agent-resources { display: flex; gap: 16px; font-size: 11px; color: #666; }
         
         .agent-actions { margin-top: 8px; display: flex; gap: 8px; }
@@ -857,6 +859,7 @@
     <script>
         let agents = [], selectedAgent = null, isConnected = false, currentStreamEl = null, chatHistory = {};
         let volumes = [];  // Volume list
+        let roleAssignments = {};  // Team role assignments: {agentId: {teamId, teamName, roleId, roleName}}
         const ORCHESTRATOR_URL = 'http://localhost:3001';
         let authToken = localStorage.getItem('clawpen_token');
         let globalKeys = {};  // Store global API key status
@@ -1557,9 +1560,20 @@
             }
 
             const team = teamsData.find(t => t.id === teamId);
-            if (team && team.roles) {
+            if (team && team.agents) {
+                // team.agents is an object with role names as keys
+                const roles = Object.keys(team.agents).map(roleId => {
+                    const agentInfo = team.agents[roleId];
+                    // Extract role name from description (e.g., "Design Assistant - ...")
+                    const roleName = agentInfo.description ? agentInfo.description.split(' - ')[0] : roleId;
+                    return {
+                        id: roleId,
+                        name: roleName
+                    };
+                });
+
                 roleSelect.innerHTML = '<option value="">Select a role...</option>' +
-                    team.roles.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+                    roles.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
             } else {
                 roleSelect.innerHTML = '<option value="">No roles available</option>';
             }
@@ -1576,13 +1590,16 @@
 
             try {
                 const token = localStorage.getItem('clawpen_token');
-                const res = await fetch(`${TEAMS_API_URL}/teams/${teamId}/roles/${roleId}/agents`, {
+                const res = await fetch(`${TEAMS_API_URL}/teams/${teamId}/roles/${roleId}`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${token}`
                     },
-                    body: JSON.stringify({ agent_id: currentTeamsAgentId })
+                    body: JSON.stringify({
+                        agent_id: currentTeamsAgentId,
+                        assigned_by: 'admin'
+                    })
                 });
 
                 if (res.ok) {
@@ -1610,7 +1627,50 @@
             document.getElementById('apikey-hint').textContent = 
                 `${providerKeyNames[provider]} API key (optional - ${globalKeyStatus})`;
         }
-        
+
+        async function fetchRoleAssignments() {
+            try {
+                const token = localStorage.getItem('clawpen_token');
+                const res = await fetch(`${TEAMS_API_URL}/teams`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (res.ok) {
+                    const teams = await res.json();
+                    roleAssignments = {};
+
+                    // For each team, fetch its role assignments
+                    for (const team of teams) {
+                        try {
+                            const rolesRes = await fetch(`${TEAMS_API_URL}/teams/${team.id}/roles`, {
+                                headers: { 'Authorization': `Bearer ${token}` }
+                            });
+                            if (rolesRes.ok) {
+                                const assignments = await rolesRes.json();
+                                // assignments is an array of {team_id, intent, agent_id, assigned_at, assigned_by}
+                                assignments.forEach(assignment => {
+                                    // Find the role name from the team's agents object
+                                    const roleInfo = team.agents && team.agents[assignment.intent];
+                                    const roleName = roleInfo ? roleInfo.description.split(' - ')[0] : assignment.intent;
+
+                                    roleAssignments[assignment.agent_id] = {
+                                        teamId: team.id,
+                                        teamName: team.name,
+                                        roleId: assignment.intent,
+                                        roleName: roleName
+                                    };
+                                });
+                            }
+                        } catch (e) {
+                            console.error('[fetchRoleAssignments] Error fetching roles for team', team.id, e);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('[fetchRoleAssignments] Error:', e);
+            }
+        }
+
         async function fetchAgents() {
             try {
                 const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents`);
@@ -1625,6 +1685,8 @@
                     }
                 }
 
+                // Fetch role assignments to display team/role info
+                await fetchRoleAssignments();
                 renderAgents();
             } catch (e) {}
         }
@@ -1652,10 +1714,17 @@
                     ? `<span class="volume-indicator" title="${volumeCount} volume(s) attached">📦 ${volumeCount}</span>`
                     : '';
 
+                // Team/role assignment indicator
+                const assignment = roleAssignments[a.id];
+                const teamIndicator = assignment
+                    ? `<span class="team-indicator" title="Team: ${assignment.teamName}, Role: ${assignment.roleName}">👥 ${assignment.teamName} / ${assignment.roleName}</span>`
+                    : '';
+
                 return `
                 <div class="agent-card${selectedAgent?.id === a.id ? ' selected' : ''}" onclick="selectAgent(agents.find(x => x.id === '${a.id}'))">
                     <div class="agent-name">${a.name} <span class="agent-status ${a.status}">${a.status}</span></div>
                     <div class="agent-model">${a.config?.llm_provider}/${a.config?.llm_model}</div>
+                    ${teamIndicator ? `<div class="agent-team">${teamIndicator}</div>` : ''}
                     <div class="agent-resources">
                         <span>💾 ${(a.config?.memory_mb / 1024 || 2).toFixed(1)} GB</span>
                         ${volumeIndicator}
