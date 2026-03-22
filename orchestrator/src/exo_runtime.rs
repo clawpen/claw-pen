@@ -5,6 +5,7 @@ use crate::validation;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::process::Command as StdCommand;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
@@ -86,17 +87,11 @@ impl ExoRuntimeClient {
         let output = tokio::time::timeout(
             tokio::time::Duration::from_secs(10),
             Command::new(&self.exo_path)
-                .args(["list", "--json"])
+                .args(["list", "--all", "--json"])
                 .output()
         )
         .await
-        .map_err(|e| {
-            if e.is_elapsed() {
-                anyhow::anyhow!("Timeout listing containers")
-            } else {
-                anyhow::anyhow!("Failed to list containers: {}", e)
-            }
-        })??;
+        .map_err(|_| anyhow::anyhow!("Timeout listing containers"))??;
 
         if !output.status.success() {
             tracing::warn!(
@@ -107,8 +102,8 @@ impl ExoRuntimeClient {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        
-        // Parse JSON output from exo
+
+        // Parse JSON output from exo (warnings now go to stderr in exo)
         let exo_list: ExoContainerList = match serde_json::from_str(&stdout) {
             Ok(list) => list,
             Err(e) => {
@@ -148,6 +143,105 @@ impl ExoRuntimeClient {
         Ok(containers)
     }
 
+    /// Ensure a Docker image is imported into exo
+    ///
+    /// This function checks if the image exists in exo, and if not,
+    /// imports it from Docker (if available) or returns an error.
+    async fn ensure_image_imported(&self, image: &str) -> Result<()> {
+        // Check if image already exists in exo
+        let images_output = tokio::time::timeout(
+            tokio::time::Duration::from_secs(5),
+            Command::new(&self.exo_path)
+                .args(["images"])
+                .output()
+        ).await
+        .map_err(|_| anyhow::anyhow!("Timeout checking exo images"))?
+        .map_err(|e| anyhow::anyhow!("Failed to check exo images: {}", e))?;
+
+        if images_output.status.success() {
+            let images_stdout = String::from_utf8_lossy(&images_output.stdout);
+            // Check if image name appears in the output
+            let base_name = image.split(':').next().unwrap_or(image);
+            if images_stdout.contains(base_name) {
+                tracing::info!("Image '{}' already exists in exo", image);
+                return Ok(());
+            }
+        }
+
+        tracing::info!("Image '{}' not found in exo, attempting to import from Docker", image);
+
+        // Clone image to own it for the spawned task
+        let image_owned = image.to_string();
+
+        // Check if Docker has the image
+        let docker_check = StdCommand::new("docker")
+            .args(["images", "-q", &image_owned])
+            .output();
+
+        match docker_check {
+            Ok(output) if !output.stdout.is_empty() => {
+                // Image exists in Docker, save and import it
+                tracing::info!("Found image in Docker, importing into exo...");
+
+                let temp_file = format!("/tmp/exo_import_{}.tar", std::process::id());
+                let temp_file_clone = temp_file.clone();
+
+                // Save image from Docker
+                let save_result = tokio::time::timeout(
+                    tokio::time::Duration::from_secs(120), // Docker save can take a while
+                    tokio::task::spawn_blocking(move || {
+                        StdCommand::new("docker")
+                            .args(["save", "-o", &temp_file_clone, &image_owned])
+                            .output()
+                    })
+                ).await
+                .map_err(|_| anyhow::anyhow!("Timeout saving Docker image"))?
+                .map_err(|e| anyhow::anyhow!("Failed to spawn docker save: {}", e))?
+                .map_err(|e| anyhow::anyhow!("Failed to save Docker image: {}", e))?;
+
+                if !save_result.status.success() {
+                    let stderr = String::from_utf8_lossy(&save_result.stderr);
+                    anyhow::bail!("Failed to save Docker image: {}", stderr);
+                }
+
+                // Import image into exo
+                let import_result = tokio::time::timeout(
+                    tokio::time::Duration::from_secs(120), // Import can also take a while
+                    Command::new(&self.exo_path)
+                        .args(["import", &temp_file])
+                        .output()
+                ).await
+                .map_err(|_| anyhow::anyhow!("Timeout importing image into exo"))?
+                .map_err(|e| anyhow::anyhow!("Failed to import image: {}", e))?;
+
+                // Clean up temp file
+                let _ = std::fs::remove_file(&temp_file);
+
+                if !import_result.status.success() {
+                    let stderr = String::from_utf8_lossy(&import_result.stderr);
+                    anyhow::bail!("Failed to import image into exo: {}", stderr);
+                }
+
+                tracing::info!("Successfully imported image '{}' from Docker into exo", image);
+                Ok(())
+            }
+            Ok(_) => {
+                anyhow::bail!(
+                    "Image '{}' not found in Docker. Please pull it first: docker pull {}",
+                    image, image
+                )
+            }
+            Err(e) => {
+                tracing::warn!("Docker not available: {}", e);
+                anyhow::bail!(
+                    "Image '{}' not found in exo and Docker is not available. \
+                    Please either:\n  1. Import the image manually: exo import <image.tar>\n  2. Pull in Docker: docker pull {}",
+                    image, image
+                )
+            }
+        }
+    }
+
     async fn create_container_internal(&self, name: &str, config: &AgentConfig) -> Result<String> {
         // Validate container name
         validation::validate_container_name(name)
@@ -159,13 +253,26 @@ impl ExoRuntimeClient {
         validation::validate_cpu_cores(config.cpu_cores)
             .map_err(|e| anyhow::anyhow!("Invalid CPU config: {}", e))?;
 
+        // Select image based on agent runtime (before building args so we can import it)
+        let default_runtime = AgentRuntime::default();
+        let agent_runtime = config.agent_runtime.as_ref().unwrap_or(&default_runtime);
+        let image = match agent_runtime {
+            AgentRuntime::Openclaw => "openclaw-agent:latest",
+            AgentRuntime::ExoNative => "exo-agent:latest",
+        };
+
+        // Ensure image is imported into exo before creating container
+        self.ensure_image_imported(image).await
+            .map_err(|e| anyhow::anyhow!("Failed to import image '{}': {}", image, e))?;
+
         // Build args for exo run
         let mut args = vec![
             "run".to_string(),
             "-n".to_string(), // Use -n instead of --name
             name.to_string(),
             "--detach".to_string(), // Use --detach instead of -d to avoid conflict with --debug
-            "-q".to_string(), // quiet mode - reduce output
+            "--workdir".to_string(),
+            "/agent".to_string(), // Set working directory to /agent
         ];
 
         // Note: Memory and CPU limits not supported by exo runtime
@@ -182,7 +289,12 @@ impl ExoRuntimeClient {
         // Add environment variables
         for (key, value) in self.build_env_vars(config) {
             args.push("-e".to_string());
-            args.push(format!("{}={}", key, value));
+            // Quote the value if it contains special characters that would be interpreted by the shell
+            if value.contains(' ') || value.contains('*') || value.contains('[') || value.contains(']') || value.contains('"') || value.contains('\'') {
+                args.push(format!("{}='{}'", key, value));
+            } else {
+                args.push(format!("{}={}", key, value));
+            }
         }
 
         // Add volume mounts
@@ -208,47 +320,132 @@ impl ExoRuntimeClient {
         // Note: With --network host, no port mapping needed - container binds directly to host
         // The PORT env var tells the gateway which port to use
 
-        // Select image based on agent runtime
-        let default_runtime = AgentRuntime::default();
-        let agent_runtime = config.agent_runtime.as_ref().unwrap_or(&default_runtime);
-        let image = match agent_runtime {
-            AgentRuntime::Openclaw => "openclaw-agent:latest",
-            AgentRuntime::ExoNative => "exo-agent:latest",
-        };
+        // Add command to args (image already selected above for import)
+        let command = "/entrypoint.sh";
         args.push(image.to_string());
+        args.push(command.to_string());
 
-        // Use the image's entrypoint (for openclaw-agent, this is /entrypoint.sh)
-        // Pass -- to signal end of exo args and start of container command
-        args.push("--".to_string());
-        args.push("/entrypoint.sh".to_string());
+        // Log the full command for debugging
+        tracing::info!("Running exo command: {} {}", &self.exo_path, args.join(" "));
 
-        // Spawn the command in background and return immediately
-        // We'll verify the container was created by checking exo list
-        Command::new(&self.exo_path)
-            .args(&args)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| anyhow::anyhow!("Failed to spawn exo run command: {}", e))?;
+        // Use std::process::Command and wait for output
+        // Exo outputs to stderr, and we need to wait for the process to complete
+        // Wrap in timeout + spawn_blocking to avoid blocking the async runtime for too long
 
-        // Wait a moment for the container to be created
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        // Clone values so the closure owns them (required for spawn_blocking)
+        let exo_path = self.exo_path.clone();
+        let args_clone = args.clone();
 
-        // Verify the container was created by checking exo list
-        let mut retries = 10;
-        let id = loop {
-            let containers = self.list_containers_internal().await?;
-            if let Some(container) = containers.iter().find(|c| c.name == name) {
-                tracing::info!("Created container: {} ({})", name, container.id);
-                break container.id.clone();
-            }
+        // Create temp files for stdout/stderr to avoid blocking on pipes
+        // When stdout is piped, exo's --detach mode hangs because it checks if stdout is a TTY
+        let stdout_path = format!("/tmp/exo_out_{}.txt", std::process::id());
+        let stderr_path = format!("/tmp/exo_err_{}.txt", std::process::id());
 
-            retries -= 1;
-            if retries <= 0 {
-                anyhow::bail!("Container '{}' was not found in exo list after creation", name);
-            }
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        // Clone paths for use after closure completes
+        let stdout_path_read = stdout_path.clone();
+        let stderr_path_read = stderr_path.clone();
+
+        let output_result = tokio::time::timeout(
+            tokio::time::Duration::from_secs(30), // Should complete quickly with temp files
+            tokio::task::spawn_blocking(move || {
+                use std::fs::OpenOptions;
+                let mut cmd = StdCommand::new(&exo_path);
+                cmd.args(&args_clone);
+
+                // Redirect to temp files to avoid pipe blocking issue
+                let stdout_file = OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(&stdout_path)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                let stderr_file = OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(&stderr_path)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+                cmd.stdout(stdout_file)
+                    .stderr(stderr_file);
+
+                cmd.status()
+            })
+        ).await;
+
+        // Unwrap the triple-nested Result:
+        // Result<Result<Result<ExitStatus, io::Error>, JoinError>, Elapsed>
+        let exit_status = match output_result {
+            Ok(timeout_result) => match timeout_result {
+                Ok(join_result) => match join_result {
+                    Ok(status) => status,
+                    Err(e) => return Err(anyhow::anyhow!("Failed to run exo command: {}", e)),
+                },
+                Err(e) => return Err(anyhow::anyhow!("Task join failed: {}", e)),
+            },
+            Err(_) => return Err(anyhow::anyhow!("Timeout creating agent (exo run took longer than 180 seconds)")),
         };
+
+        tracing::info!("Exo process exited with status: {}", exit_status);
+
+        // Read from temp files
+        let stdout_output = std::fs::read_to_string(&stdout_path_read)
+            .map_err(|e| anyhow::anyhow!("Failed to read stdout from temp file: {}", e))?;
+        let stderr_output = std::fs::read_to_string(&stderr_path_read)
+            .map_err(|e| anyhow::anyhow!("Failed to read stderr from temp file: {}", e))?;
+
+        // Clean up temp files
+        let _ = std::fs::remove_file(&stdout_path_read);
+        let _ = std::fs::remove_file(&stderr_path_read);
+
+        tracing::info!("Exo stdout ({} bytes): {}", stdout_output.len(), stdout_output);
+        tracing::info!("Exo stderr ({} bytes): {}", stderr_output.len(), stderr_output);
+
+        // Parse the container ID from stdout (exo outputs to stdout with "Container running in background:")
+        let container_id = stdout_output
+            .lines()
+            .find(|line| line.contains("Container running in background:"))
+            .and_then(|line| line.split("Container running in background: ").nth(1))
+            .map(|id| id.trim().to_string())
+            .or_else(|| {
+                // Fallback: try "Starting container:" pattern
+                stdout_output
+                    .lines()
+                    .find(|line| line.contains("Starting container:"))
+                    .and_then(|line| line.split("Starting container: ").nth(1))
+                    .map(|id| id.trim().to_string())
+            })
+            .ok_or_else(|| anyhow::anyhow!("Failed to find container ID in exo run output.\nStdout:\n{}\nStderr:\n{}",
+                stdout_output, stderr_output))?;
+
+        let id = container_id;
+
+        tracing::info!("Created container: {} ({})", name, id);
+
+        // Verify the container is actually running by checking exo list
+        // Use a shorter timeout for this verification since we already have the ID
+        match tokio::time::timeout(
+            tokio::time::Duration::from_secs(3),
+            self.list_containers_internal()
+        )
+        .await
+        {
+            Ok(Ok(containers)) => {
+                if !containers.iter().any(|c| c.id == id || c.name == name) {
+                    // Container not found, but it might still be starting up
+                    // Log a warning but continue since we have the ID
+                    tracing::warn!("Container '{}' created with ID {} but not yet in exo list", name, id);
+                }
+            }
+            Ok(Err(e)) => {
+                // Error listing containers, but container was created with valid ID
+                tracing::warn!("Failed to list containers for verification: {}", e);
+            }
+            Err(_) => {
+                // Timeout checking list, but container was created with valid ID
+                tracing::warn!("Timeout verifying container in exo list, but ID was parsed successfully");
+            }
+        }
 
         Ok(id)
     }
@@ -425,6 +622,13 @@ impl ExoRuntimeClient {
         if let Some(ref model) = config.llm_model {
             env.insert("LLM_MODEL".to_string(), model.clone());
         }
+
+        // Set gateway password for authentication
+        // This allows connections from Electron app without device pairing
+        env.insert("OPENCLAW_GATEWAY_PASSWORD".to_string(), "claw".to_string());
+
+        // Bind to all interfaces (0.0.0.0) to allow external connections
+        env.insert("BIND".to_string(), "lan".to_string());
 
         // NOTE: Don't set AGENT_NAME - it triggers exo's restrictive "agent-default" security profile
         // which drops all capabilities and blocks syscalls needed by OpenClaw gateway

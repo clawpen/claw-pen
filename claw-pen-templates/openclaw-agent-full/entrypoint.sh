@@ -9,6 +9,10 @@ PORT="${PORT:-18790}"
 BIND="${BIND:-loopback}"
 # Token for gateway auth (required for lan bind)
 GATEWAY_TOKEN="${GATEWAY_TOKEN:-}"
+# Password for gateway auth (alternative to token)
+OPENCLAW_GATEWAY_PASSWORD="${OPENCLAW_GATEWAY_PASSWORD:-}"
+# Allowed origins for gateway (default: wildcard to allow all origins)
+GATEWAY_ALLOWED_ORIGINS="${GATEWAY_ALLOWED_ORIGINS:-}"
 BASE_URL=""
 
 case "$PROVIDER" in
@@ -37,8 +41,15 @@ mkdir -p /root/.openclaw/agents/dev/agent
 # Build gateway auth config
 if [ -n "$GATEWAY_TOKEN" ]; then
   GATEWAY_AUTH="{\"mode\": \"token\", \"token\": \"${GATEWAY_TOKEN}\"}"
+elif [ -n "$OPENCLAW_GATEWAY_PASSWORD" ]; then
+  GATEWAY_AUTH="{\"mode\": \"password\", \"password\": \"${OPENCLAW_GATEWAY_PASSWORD}\"}"
 else
   GATEWAY_AUTH="{\"mode\": \"none\"}"
+fi
+
+# Set default for allowed origins if not specified
+if [ -z "$GATEWAY_ALLOWED_ORIGINS" ]; then
+  GATEWAY_ALLOWED_ORIGINS='["*"]'
 fi
 
 cat > /root/.openclaw/openclaw.json << CONF
@@ -48,7 +59,7 @@ cat > /root/.openclaw/openclaw.json << CONF
     "defaults": {"workspace": "/root/.openclaw/workspace-dev", "skipBootstrap": true, "model": {"primary": "${PROVIDER}/${MODEL}"}},
     "list": [{"id": "dev", "default": true, "workspace": "/root/.openclaw/workspace-dev", "identity": {"name": "Agent", "emoji": "🤖"}, "model": {"primary": "${PROVIDER}/${MODEL}"}}]
   },
-  "gateway": {"mode": "local", "bind": "${BIND}", "auth": ${GATEWAY_AUTH}, "port": ${PORT}}
+  "gateway": {"mode": "local", "bind": "${BIND}", "auth": ${GATEWAY_AUTH}, "port": ${PORT}, "controlUi": {"allowedOrigins": ["*"]}}
 }
 CONF
 

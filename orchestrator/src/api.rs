@@ -254,6 +254,17 @@ pub async fn create_agent(
 
     // === End Input Validation ===
 
+    // Check for duplicate agent name
+    let containers = state.containers.read().await;
+    if containers.iter().any(|c| c.name == req.name) {
+        drop(containers);
+        return Err((
+            StatusCode::CONFLICT,
+            format!("Agent with name '{}' already exists. Please choose a different name.", req.name)
+        ));
+    }
+    drop(containers); // Release lock before continuing
+
     // Build config from template + overrides
     let mut config = if let Some(ref template_name) = req.template {
         state
@@ -348,7 +359,7 @@ pub async fn create_agent(
         if rt == "exo" {
             // Use exo-specific runtime if available
             match tokio::time::timeout(
-                tokio::time::Duration::from_secs(30),
+                tokio::time::Duration::from_secs(200), // Increased timeout for slow exo starts (exoruntime.rs has 180s timeout)
                 state.exo_runtime.create_container(&req.name, &config)
             )
             .await
@@ -369,7 +380,7 @@ pub async fn create_agent(
         } else {
             // Use default runtime (exo)
             match tokio::time::timeout(
-                tokio::time::Duration::from_secs(30),
+                tokio::time::Duration::from_secs(200), // Increased timeout for slow exo starts (exoruntime.rs has 180s timeout)
                 state.runtime.create_container(&req.name, &config)
             )
             .await
@@ -391,7 +402,7 @@ pub async fn create_agent(
     } else {
         tracing::info!("Creating agent '{}' with default runtime", req.name);
         match tokio::time::timeout(
-            tokio::time::Duration::from_secs(30),
+            tokio::time::Duration::from_secs(150), // Increased timeout for slow container starts
             state.runtime.create_container(&req.name, &config)
         )
         .await
@@ -589,15 +600,21 @@ pub async fn start_agent(
         &state.runtime
     };
 
-    // Check if container exists, if not create it
-    let container_exists = runtime.container_exists(&id).await.unwrap_or(false);
+    // Check if container exists by ID or name
+    let container_exists = runtime.container_exists(&id).await.unwrap_or(false)
+        || runtime.container_exists(&agent.name).await.unwrap_or(false);
 
     if !container_exists {
         // Create the container for this stored agent
-        
+
         // First, delete any existing container with the same name (handles name conflicts)
         if let Err(e) = runtime.delete_container(&agent.name).await {
             tracing::debug!("No existing container to remove: {}", e);
+        }
+
+        // Also try to delete by ID in case there's a stale container
+        if let Err(e) = runtime.delete_container(&id).await {
+            tracing::debug!("No existing container to remove by ID: {}", e);
         }
 
         // Inject API key from agent config, or from global stored keys

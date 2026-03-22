@@ -79,7 +79,7 @@ function createWindow() {
         backgroundColor: '#0f0f1a'
     });
 
-    mainWindow.loadFile(path.join(__dirname, 'index.html'));
+    mainWindow.loadFile(path.join(__dirname, 'dashboard.html'));
 }
 
 function connectWebSocket(url) {
@@ -95,14 +95,10 @@ function connectWebSocket(url) {
 
     currentUrl = url;
     console.log('[WS] Connecting to:', url);
-    
-    // Extract port for Origin header
-    const portMatch = url.match(/:(\d+)\//);
-    const port = portMatch ? portMatch[1] : '18790';
-    
+
     ws = new WebSocket(url, {
         headers: {
-            'Origin': `http://localhost:${port}`
+            'Origin': 'http://localhost:3000'
         }
     });
     
@@ -113,26 +109,34 @@ function connectWebSocket(url) {
     
     ws.on('message', (data) => {
         const text = data.toString();
-        console.log('[WS] Message:', text.substring(0, 100));
-        
+        console.log('[WS] RX:', text.substring(0, 300));
+
         try {
             const msg = JSON.parse(text);
-            
+
             // Handle auth challenge
             if (msg.event === 'connect.challenge') {
                 const nonce = msg.payload?.nonce || msg.params?.nonce || '';
-                console.log('[WS] Got challenge, nonce:', nonce);
-                handleChallenge(nonce);
+                const challengeTimestamp = msg.payload?.ts || msg.params?.ts || Date.now();
+                console.log('[WS] Challenge - nonce:', nonce, 'ts:', challengeTimestamp);
+                handleChallenge(nonce, challengeTimestamp);
                 return;
             }
-            
+
             // Handle auth success
             if (msg.ok === true && msg.id?.startsWith('cp-')) {
-                console.log('[WS] Authenticated');
+                console.log('[WS] ✓ Authenticated successfully!');
                 mainWindow?.webContents.send('ws-authenticated', true);
                 return;
             }
-            
+
+            // Handle auth failure
+            if (msg.ok === false) {
+                console.log('[WS] ✗ Auth failed:', msg.error?.code, msg.error?.message);
+                mainWindow?.webContents.send('ws-error', msg.error?.message || 'Authentication failed');
+                return;
+            }
+
             // Forward all other messages to renderer
             mainWindow?.webContents.send('ws-message', msg);
         } catch (e) {
@@ -159,21 +163,8 @@ function connectWebSocket(url) {
 }
 
 // Sign and send connect request
-function handleChallenge(nonce) {
-    const signedAt = Date.now(); // milliseconds!
-    const scopes = 'operator.admin,operator.approvals,operator.pairing';
-    
-    // Build message to sign - must match exactly: v2|deviceId|clientId|mode|role|scopes|signedAt||nonce
-    const message = `v2|${deviceKeys.deviceId}|openclaw-control-ui|webchat|operator|${scopes}|${signedAt}||${nonce}`;
-    
-    console.log('[Device] Signing message:', message);
-    
-    // Sign with Ed25519
-    const signature = nacl.sign.detached(
-        Buffer.from(message, 'utf8'),
-        deviceKeys.secretKey
-    );
-    
+function handleChallenge(nonce, challengeTimestamp) {
+    // Send connect request with password authentication
     const response = {
         type: 'req',
         id: 'cp-' + Date.now(),
@@ -182,27 +173,20 @@ function handleChallenge(nonce) {
             minProtocol: 3,
             maxProtocol: 3,
             client: {
-                id: 'openclaw-control-ui',
+                id: 'cli',
                 version: '1.0.0',
                 platform: 'desktop',
                 mode: 'webchat'
             },
             role: 'operator',
-            scopes: ['operator.admin', 'operator.approvals', 'operator.pairing'],
-            device: {
-                id: deviceKeys.deviceId,
-                publicKey: BASE64.encode(deviceKeys.publicKey),
-                signature: BASE64.encode(signature),
-                signedAt: signedAt,
-                nonce: nonce
-            },
-            caps: [],
-            commands: []
+            scopes: [],
+            auth: {
+                password: 'claw'
+            }
         }
     };
-    
-    console.log('[WS] Sending signed connect');
-    console.log('[WS] Request:', JSON.stringify(response, null, 2));
+
+    console.log('[WS] Sending connect request (with password auth)');
     ws.send(JSON.stringify(response));
 }
 
