@@ -519,6 +519,29 @@ mod urlencoding {
     }
 }
 
+#[tauri::command]
+async fn open_agent_creator(app: AppHandle) -> Result<(), String> {
+    let window_label = "agent-creator";
+
+    // Check if already open
+    if app.get_webview_window(window_label).is_some() {
+        if let Some(win) = app.get_webview_window(window_label) {
+            win.set_focus().map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(&app, window_label, WebviewUrl::App("agent-creator.html".into()))
+        .title("Create Agent - Claw Pen")
+        .inner_size(850.0, 900.0)
+        .min_inner_size(650.0, 700.0)
+        .resizable(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 fn main() {
     let state = AppState {
         ws_sender: Arc::new(tokio::sync::Mutex::new(None)),
@@ -542,6 +565,7 @@ fn main() {
             connect_floating_window,
             send_floating_message,
             launch_shell,
+            open_agent_creator,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

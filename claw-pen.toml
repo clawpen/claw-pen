@@ -1,6 +1,6 @@
 # Claw Pen Configuration - Windows
 deployment-mode = "all-windows"
-network-backend = "tailscale"
+network-backend = "local"
 runtime-socket = ""
 container-runtime = "docker"
 # Tailscale authentication key for agent mesh networking

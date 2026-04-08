@@ -635,7 +635,7 @@
             <a href="#" onclick="doLogout(); return false;" style="color: #e94560; text-decoration: none; font-size: 14px;">🚪 Logout</a>
         </div>
 
-        <button class="create-agent-btn" onclick="showCreateModal()">+ Create Agent</button>
+        <button class="create-agent-btn" onclick="openAgentCreator()">+ Create Agent</button>
         
         <div class="volume-section">
             <div class="volume-header">
@@ -856,11 +856,17 @@
         </div>
     </div>
 
+    <!-- Configuration -->
+    <script src="js/config.js"></script>
+
     <script>
         let agents = [], selectedAgent = null, isConnected = false, currentStreamEl = null, chatHistory = {};
         let volumes = [];  // Volume list
         let roleAssignments = {};  // Team role assignments: {agentId: {teamId, teamName, roleId, roleName}}
-        const ORCHESTRATOR_URL = 'http://localhost:3001';
+        // Use config values (from config.js) or fallback to defaults
+        const ORCHESTRATOR_URL = typeof ORCHESTRATOR_URL_CFG !== 'undefined' ? ORCHESTRATOR_URL_CFG : 'http://localhost:3001';
+        const TEAMS_API_URL = typeof TEAMS_API_URL_CFG !== 'undefined' ? TEAMS_API_URL_CFG : 'http://localhost:3001/api';
+        const ORCHESTRATOR_WS_URL = typeof ORCHESTRATOR_WS_URL_CFG !== 'undefined' ? ORCHESTRATOR_WS_URL_CFG : 'ws://127.0.0.1:3001';
         let authToken = localStorage.getItem('clawpen_token');
         let globalKeys = {};  // Store global API key status
         let intervalsSet = false;  // Track if we've started polling
@@ -1510,7 +1516,6 @@
         // Teams functionality
         let teamsData = [];
         let currentTeamsAgentId = null;
-        const TEAMS_API_URL = 'http://localhost:3001/api';
 
         async function showTeamsModal(agentId, agentName) {
             currentTeamsAgentId = agentId;
@@ -1990,7 +1995,7 @@ docker exec -it ${id} /bin/bash
             }
 
             // Connect through orchestrator's websocket proxy for multi-agent support
-            const wsUrl = `ws://127.0.0.1:3001/api/agents/${agent.id}/chat?token=${token}`;
+            const wsUrl = `${ORCHESTRATOR_WS_URL}/api/agents/${agent.id}/chat?token=${token}`;
             console.log('[connectToAgent] Connecting through orchestrator:', wsUrl.substring(0, 80) + '...');
 
             try {
@@ -2120,6 +2125,20 @@ docker exec -it ${id} /bin/bash
             document.getElementById('create-modal').classList.add('active'); 
         }
         function hideCreateModal() { document.getElementById('create-modal').classList.remove('active'); }
+
+        async function openAgentCreator() {
+            try {
+                if (window.__TAURI__) {
+                    await window.__TAURI__.core.invoke('open_agent_creator');
+                } else {
+                    // Fallback for browser testing
+                    showCreateModal();
+                }
+            } catch (error) {
+                console.error('Failed to open agent creator:', error);
+                showCreateModal();
+            }
+        }
         
         async function createAgent() {
             const name = document.getElementById('new-agent-name').value.trim();

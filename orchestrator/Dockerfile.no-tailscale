@@ -1,0 +1,86 @@
+# OpenClaw Agent image without Tailscale runtime installation
+FROM openclaw-agent:custom
+
+# Create new entrypoint that skips Tailscale installation
+RUN echo '#!/bin/sh\n\
+set -e\n\
+MODEl="${LLM_MODEL:-gpt-4o}"\n\
+PROVIDER="${LLM_PROVIDER:-openai}"\n\
+PROVIDER=$(echo "$PROVIDER" | tr "[:upper:]" "[:lower:]")\n\
+PORT="${PORT:-18790}"\n\
+GATEWAY_TOKEN="${GATEWAY_TOKEN:-}"\n\
+GATEWAY_PASSWORD="${GATEWAY_PASSWORD:-}"\n\
+BASE_URL=""\n\
+API_KEY=""\n\
+\n\
+case "$PROVIDER" in\n\
+  openai)\n\
+    API_KEY="$OPENAI_API_KEY"\n\
+    BASE_URL="${OPENAI_BASE_URL:-}"\n\
+    ;;\n\
+  anthropic)\n\
+    API_KEY="$ANTHROPIC_API_KEY"\n\
+    ;;\n\
+  local)\n\
+    API_KEY="${OPENAI_API_KEY:-local}"\n\
+    BASE_URL="${OPENAI_BASE_URL:-http://host.docker.internal:8081/v1}"\n\
+    ;;\n\
+  *)\n\
+    API_KEY="${OPENAI_API_KEY:-}"\n\
+    BASE_URL="${OPENAI_BASE_URL:-}"\n\
+    ;;\n\
+esac\n\
+\n\
+MODEL_ID="${PROVIDER}/${MODEL}"\n\
+echo "[entrypoint] Provider: $PROVIDER, Model: $MODEL, Port: $PORT"\n\
+echo "[entrypoint] Skipping Tailscale (local mode)"\n\
+\n\
+# Configure OpenClaw\n\
+rm -f /root/.openclaw/openclaw.json /root/.openclaw/openclaw.json.bak\n\
+rm -f /root/.openclaw/agents/dev/agent/auth-profiles.json\n\
+mkdir -p /root/.openclaw/agents/dev/agent\n\
+\n\
+if [ -n "$GATEWAY_TOKEN" ]; then\n\
+  GATEWAY_AUTH="{\\"mode\\": \\"token\\", \\"token\\": \\"${GATEWAY_TOKEN}\\"}"\n\
+elif [ -n "$GATEWAY_PASSWORD" ]; then\n\
+  GATEWAY_AUTH="{\\"mode\\": \\"password\\", \\"password\\": \\"${GATEWAY_PASSWORD}\\"}"\n\
+else\n\
+  GATEWAY_AUTH="{\\"mode\\": \\"none\\"}"\n\
+fi\n\
+\n\
+cat > /root/.openclaw/openclaw.json << CONF\n\
+{\n\
+  "meta": {"lastTouchedVersion": "2026.2.26"},\n\
+  "agents": {\n\
+    "defaults": {"workspace": "/root/.openclaw/workspace-dev", "skipBootstrap": true, "model": {"primary": "${MODEL_ID}"}},\n\
+    "list": [{"id": "dev", "default": true, "workspace": "/root/.openclaw/workspace-dev", "identity": {"name": "Agent", "emoji": "🤖"}, "model": {"primary": "${MODEL_ID}"}}]\n\
+  },\n\
+  "gateway": {"mode": "local", "bind": "loopback", "auth": ${GATEWAY_AUTH}, "port": ${PORT}}\n\
+}\n\
+CONF\n\
+\n\
+if [ -n "$API_KEY" ]; then\n\
+  mkdir -p /root/.openclaw/agents/dev/agent\n\
+  if [ -n "$BASE_URL" ]; then\n\
+    cat > /root/.openclaw/agents/dev/agent/auth-profiles.json << AUTH\n\
+{"version":1,"profiles":{"openai:default":{"type":"api_key","provider":"openai","key":"${API_KEY}","baseUrl":"${BASE_URL}"}},"lastGood":{"openai":"openai:default"}}\n\
+AUTH\n\
+  else\n\
+    cat > /root/.openclaw/agents/dev/agent/auth-profiles.json << AUTH\n\
+{"version":1,"profiles":{"${PROVIDER}:default":{"type":"api_key","provider":"${PROVIDER}","key":"${API_KEY}"}},"lastGood":{"${PROVIDER}":"${PROVIDER}:default"}}\n\
+AUTH\n\
+  fi\n\
+fi\n\
+\n\
+mkdir -p /root/.openclaw\n\
+if [ -n "$MODEL" ]; then\n\
+  cat > /root/.openclaw/models.json << MODELS\n\
+[{"id": "${MODEL}", "name": "${MODEL}", "provider": "${PROVIDER}", "contextWindow": 32768}]\n\
+MODELS\n\
+fi\n\
+\n\
+echo "[entrypoint] Starting OpenClaw gateway..."\n\
+exec node /usr/local/lib/node_modules/openclaw/openclaw.mjs gateway run --dev --allow-unconfigured\n' > /entrypoint-new.sh && \
+    chmod +x /entrypoint-new.sh
+
+ENTRYPOINT ["/entrypoint-new.sh"]

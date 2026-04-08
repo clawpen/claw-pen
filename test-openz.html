@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test OpenZ Agent</title>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; }
+        #log { margin-top: 20px; padding: 10px; background: #2d2d2d; border: 1px solid #444; max-height: 400px; overflow-y: auto; }
+        button { padding: 10px 20px; margin: 5px; background: #007acc; color: white; border: none; cursor: pointer; }
+        button:hover { background: #005a9e; }
+        input { padding: 8px; margin: 5px; background: #3c3c3c; color: white; border: 1px solid #555; }
+        #status { margin: 10px 0; }
+        .success { color: #4ec9b0; }
+        .error { color: #f85149; }
+        .info { color: #3794ff; }
+    </style>
+</head>
+<body>
+    <h1>🧪 OpenZ Agent Test</h1>
+    <div id="status" class="info">Status: Ready to connect</div>
+
+    <div>
+        <button onclick="connect()">Connect</button>
+        <button onclick="sendMessage()">Send Test Message</button>
+        <button onclick="clearLog()">Clear Log</button>
+    </div>
+
+    <div>
+        <input type="text" id="customMessage" placeholder="Custom message" style="width: 300px;">
+        <button onclick="sendCustom()">Send Custom</button>
+    </div>
+
+    <div id="log"></div>
+
+    <script>
+        let ws = null;
+        let authenticated = false;
+
+        function log(msg, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `<div class="${type}">[${time}] ${msg}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function updateStatus(msg, type = 'info') {
+            document.getElementById('status').innerHTML = `<span class="${type}">${msg}</span>`;
+        }
+
+        function connect() {
+            if (ws) {
+                log('Closing existing connection...', 'info');
+                ws.close();
+            }
+
+            const url = 'ws://127.0.0.1:18790/chat';
+            log(`Connecting to ${url}...`, 'info');
+
+            ws = new WebSocket(url);
+
+            ws.onopen = () => {
+                log('✅ Connected to agent!', 'success');
+                updateStatus('Status: Connected, waiting for challenge...', 'info');
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    log(`📩 Received: ${JSON.stringify(data, null, 2)}`, 'info');
+
+                    if (data.type === 'event' && data.event === 'connect.challenge') {
+                        const nonce = data.payload.nonce;
+                        log(`🔐 Challenge received with nonce: ${nonce.substring(0, 8)}...`, 'info');
+
+                        // Try different auth formats
+                        // Format 1: With connect field
+                        const authResponse1 = {
+                            type: 'action',
+                            action: 'connect.authenticate',
+                            payload: {
+                                password: 'clawpen',
+                                nonce: nonce
+                            },
+                            connect: {
+                                password: 'clawpen',
+                                nonce: nonce
+                            }
+                        };
+
+                        // Format 2: Direct payload without action wrapper
+                        const authResponse2 = {
+                            type: 'action',
+                            action: 'connect',
+                            payload: {
+                                authenticate: {
+                                    password: 'clawpen',
+                                    nonce: nonce
+                                }
+                            }
+                        };
+
+                        // Try the original format first
+                        const authResponse = {
+                            type: 'action',
+                            action: 'connect.authenticate',
+                            payload: {
+                                password: 'clawpen',
+                                nonce: nonce
+                            }
+                        };
+
+                        ws.send(JSON.stringify(authResponse));
+                        log(`📤 Sent auth (attempting format): ${JSON.stringify(authResponse)}`, 'info');
+                        updateStatus('Status: Authenticating...', 'info');
+                    }
+
+                    if (data.type === 'event' && data.event === 'connected') {
+                        log('✅ Authentication successful!', 'success');
+                        authenticated = true;
+                        updateStatus('Status: Authenticated and ready', 'success');
+                    }
+
+                    if (data.type === 'event' && data.event === 'error') {
+                        log(`❌ Error from agent: ${data.payload?.message || JSON.stringify(data.payload)}`, 'error');
+                    }
+
+                    if (data.type === 'event' && data.event === 'chat.chunk') {
+                        const content = data.payload.content;
+                        log(`💬 Agent response: ${content}`, 'success');
+                    }
+
+                    if (data.type === 'event' && data.event === 'chat.done') {
+                        log('✅ Agent finished response', 'success');
+                    }
+                } catch (e) {
+                    log(`Failed to parse message: ${event.data}`, 'error');
+                }
+            };
+
+            ws.onerror = (error) => {
+                log(`❌ WebSocket error: ${error}`, 'error');
+                updateStatus('Status: Connection error', 'error');
+            };
+
+            ws.onclose = (event) => {
+                log(`🔌 Connection closed (code: ${event.code})`, 'info');
+                updateStatus('Status: Disconnected', 'info');
+                authenticated = false;
+                ws = null;
+            };
+        }
+
+        function sendMessage() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('❌ Not connected! Click Connect first.', 'error');
+                return;
+            }
+
+            if (!authenticated) {
+                log('❌ Not authenticated yet! Wait for authentication to complete.', 'error');
+                return;
+            }
+
+            const message = {
+                type: 'action',
+                action: 'chat',
+                payload: {
+                    content: 'Hello! Please respond with just the word SUCCESS'
+                }
+            };
+
+            ws.send(JSON.stringify(message));
+            log('📤 Sent test message to Zai GLM-5...', 'info');
+        }
+
+        function sendCustom() {
+            const input = document.getElementById('customMessage');
+            const msg = input.value.trim();
+
+            if (!msg) {
+                log('❌ Please enter a message', 'error');
+                return;
+            }
+
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('❌ Not connected! Click Connect first.', 'error');
+                return;
+            }
+
+            if (!authenticated) {
+                log('❌ Not authenticated yet!', 'error');
+                return;
+            }
+
+            const message = {
+                type: 'action',
+                action: 'chat',
+                payload: {
+                    content: msg
+                }
+            };
+
+            ws.send(JSON.stringify(message));
+            log(`📤 Sent: ${msg}`, 'info');
+            input.value = '';
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+
+        // Auto-connect on page load
+        setTimeout(() => {
+            log('Page loaded. Click "Connect" to test OpenZ agent with Zai GLM-5', 'info');
+        }, 500);
+    </script>
+</body>
+</html>

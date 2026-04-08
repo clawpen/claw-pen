@@ -126,6 +126,8 @@ pub enum ResourcePreset {
     Medium, // 4GB, 4 CPU
     Large,  // 8GB, 8 CPU
     Xlarge, // 16GB, 16 CPU
+    /// Local LLM inference preset (optimized for llama.cpp on host)
+    LocalInference, // 4GB, 2 CPU (enough for 8B Q4 model + headroom)
 }
 
 impl ResourcePreset {
@@ -137,6 +139,7 @@ impl ResourcePreset {
             ResourcePreset::Medium => (4096, 4.0),
             ResourcePreset::Large => (8192, 8.0),
             ResourcePreset::Xlarge => (16384, 16.0),
+            ResourcePreset::LocalInference => (4096, 2.0), // Optimized for local LLM inference
         }
     }
 }

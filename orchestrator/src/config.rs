@@ -51,12 +51,50 @@ pub struct Config {
     pub headscale_namespace: Option<String>,
     pub model_servers: ModelServers,
     pub andor_bridge: Option<AndorBridgeConfig>,
+    /// Native inference service configuration
+    #[serde(default)]
+    pub native_inference: Option<NativeInferenceConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AndorBridgeConfig {
     pub url: String,
     pub register_on_create: Option<bool>,
+}
+
+/// Native inference service configuration (built-in GGUF model support)
+#[derive(Debug, Deserialize, Clone)]
+pub struct NativeInferenceConfig {
+    /// Path to the GGUF model file
+    pub model_path: String,
+    /// Port for the inference API server
+    #[serde(default = "default_inference_port")]
+    pub port: u16,
+    /// Maximum context window (tokens)
+    #[serde(default = "default_context_window")]
+    pub max_tokens: usize,
+    /// Default temperature
+    #[serde(default = "default_temperature")]
+    pub temperature: f32,
+    /// Default top-p
+    #[serde(default = "default_top_p")]
+    pub top_p: f32,
+}
+
+fn default_inference_port() -> u16 {
+    8765
+}
+
+fn default_context_window() -> usize {
+    4096
+}
+
+fn default_temperature() -> f32 {
+    0.7
+}
+
+fn default_top_p() -> f32 {
+    0.9
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -71,6 +109,8 @@ pub struct ModelServers {
 pub struct ModelServerConfig {
     pub endpoint: String,
     pub default_model: Option<String>,
+    /// API token for authentication (e.g., LM Studio requires Bearer token)
+    pub api_token: Option<String>,
 }
 
 /// Config file locations to search (in order of priority)
@@ -127,7 +167,8 @@ pub fn load() -> anyhow::Result<Config> {
         .set_default("model_servers.llama_cpp", None::<String>)?
         .set_default("model_servers.vllm", None::<String>)?
         .set_default("model_servers.lm_studio", None::<String>)?
-        .set_default("andor_bridge", None::<String>)?;
+        .set_default("andor_bridge", None::<String>)?
+        .set_default("native_inference", None::<String>)?;
 
     // Load from config file if found
     if let Some(config_path) = find_config_file() {

@@ -5,6 +5,7 @@ members = [
     "orchestrator",
     "ui",
     "tauri-app",
+    "inference",
 ]
 
 [workspace.package]

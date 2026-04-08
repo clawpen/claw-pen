@@ -1,0 +1,12 @@
+FROM openclaw-agent:latest
+
+# Install Tailscale
+RUN apt-get update && apt-get install -y curl ca-certificates && \
+    curl -fsSL https://tailscale.com/install.sh | sh && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy custom entrypoint script
+COPY entrypoint-tailscale-lan.sh /usr/local/bin/openclaw-tailscale-lan.sh
+RUN chmod +x /usr/local/bin/openclaw-tailscale-lan.sh
+
+ENTRYPOINT ["/usr/local/bin/openclaw-tailscale-lan.sh"]
