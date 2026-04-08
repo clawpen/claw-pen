@@ -328,6 +328,41 @@ pub async fn create_agent(
         config.apply(partial);
     }
 
+    // Inject default model from orchestrator config if not specified
+    if config.llm_model.is_none() {
+        match config.llm_provider {
+            LlmProvider::Lmstudio => {
+                if let Some(ref lm_studio) = state.config.model_servers.lm_studio {
+                    if let Some(ref default_model) = lm_studio.default_model {
+                        config.llm_model = Some(default_model.clone());
+                    }
+                }
+            }
+            LlmProvider::Ollama => {
+                if let Some(ref ollama) = state.config.model_servers.ollama {
+                    if let Some(ref default_model) = ollama.default_model {
+                        config.llm_model = Some(default_model.clone());
+                    }
+                }
+            }
+            LlmProvider::LlamaCpp => {
+                if let Some(ref llama_cpp) = state.config.model_servers.llama_cpp {
+                    if let Some(ref default_model) = llama_cpp.default_model {
+                        config.llm_model = Some(default_model.clone());
+                    }
+                }
+            }
+            LlmProvider::Vllm => {
+                if let Some(ref vllm) = state.config.model_servers.vllm {
+                    if let Some(ref default_model) = vllm.default_model {
+                        config.llm_model = Some(default_model.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     // Create container
 
     // Allocate a port for this agent
@@ -1372,6 +1407,70 @@ pub async fn runtime_status(State(state): State<Arc<AppState>>) -> Json<serde_js
     }))
 }
 
+// === Native Inference Service ===
+
+/// Get the status of the native inference service
+pub async fn inference_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let Some(inference) = &state.inference else {
+        return Json(serde_json::json!({
+            "enabled": false,
+            "status": "not_configured"
+        }));
+    };
+
+    let is_healthy = inference.health_check().await.unwrap_or(false);
+
+    Json(serde_json::json!({
+        "enabled": true,
+        "status": if is_healthy { "running" } else { "unhealthy" },
+        "endpoint": inference.endpoint(),
+        "model": inference.model_name(),
+    }))
+}
+
+/// Start the native inference service
+pub async fn inference_start(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let Some(inference) = &state.inference else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            "Native inference not configured".to_string(),
+        ));
+    };
+
+    inference.start().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to start inference service: {}", e),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "status": "started",
+        "endpoint": inference.endpoint(),
+    })))
+}
+
+/// Stop the native inference service
+pub async fn inference_stop(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let Some(inference) = &state.inference else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            "Native inference not configured".to_string(),
+        ));
+    };
+
+    inference.stop().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to stop inference service: {}", e),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "status": "stopped",
+    })))
+}
+
 // === Helpers ===
 
 fn parse_provider(s: &str) -> LlmProvider {
@@ -1423,34 +1522,41 @@ pub async fn chat_websocket(
     drop(auth);
     tracing::info!("Token validated successfully");
 
-    // Check if agent exists and is running - use index for O(1) lookup (critical for scalability)
-    tracing::info!("Looking up agent in index...");
-    let index = state.agent_index.read().await;
-    let containers = state.containers.read().await;
+    // Check if agent exists and is running
+    // First try direct ID lookup, then fallback to name search for convenience
+    tracing::info!("Looking up agent '{}'...", id);
 
-    let agent = if let Some(&idx) = index.get(&id) {
-        tracing::info!("Found agent at index {}", idx);
-        containers.get(idx).ok_or_else(|| {
-            tracing::error!("Agent not found in containers at index {}", idx);
-            (StatusCode::NOT_FOUND, "Agent not found".to_string())
-        })?
-    } else {
-        tracing::warn!("Agent ID not found in index");
-        return Err((StatusCode::NOT_FOUND, "Agent not found".to_string()));
+    let (agent_id, agent_name, gateway_port) = {
+        let index = state.agent_index.read().await;
+        let containers = state.containers.read().await;
+
+        let agent = if let Some(&idx) = index.get(&id) {
+            tracing::info!("Found agent by ID at index {}", idx);
+            containers.get(idx).ok_or_else(|| {
+                tracing::error!("Agent not found in containers at index {}", idx);
+                (StatusCode::NOT_FOUND, "Agent not found".to_string())
+            })?
+        } else {
+            // Fallback: search by name for convenience
+            tracing::info!("ID not found, searching by name...");
+            if let Some(a) = containers.iter().find(|a| a.name == id) {
+                tracing::info!("Found agent by name '{}', ID: {}", a.name, &a.id[..16]);
+                a
+            } else {
+                tracing::warn!("Agent not found by ID or name: {}", id);
+                return Err((StatusCode::NOT_FOUND, format!("Agent '{}' not found. Use the agent's ID or name.", id)));
+            }
+        };
+
+        tracing::info!("Agent found: {} (status: {:?})", agent.name, agent.status);
+
+        if agent.status != AgentStatus::Running {
+            tracing::warn!("Agent {} is not running: {:?}", id, agent.status);
+            return Err((StatusCode::BAD_REQUEST, "Agent is not running".to_string()));
+        }
+
+        (agent.id.clone(), agent.name.clone(), agent.gateway_port)
     };
-
-    tracing::info!("Agent found: {} (status: {:?})", agent.name, agent.status);
-
-    if agent.status != AgentStatus::Running {
-        tracing::warn!("Agent {} is not running: {:?}", id, agent.status);
-        return Err((StatusCode::BAD_REQUEST, "Agent is not running".to_string()));
-    }
-
-    let agent_id = agent.id.clone();
-    let agent_name = agent.name.clone();
-    let gateway_port = agent.gateway_port;
-    drop(containers);
-    drop(index);
 
     tracing::info!("Upgrading WebSocket connection for agent '{}' (ID: {}, port: {})", agent_name, id, gateway_port);
     tracing::info!("Calling on_upgrade...");

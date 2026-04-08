@@ -351,8 +351,13 @@ impl ContainmentClient {
                     .or_insert_with(|| "http://host.containers.internal:11434".to_string());
             }
             LlmProvider::Lmstudio => {
-                env.entry("LMSTUDIO_HOST".to_string())
+                // LM Studio endpoint
+                env.entry("LMSTUDIO_ENDPOINT".to_string())
                     .or_insert_with(|| "http://host.containers.internal:1234".to_string());
+                // LM Studio API token (from agent config or orchestrator config)
+                if let Some(token) = config.env_vars.get("LM_API_TOKEN") {
+                    env.insert("LM_API_TOKEN".to_string(), token.clone());
+                }
             }
             _ => {}
         }

@@ -387,6 +387,17 @@ impl DockerClient {
                     env.push(format!("OLLAMA_ENDPOINT={}", endpoint));
                 }
             }
+            LlmProvider::Lmstudio => {
+                // LM Studio endpoint (default to host.containers.internal:1234)
+                let endpoint = config.env_vars.get("LMSTUDIO_ENDPOINT")
+                    .cloned()
+                    .unwrap_or_else(|| "http://host.containers.internal:1234".to_string());
+                env.push(format!("LMSTUDIO_ENDPOINT={}", endpoint));
+                // LM Studio API token for authentication
+                if let Some(token) = config.env_vars.get("LM_API_TOKEN") {
+                    env.push(format!("LM_API_TOKEN={}", token));
+                }
+            }
             _ => {}
         }
         // Pass provider and model to container
@@ -428,6 +439,8 @@ impl DockerClient {
                 && !key.starts_with("ZAI_API_KEY")
                 && !key.starts_with("HF_TOKEN")
                 && !key.starts_with("OLLAMA_ENDPOINT")
+                && !key.starts_with("LMSTUDIO_ENDPOINT")
+                && !key.starts_with("LM_API_TOKEN")
             {
                 env.push(format!("{}={}", key, value));
             }
@@ -737,7 +750,9 @@ impl ContainerRuntime for DockerClient {
         };
 
         // For Tailscale agents, mount the startup script
-        if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent {
+        // Skip for local images (openclaw-agent:local) which have their own entrypoint
+        let is_local_image = image.ends_with(":local") || image.ends_with(":no-tailscale");
+        if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent && !is_local_image {
             let script_path = format!("{}/tailscale-startup.sh", env!("CARGO_MANIFEST_DIR"));
             let mut bind_list = binds.unwrap_or_default();
             bind_list.push(format!("{}:/tmp/tailscale-startup.sh:ro", script_path));
@@ -754,13 +769,15 @@ impl ContainerRuntime for DockerClient {
             labels: Some(labels),
             exposed_ports: Some(exposed_ports),
             // For openclaw-agent with Tailscale, mount and run the startup script
-            cmd: if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent {
+            // Skip for local images which have their own entrypoint
+            cmd: if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent && !is_local_image {
                 Some(vec!["sh".to_string(), "/tmp/tailscale-startup.sh".to_string()])
             } else {
                 None
             },
             // Override entrypoint for Tailscale agents so our cmd runs directly
-            entrypoint: if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent {
+            // Skip for local images which have their own entrypoint
+            entrypoint: if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent && !is_local_image {
                 Some(vec!["".to_string()])  // Empty entrypoint to override image default
             } else {
                 None
@@ -782,7 +799,7 @@ impl ContainerRuntime for DockerClient {
                 // 2. Security options
                 // Note: Using seccomp=unconfined for compatibility with Docker Desktop on Windows
                 // Docker Desktop uses a Linux VM backend, so seccomp is actually supported
-                security_opt: if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent {
+                security_opt: if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent && !is_local_image {
                     // Relax security for Tailscale agents to allow package installation
                     Some(vec![
                         "seccomp=unconfined".to_string(),      // Disable seccomp filtering
@@ -796,12 +813,12 @@ impl ContainerRuntime for DockerClient {
 
                 // 3. Drop all capabilities, add only what is absolutely needed
                 // For Tailscale agents, keep more capabilities to allow package installation
-                cap_drop: if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent {
+                cap_drop: if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent && !is_local_image {
                     None  // Don't drop capabilities for Tailscale agents
                 } else {
                     Some(vec!["ALL".to_string()])
                 },
-                cap_add: if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent {
+                cap_add: if matches!(self.network_backend, NetworkBackend::Tailscale) && is_openclaw_agent && !is_local_image {
                     Some(vec![
                         "NET_BIND_SERVICE".to_string(),    // Allow binding ports
                         "NET_ADMIN".to_string(),           // Required for Tailscale
@@ -1143,6 +1160,16 @@ impl ExoClient {
             args.push(format!("HF_TOKEN={}", key));
         }
 
+        // LM Studio configuration
+        if let Some(endpoint) = config.env_vars.get("LMSTUDIO_ENDPOINT") {
+            args.push("-e".to_string());
+            args.push(format!("LMSTUDIO_ENDPOINT={}", endpoint));
+        }
+        if let Some(token) = config.env_vars.get("LM_API_TOKEN") {
+            args.push("-e".to_string());
+            args.push(format!("LM_API_TOKEN={}", token));
+        }
+
         // Pass provider and model
         args.push("-e".to_string());
         args.push(format!("LLM_PROVIDER={:?}", config.llm_provider));
@@ -1160,6 +1187,8 @@ impl ExoClient {
                 && !key.starts_with("ZAI_API_KEY")
                 && !key.starts_with("HF_TOKEN")
                 && !key.starts_with("OLLAMA_ENDPOINT")
+                && !key.starts_with("LMSTUDIO_ENDPOINT")
+                && !key.starts_with("LM_API_TOKEN")
             {
                 args.push("-e".to_string());
                 args.push(format!("{}={}", key, value));

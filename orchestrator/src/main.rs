@@ -5,6 +5,7 @@ mod auth;
 mod config;
 mod container;
 mod containment;
+mod inference;
 mod network;
 mod rpc;
 mod secret_manager;
@@ -60,6 +61,8 @@ pub struct AppState {
     pub workflows: std::sync::Arc<tokio::sync::RwLock<workflow::WorkflowRegistry>>,
     /// Workflow executor for running workflows
     pub executor: std::sync::Arc<executor::WorkflowExecutor>,
+    /// Native inference service manager (optional)
+    pub inference: Option<inference::InferenceManager>,
 }
 
 fn load_api_keys(data_dir: &std::path::Path) -> HashMap<String, String> {
@@ -132,6 +135,27 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("AndOR Bridge configured at {}", cfg.url);
         andor::AndorClient::new(cfg.clone())
     });
+
+    // Initialize native inference service if configured
+    let inference_manager = if let Some(inf_config) = &config.native_inference {
+        tracing::info!("Native inference configured with model: {}", inf_config.model_path);
+        let manager = inference::InferenceManager::new(inf_config.clone());
+
+        // Try to start the inference service
+        match manager.start().await {
+            Ok(()) => {
+                tracing::info!("Native inference service started on port {}", inf_config.port);
+                Some(manager)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to start native inference service: {}. The service will be unavailable.", e);
+                None
+            }
+        }
+    } else {
+        tracing::info!("Native inference not configured");
+        None
+    };
 
     // Connect to primary runtime (based on global config)
     let runtime = container::RuntimeClient::with_runtime(
@@ -279,6 +303,7 @@ async fn main() -> anyhow::Result<()> {
         rpc_client,
         workflows,
         executor,
+        inference: inference_manager,
     });
 
     // Create the protected API routes with auth middleware
@@ -386,6 +411,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/agents/import", post(api::import_agent))
         // Runtime status
         .route("/api/runtime/status", get(api::runtime_status))
+        // Native Inference Service
+        .route("/api/inference/status", get(api::inference_status))
+        .route("/api/inference/start", post(api::inference_start))
+        .route("/api/inference/stop", post(api::inference_stop))
         .route("/api/auth/refresh", post(auth::refresh));
 
     // Public routes (no auth required)

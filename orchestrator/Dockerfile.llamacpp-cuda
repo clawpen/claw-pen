@@ -1,0 +1,40 @@
+# llama.cpp CUDA server using official image
+FROM ghcr.io/ggerganov/llama.cpp:server-cuda
+
+RUN mkdir -p /app/models
+
+COPY <<EOF /app/run.sh
+#!/bin/sh
+MODEL_PATH="/app/models"
+HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-8080}"
+CTX_SIZE="${CTX_SIZE:-8192}"
+N_GPU_LAYERS="${N_GPU_LAYERS:-99}"
+
+# Find first .gguf file
+MODEL=$(find "$MODEL_PATH" -name "*.gguf" | head -1)
+
+if [ -z "$MODEL" ]; then
+    echo "Error: No .gguf model found in $MODEL_PATH"
+    sleep 3600
+fi
+
+echo "Loading model: $MODEL"
+echo "GPU layers: $N_GPU_LAYERS, Context: $CTX_SIZE"
+echo "Starting server on $HOST:$PORT"
+
+exec /llama.cpp/server \
+    --model "$MODEL" \
+    --host "$HOST" \
+    --port "$PORT" \
+    --ctx-size "$CTX_SIZE" \
+    --n-gpu-layers "$N_GPU_LAYERS" \
+    --metrics \
+    --port "$PORT"
+EOF
+
+RUN chmod +x /app/run.sh
+
+WORKDIR /app
+EXPOSE 8080
+CMD ["/app/run.sh"]

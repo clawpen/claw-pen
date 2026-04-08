@@ -1,0 +1,24 @@
+FROM openclaw-agent:latest
+
+# Install Tailscale
+RUN apt-get update && apt-get install -y curl ca-certificates && \
+    curl -fsSL https://tailscale.com/install.sh | sh && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create custom entrypoint that starts Tailscale before OpenClaw
+RUN echo '#!/bin/sh\n\
+echo "Starting Tailscale daemon..."\n\
+mkdir -p /var/lib/tailscale /var/run/tailscale\n\
+tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state >/var/log/tailscaled.log 2>&1 &\n\
+sleep 3\n\
+if [ -n "$TAILSCALE_AUTH_KEY" ]; then\n\
+  echo "Connecting to Tailscale network..."\n\
+  tailscale up --authkey="$TAILSCALE_AUTH_KEY" --accept-routes=true &\n\
+fi\n\
+sleep 5\n\
+echo "Tailscale started, now starting OpenClaw..."\n\
+# Execute original entrypoint\n\
+exec /entrypoint.sh "$@"\n' > /usr/local/bin/openclaw-tailscale-entry.sh && \
+    chmod +x /usr/local/bin/openclaw-tailscale-entry.sh
+
+ENTRYPOINT ["/usr/local/bin/openclaw-tailscale-entry.sh"]

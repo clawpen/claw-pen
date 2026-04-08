@@ -1,0 +1,49 @@
+{
+  "_comment": "Local Inference Agent Template for Claw Pen",
+  "_description": "Use this template to create agents that use local llama.cpp inference",
+  "_instructions": "Copy this file, update the fields marked with TODO, and POST to /api/agents",
+
+  "name": "local-llm-agent",
+  "llm_provider": "openai",
+  "llm_model": "gpt-4o",
+  "preset": "localinference",
+  "image": "openclaw-agent:local",
+
+  "env_vars": {
+    "_comment": "Local inference uses host.docker.internal to reach llama.cpp on the host",
+    "OPENAI_API_KEY": "local",
+    "OPENAI_BASE_URL": "http://host.docker.internal:8081/v1",
+    "PORT": "18790"
+  },
+
+  "_notes": {
+    "preset": "localinference - 4GB RAM, 2 CPU (optimized for 8B Q4 models)",
+    "image": "openclaw-agent:local - Docker image without Tailscale dependency",
+    "PORT": "Must be unique per agent, starts from 18790",
+    "OPENAI_BASE_URL": "Points to llama.cpp server on host (port 8081)"
+  }
+}
+
+/*
+ * USAGE EXAMPLE:
+ *
+ * 1. Create a new agent based on this template:
+ *    curl -X POST http://localhost:3001/api/agents \
+ *      -H "Authorization: Bearer YOUR_TOKEN" \
+ *      -H "Content-Type: application/json" \
+ *      -d @local-inference-agent.json
+ *
+ * 2. System Prompt Configuration:
+ *    The agent will use the system prompt from its role directory.
+ *    Place a HEARTBEAT.md or similar in the role volume for custom behavior.
+ *
+ * 3. Supported Local Models:
+ *    - Llama-3.3-8B-Instruct (Q4_K_M ~4.6GB)
+ *    - Llama-3.1-8B-Instruct (Q4_K_M ~4.6GB)
+ *    - Mistral-7B-Instruct (Q4_K_M ~4.3GB)
+ *
+ * 4. Performance Tips:
+ *    - Use RTX 3060 (12GB) or better for 8B Q4 models
+ *    - Set --ctx-size 8192 or higher for longer conversations
+ *    - Use --n-gpu-layers 99 to offload all layers to GPU
+ */

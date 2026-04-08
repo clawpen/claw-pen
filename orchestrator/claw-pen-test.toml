@@ -1,0 +1,13 @@
+# Test configuration for native inference integration
+
+deployment_mode = "windows-wsl"
+network_backend = "tailscale"
+container_runtime = "docker"
+
+# Native inference service configuration
+[native_inference]
+model_path = "F:/Models/qwen3.5-4b.gguf"
+port = 8765
+max_tokens = 4096
+temperature = 0.7
+top_p = 0.9

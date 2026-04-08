@@ -1,0 +1,40 @@
+FROM openclaw-agent:latest
+
+# Install Tailscale
+RUN apt-get update && apt-get install -y curl ca-certificates && \
+    curl -fsSL https://tailscale.com/install.sh | sh && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create startup script
+RUN echo '#!/bin/sh\n\
+echo "Starting Tailscale agent..."\n\
+tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state >/var/log/tailscaled.log 2>&1 &\n\
+sleep 3\n\
+if [ -n "$TAILSCALE_AUTH_KEY" ]; then\n\
+  echo "Connecting to Tailscale..."\n\
+  tailscale up --authkey="$TAILSCALE_AUTH_KEY" &\n\
+fi\n\
+sleep 5\n\
+echo "Configuring OpenClaw to bind to 0.0.0.0..."\n\
+mkdir -p /root/.openclaw\n\
+cat > /root/.openclaw/openclaw.json <<EOF\n\
+{\n\
+  "gateway": {\n\
+    "port": ${PORT:-18790},\n\
+    "mode": "local",\n\
+    "bind": "0.0.0.0",\n\
+    "auth": {"mode": "none"}\n\
+  },\n\
+  "agents": {\n\
+    "defaults": {\n\
+      "model": {\n\
+        "primary": "${LLM_PROVIDER:-ollama}/${LLM_MODEL:-llama3}"\n\
+      }\n\
+    }\n\
+  }\n\
+}\n\
+EOF\n\
+echo "Starting OpenClaw gateway..."\n\
+cd /agent && exec node /usr/local/lib/node_modules/openclaw/dist/index.js "$@"\n\
+' > /usr/local/bin/openclaw-tailscale-entry.sh && chmod +x /usr/local/bin/openclaw-tailscale-entry.sh\n\
+ENTRYPOINT ["/usr/local/bin/openclaw-tailscale-entry.sh"]

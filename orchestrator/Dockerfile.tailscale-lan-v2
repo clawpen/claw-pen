@@ -1,0 +1,53 @@
+FROM openclaw-agent:latest
+
+# Install Tailscale
+RUN apt-get update && apt-get install -y curl ca-certificates && \
+    curl -fsSL https://tailscale.com/install.sh | sh && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create custom entrypoint inline - runs OpenClaw directly with our config
+RUN echo '#!/bin/sh\n\
+set -e\n\
+echo "Starting Tailscale daemon..."\n\
+mkdir -p /var/lib/tailscale /var/run/tailscale\n\
+tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state >/var/log/tailscaled.log 2>&1 &\n\
+sleep 3\n\
+if [ -n "$TAILSCALE_AUTH_KEY" ]; then\n\
+  echo "Connecting to Tailscale network..."\n\
+  tailscale up --authkey="$TAILSCALE_AUTH_KEY" --accept-routes=true &\n\
+fi\n\
+sleep 8\n\
+echo "Configuring OpenClaw for lan mode..."\n\
+mkdir -p /root/.openclaw /root/.openclaw/workspace-dev\n\
+PORT=${PORT:-18790}\n\
+LLM_PROVIDER=${LLM_PROVIDER:-ollama}\n\
+LLM_MODEL=${LLM_MODEL:-llama3}\n\
+LLM_FULL="${LLM_PROVIDER}/${LLM_MODEL}"\n\
+cat > /root/.openclaw/openclaw.json <<EOF\n\
+{\n\
+  "gateway": {\n\
+    "port": ${PORT},\n\
+    "mode": "local",\n\
+    "bind": "lan",\n\
+    "auth": {"mode": "password", "password": "clawpen"}\n\
+  },\n\
+  "agents": {\n\
+    "defaults": {\n\
+      "model": {\n\
+        "primary": "${LLM_FULL}"\n\
+      }\n\
+    },\n\
+    "list": [{\n\
+      "id": "dev",\n\
+      "default": true,\n\
+      "workspace": "/root/.openclaw/workspace-dev",\n\
+      "identity": {"name": "Agent", "emoji": "🤖"},\n\
+      "model": {"primary": "${LLM_FULL}"}\n\
+    }]\n\
+  }\n\
+}\n\
+EOF\n\
+echo "Starting OpenClaw gateway on port ${PORT}..."\ncd /root && exec node /usr/local/lib/node_modules/openclaw/dist/index.js gateway\n' > /usr/local/bin/openclaw-tailscale-lan.sh && \
+    chmod +x /usr/local/bin/openclaw-tailscale-lan.sh
+
+ENTRYPOINT ["/usr/local/bin/openclaw-tailscale-lan.sh"]
