@@ -1,0 +1,127 @@
+# OpenClaw Agent image configured for Kimi (Moonshot) provider
+FROM openclaw-agent:custom
+
+# Update OpenClaw to latest version
+RUN npm install -g openclaw@latest 2>/dev/null || true
+
+# Create entrypoint that configures Kimi as a built-in provider
+RUN cat > /entrypoint-kimi.sh << 'SCRIPT' && chmod +x /entrypoint-kimi.sh
+#!/bin/sh
+set -e
+
+MODEL="${LLM_MODEL:-kimi-code}"
+PROVIDER="${LLM_PROVIDER:-kimi-code}"
+PORT="${PORT:-18790}"
+GATEWAY_PASSWORD="${GATEWAY_PASSWORD:-}"
+GATEWAY_TOKEN="${GATEWAY_TOKEN:-}"
+KIMI_API_KEY="${KIMI_API_KEY:-}"
+ORCHESTRATOR_DEVICE_ID="${ORCHESTRATOR_DEVICE_ID:-}"
+ORCHESTRATOR_PUBLIC_KEY="${ORCHESTRATOR_PUBLIC_KEY:-}"
+
+MODEL_ID="${PROVIDER}/${MODEL}"
+echo "[entrypoint] Provider: $PROVIDER, Model: $MODEL, Port: $PORT"
+echo "[entrypoint] Model ID: $MODEL_ID"
+echo "[entrypoint] KIMI_API_KEY: ${KIMI_API_KEY:+set (${#KIMI_API_KEY} chars)}"
+echo "[entrypoint] GATEWAY_TOKEN: ${GATEWAY_TOKEN:+set}"
+
+# Configure gateway auth
+if [ -n "$GATEWAY_TOKEN" ]; then
+  GATEWAY_AUTH="{\"mode\": \"token\", \"token\": \"${GATEWAY_TOKEN}\"}"
+elif [ -n "$GATEWAY_PASSWORD" ]; then
+  GATEWAY_AUTH="{\"mode\": \"password\", \"password\": \"${GATEWAY_PASSWORD}\"}"
+else
+  GATEWAY_AUTH="{\"mode\": \"none\"}"
+fi
+
+# Determine bind mode — use "loopback" for no-auth, "lan" for auth
+if [ -n "$GATEWAY_TOKEN" ] || [ -n "$GATEWAY_PASSWORD" ]; then
+  BIND_MODE="lan"
+else
+  BIND_MODE="loopback"
+fi
+
+# Write OpenClaw config
+rm -f /root/.openclaw/openclaw.json /root/.openclaw/openclaw.json.bak
+mkdir -p /root/.openclaw/agents/dev/agent
+
+cat > /root/.openclaw/openclaw.json << CONF
+{
+  "meta": {"lastTouchedVersion": "2026.4.14"},
+  "agents": {
+    "defaults": {
+      "workspace": "/root/.openclaw/workspace-dev",
+      "skipBootstrap": true,
+      "model": {"primary": "${MODEL_ID}"},
+      "llm": {"idleTimeoutSeconds": 0},
+      "timeoutSeconds": 600
+    },
+    "list": [{
+      "id": "dev",
+      "default": true,
+      "workspace": "/root/.openclaw/workspace-dev",
+      "identity": {"name": "Agent", "emoji": "🤖"},
+      "model": {"primary": "${MODEL_ID}"}
+    }]
+  },
+  "gateway": {
+    "mode": "local",
+    "bind": "${BIND_MODE}",
+    "auth": ${GATEWAY_AUTH},
+    "port": ${PORT},
+    "controlUi": {"allowedOrigins": ["*"]}
+  }
+}
+CONF
+
+# Write auth profiles with Kimi API key
+if [ -n "$KIMI_API_KEY" ]; then
+  cat > /root/.openclaw/agents/dev/agent/auth-profiles.json << AUTH
+{"version":1,"profiles":{"${PROVIDER}:default":{"type":"api_key","provider":"${PROVIDER}","key":"${KIMI_API_KEY}"}},"lastGood":{"${PROVIDER}":"${PROVIDER}:default"}}
+AUTH
+  echo "[entrypoint] Kimi API key configured"
+else
+  echo "[entrypoint] WARNING: No KIMI_API_KEY set!"
+fi
+
+# Pre-seed device pairing for orchestrator (grants full operator scopes)
+if [ -n "$ORCHESTRATOR_DEVICE_ID" ] && [ -n "$ORCHESTRATOR_PUBLIC_KEY" ]; then
+  mkdir -p /root/.openclaw/devices
+  NOW_MS=$(date +%s)000
+  DEVICE_TOKEN="${ORCHESTRATOR_DEVICE_TOKEN:-$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=')}"
+  cat > /root/.openclaw/devices/paired.json << PAIRED
+{
+  "${ORCHESTRATOR_DEVICE_ID}": {
+    "deviceId": "${ORCHESTRATOR_DEVICE_ID}",
+    "publicKey": "${ORCHESTRATOR_PUBLIC_KEY}",
+    "displayName": "Claw Pen Orchestrator",
+    "platform": "rust",
+    "deviceFamily": "Desktop",
+    "clientId": "cli",
+    "clientMode": "cli",
+    "role": "operator",
+    "roles": ["operator"],
+    "scopes": ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing"],
+    "approvedScopes": ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing"],
+    "tokens": {
+      "operator": {
+        "token": "${DEVICE_TOKEN}",
+        "role": "operator",
+        "scopes": ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing"],
+        "createdAtMs": ${NOW_MS}
+      }
+    },
+    "createdAtMs": ${NOW_MS},
+    "approvedAtMs": ${NOW_MS}
+  }
+}
+PAIRED
+  echo "[entrypoint] Orchestrator device pre-paired: ${ORCHESTRATOR_DEVICE_ID}"
+else
+  echo "[entrypoint] No ORCHESTRATOR_DEVICE_ID set, skipping device pre-pairing"
+fi
+
+echo "[entrypoint] Starting OpenClaw gateway (bind: ${BIND_MODE}, auth: $(echo $GATEWAY_AUTH | grep -o '"mode": "[^"]*"'))..."
+exec node /usr/local/lib/node_modules/openclaw/openclaw.mjs gateway run --dev --allow-unconfigured
+SCRIPT
+
+ENTRYPOINT ["/entrypoint-kimi.sh"]

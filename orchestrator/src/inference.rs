@@ -142,7 +142,7 @@ impl InferenceManager {
             "../inference/target/debug/claw-pen-inference",
             // Release build location
             "../inference/target/release/claw-pen-inference.exe",
-            "../inference/target/release/claw-pn-inference",
+            "../inference/target/release/claw-pen-inference",
             // Installed location
             "claw-pen-inference.exe",
             "claw-pen-inference",

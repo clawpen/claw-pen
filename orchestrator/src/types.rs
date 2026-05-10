@@ -231,6 +231,7 @@ pub struct UpdateAgentRequest {
     pub config: Option<PartialAgentConfig>,
     pub project: Option<String>,
     pub tags: Option<Vec<String>>,
+    pub image: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -831,4 +832,31 @@ pub struct SendMessageResponse {
     /// Error message if failed
     #[serde(default)]
     pub error: Option<String>,
+}
+
+// === Conversation Persistence ===
+
+/// A single message in a conversation (stored as one JSONL line)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationMessage {
+    pub id: String,
+    pub session_id: String,
+    /// "user", "assistant", or "system"
+    pub role: String,
+    pub content: String,
+    pub agent_id: String,
+    /// ISO 8601 timestamp
+    pub timestamp: String,
+    #[serde(default)]
+    pub metadata: HashMap<String, serde_json::Value>,
+}
+
+/// Summary of a conversation session
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationSession {
+    pub id: String,
+    pub agent_id: String,
+    pub created_at: String,
+    pub last_message_at: String,
+    pub message_count: u64,
 }

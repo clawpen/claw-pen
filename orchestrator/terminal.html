@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Claw Pen - Container Terminal</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a1a2e; color: #e0e0e0; font-family: monospace; height: 100vh; display: flex; flex-direction: column; }
+    #toolbar { background: #16213e; padding: 8px 16px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #0f3460; }
+    #toolbar h3 { color: #e94560; font-size: 14px; }
+    #toolbar select, #toolbar input, #toolbar button {
+      background: #0f3460; color: #e0e0e0; border: 1px solid #533483; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-size: 13px;
+    }
+    #toolbar button { cursor: pointer; background: #e94560; border-color: #e94560; color: white; font-weight: bold; }
+    #toolbar button:hover { background: #c73e54; }
+    #toolbar button.disconnect { background: #533483; border-color: #533483; }
+    #terminal-container { flex: 1; padding: 4px; }
+    #status { padding: 4px 16px; background: #16213e; font-size: 12px; border-top: 1px solid #0f3460; }
+    #status.connected { color: #4caf50; }
+    #status.disconnected { color: #e94560; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <h3>Claw Pen Terminal</h3>
+    <label>Agent:</label>
+    <select id="agent-select"><option value="">Loading...</option></select>
+    <label>Shell:</label>
+    <select id="shell-select">
+      <option value="/bin/sh">/bin/sh</option>
+      <option value="/bin/bash">/bin/bash</option>
+    </select>
+    <button id="connect-btn" onclick="connect()">Connect</button>
+    <button id="disconnect-btn" class="disconnect hidden" onclick="disconnect()">Disconnect</button>
+  </div>
+  <div id="terminal-container"></div>
+  <div id="status" class="disconnected">Disconnected</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+  <script>
+    const API_BASE = window.location.origin;
+    let token = localStorage.getItem('clawpen_token') || '';
+    let ws = null;
+    let term = null;
+    let fitAddon = null;
+
+    // Init terminal
+    function initTerminal() {
+      if (term) term.dispose();
+      term = new Terminal({
+        cursorBlink: true,
+        fontSize: 14,
+        fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+        theme: { background: '#1a1a2e', foreground: '#e0e0e0', cursor: '#e94560', selectionBackground: '#533483' }
+      });
+      fitAddon = new FitAddon.FitAddon();
+      term.loadAddon(fitAddon);
+      term.open(document.getElementById('terminal-container'));
+      fitAddon.fit();
+      term.writeln('\x1b[1;31mClaw Pen Terminal\x1b[0m');
+      term.writeln('Select an agent and click Connect.\r\n');
+    }
+
+    // Auth
+    async function ensureAuth() {
+      if (token) {
+        try {
+          const r = await fetch(`${API_BASE}/auth/status`);
+          if (r.ok) return true;
+        } catch {}
+      }
+      const password = prompt('Enter Claw Pen admin password:');
+      if (!password) return false;
+      try {
+        const r = await fetch(`${API_BASE}/auth/login`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+        if (r.ok) {
+          const data = await r.json();
+          token = data.access_token;
+          localStorage.setItem('clawpen_token', token);
+          return true;
+        }
+        alert('Login failed');
+      } catch (e) { alert('Auth error: ' + e.message); }
+      return false;
+    }
+
+    // Load agents
+    async function loadAgents() {
+      if (!await ensureAuth()) return;
+      try {
+        const r = await fetch(`${API_BASE}/api/agents`, { headers: { 'Authorization': `Bearer ${token}` } });
+        const agents = await r.json();
+        const sel = document.getElementById('agent-select');
+        sel.innerHTML = '<option value="">-- Select Agent --</option>';
+        agents.filter(a => a.status.toLowerCase() === 'running').forEach(a => {
+          sel.innerHTML += `<option value="${a.name}">${a.name} (${a.config.image || 'unknown'})</option>`;
+        });
+        if (agents.filter(a => a.status.toLowerCase() === 'running').length === 0) {
+          sel.innerHTML += '<option value="" disabled>No running agents</option>';
+        }
+      } catch (e) { console.error('Failed to load agents:', e); }
+    }
+
+    // Connect WebSocket terminal
+    function connect() {
+      const agentName = document.getElementById('agent-select').value;
+      if (!agentName) { alert('Select an agent first'); return; }
+      const shell = document.getElementById('shell-select').value;
+
+      if (ws) disconnect();
+      initTerminal();
+
+      const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${wsProto}//${window.location.host}/api/agents/${encodeURIComponent(agentName)}/terminal?token=${encodeURIComponent(token)}&cmd=${encodeURIComponent(shell)}`;
+
+      term.writeln(`Connecting to ${agentName}...\r\n`);
+      ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        setStatus('connected', `Connected to ${agentName}`);
+        document.getElementById('connect-btn').classList.add('hidden');
+        document.getElementById('disconnect-btn').classList.remove('hidden');
+        // Send initial terminal size
+        sendResize();
+        term.focus();
+      };
+
+      ws.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer) {
+          term.write(new Uint8Array(event.data));
+        } else {
+          term.write(event.data);
+        }
+      };
+
+      ws.onclose = () => {
+        setStatus('disconnected', 'Disconnected');
+        document.getElementById('connect-btn').classList.remove('hidden');
+        document.getElementById('disconnect-btn').classList.add('hidden');
+        term.writeln('\r\n\x1b[1;31m--- Session ended ---\x1b[0m');
+      };
+
+      ws.onerror = (e) => {
+        term.writeln('\r\n\x1b[1;31mConnection error\x1b[0m');
+      };
+
+      // Send terminal input to WebSocket
+      term.onData((data) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(data);
+        }
+      });
+    }
+
+    function sendResize() {
+      if (ws && ws.readyState === WebSocket.OPEN && term) {
+        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      }
+    }
+
+    function disconnect() {
+      if (ws) { ws.close(); ws = null; }
+    }
+
+    function setStatus(cls, text) {
+      const el = document.getElementById('status');
+      el.className = cls;
+      el.textContent = text;
+    }
+
+    window.addEventListener('resize', () => { if (fitAddon) { fitAddon.fit(); sendResize(); } });
+    initTerminal();
+    loadAgents();
+  </script>
+</body>
+</html>

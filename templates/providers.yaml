@@ -164,7 +164,7 @@ providers:
   moonshot:
     tier: popular
     name: "Moonshot (Kimi)"
-    description: "Kimi models with large context"
+    description: "Kimi K2 models with large context (Moonshot Open Platform key)"
     env_key: "MOONSHOT_API_KEY"
     auth_methods:
       - id: moonshot-api-key
@@ -172,21 +172,45 @@ providers:
     models:
       - id: "kimi-k2.5"
         name: "Kimi K2.5"
-        context: 256000
-        vision: false
+        context: 262144
+        vision: true
         reasoning: false
         recommended: true
       - id: "kimi-k2-thinking"
         name: "Kimi K2 Thinking"
-        context: 256000
+        context: 262144
         vision: false
         reasoning: true
       - id: "kimi-k2-thinking-turbo"
         name: "Kimi K2 Thinking Turbo"
-        context: 256000
+        context: 262144
         vision: false
         reasoning: true
+      - id: "kimi-k2-turbo"
+        name: "Kimi K2 Turbo"
+        context: 256000
+        vision: false
+        reasoning: false
     default_model: "kimi-k2.5"
+    notes: "Uses MOONSHOT_API_KEY — separate from Kimi Coding keys"
+
+  kimi-code:
+    tier: popular
+    name: "Kimi Coding"
+    description: "Code-focused Kimi model (Kimi Coding key)"
+    env_key: "KIMI_API_KEY"
+    auth_methods:
+      - id: kimi-code-api-key
+        name: "API Key"
+    models:
+      - id: "kimi-code"
+        name: "Kimi Code"
+        context: 262144
+        vision: false
+        reasoning: false
+        recommended: true
+    default_model: "kimi-code"
+    notes: "Uses KIMI_API_KEY — separate from Moonshot Open Platform keys"
 
   mistral:
     tier: popular
