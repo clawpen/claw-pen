@@ -132,7 +132,8 @@ impl IntoResponse for AuthError {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    /// Subject (user identifier) - "admin" for single-user mode
+    /// Subject (user identifier) - "admin" for single-user mode, otherwise the
+    /// user's UUID from the chat_db users table.
     pub sub: String,
     /// Issued at timestamp
     pub iat: i64,
@@ -141,6 +142,14 @@ pub struct Claims {
     /// Token type: "access" or "refresh"
     #[serde(rename = "type")]
     pub token_type: String,
+    /// User role: "student" | "teacher" | "observer" | "admin".
+    /// Optional for backward compatibility with pre-multi-user tokens; absent
+    /// means the legacy admin path (treat as full access).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Display name (cached in the token to save a DB lookup on the hot path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -349,6 +358,8 @@ impl AuthManager {
             iat: now,
             exp: now + expires_in_seconds,
             token_type: token_type.to_string(),
+            role: None,
+            display_name: None,
         };
 
         let token = encode(
@@ -358,6 +369,59 @@ impl AuthManager {
         )?;
 
         Ok(token)
+    }
+
+    /// Generate a JWT token for a specific multi-user account, with role
+    /// and display name cached in the claims so the hot path doesn't have
+    /// to hit the chat_db on every request.
+    pub fn generate_user_token(
+        &self,
+        user_id: &str,
+        role: &str,
+        display_name: Option<&str>,
+        token_type: &str,
+        expires_in_seconds: i64,
+    ) -> Result<String, AuthError> {
+        let now = Utc::now().timestamp();
+        let claims = Claims {
+            sub: user_id.to_string(),
+            iat: now,
+            exp: now + expires_in_seconds,
+            token_type: token_type.to_string(),
+            role: Some(role.to_string()),
+            display_name: display_name.map(|s| s.to_string()),
+        };
+
+        let token = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(&self.jwt_secret),
+        )?;
+
+        Ok(token)
+    }
+
+    /// Issue both access + refresh tokens for a multi-user login.
+    pub fn issue_user_tokens(
+        &self,
+        user_id: &str,
+        role: &str,
+        display_name: Option<&str>,
+    ) -> Result<TokenResponse, AuthError> {
+        let access_token = self.generate_user_token(
+            user_id, role, display_name, "access",
+            JWT_EXPIRATION_HOURS * 3600,
+        )?;
+        let refresh_token = self.generate_user_token(
+            user_id, role, display_name, "refresh",
+            REFRESH_TOKEN_EXPIRATION_DAYS * 24 * 3600,
+        )?;
+        Ok(TokenResponse {
+            access_token,
+            refresh_token,
+            token_type: "Bearer".to_string(),
+            expires_in: JWT_EXPIRATION_HOURS * 3600,
+        })
     }
 
     /// Validate a JWT token and return claims
@@ -424,6 +488,182 @@ pub struct RefreshRequest {
 pub async fn auth_status(State(state): State<Arc<AppState>>) -> Json<AuthStatus> {
     let auth = state.auth.read().await;
     Json(auth.status())
+}
+
+// === Multi-user auth (chat_db-backed) ===
+//
+// These handlers exist alongside the legacy admin login. Existing tokens
+// without a `role` claim still authenticate as admin (backward compatible).
+// New per-user tokens carry `role` + `display_name` claims.
+
+#[derive(Debug, Deserialize)]
+pub struct UserRegisterRequest {
+    pub username: String,
+    pub password: String,
+    pub display_name: Option<String>,
+    /// Defaults to "student" if absent. Only "admin" callers can create
+    /// "teacher" or "admin" roles; "student" / "observer" are open.
+    pub role: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UserLoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MeResponse {
+    pub user_id: String,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub role: String,
+}
+
+fn hash_password(password: &str) -> Result<String, AuthError> {
+    use argon2::{
+        password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
+        Argon2,
+    };
+    let salt = SaltString::generate(&mut OsRng);
+    Ok(Argon2::default()
+        .hash_password(password.as_bytes(), &salt)?
+        .to_string())
+}
+
+fn verify_password(password: &str, hash: &str) -> Result<bool, AuthError> {
+    use argon2::{
+        password_hash::{PasswordHash, PasswordVerifier},
+        Argon2,
+    };
+    let parsed = PasswordHash::new(hash)?;
+    Ok(Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
+}
+
+/// POST /auth/user/register
+///
+/// Open registration for `student` and `observer` roles. To create a teacher
+/// or admin, the caller must already authenticate as one (via Bearer token).
+pub async fn user_register(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<UserRegisterRequest>,
+) -> Result<Json<MeResponse>, AuthError> {
+    use crate::chat_db::{NewUser, UserRole};
+
+    let requested_role = UserRole::parse(req.role.as_deref().unwrap_or("student"));
+
+    // Privileged-role check: caller must be admin or teacher to mint those.
+    if matches!(requested_role, UserRole::Teacher | UserRole::Admin) {
+        let token = headers
+            .get("authorization")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "))
+            .ok_or(AuthError::InvalidToken)?;
+        let auth = state.auth.read().await;
+        let claims = auth.validate_token(token)?;
+        let caller_role = claims.role.as_deref().unwrap_or("admin"); // legacy = admin
+        if !matches!(caller_role, "admin" | "teacher") {
+            return Err(AuthError::InvalidCredentials);
+        }
+        // Only admin can mint admin
+        if requested_role == UserRole::Admin && caller_role != "admin" {
+            return Err(AuthError::InvalidCredentials);
+        }
+    }
+
+    if state.chat_db.get_user_by_username(&req.username)
+        .map_err(|_| AuthError::InvalidCredentials)?
+        .is_some()
+    {
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    if req.password.len() < 8 {
+        return Err(AuthError::InvalidCredentials);
+    }
+    let pw_hash = hash_password(&req.password)?;
+
+    let user_id = uuid::Uuid::new_v4().to_string();
+    let new_user = NewUser {
+        id: user_id.clone(),
+        username: req.username.clone(),
+        display_name: req.display_name.clone(),
+        password_hash: Some(pw_hash),
+        role: requested_role,
+        lti_subject: None,
+        lti_issuer: None,
+    };
+    state.chat_db.create_user(&new_user)
+        .map_err(|_| AuthError::InvalidCredentials)?;
+
+    Ok(Json(MeResponse {
+        user_id,
+        username: req.username,
+        display_name: req.display_name,
+        role: requested_role.as_str().to_string(),
+    }))
+}
+
+/// POST /auth/user/login
+pub async fn user_login(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<UserLoginRequest>,
+) -> Result<Json<TokenResponse>, AuthError> {
+    let user = state.chat_db.get_user_by_username(&req.username)
+        .map_err(|_| AuthError::InvalidCredentials)?
+        .ok_or(AuthError::InvalidCredentials)?;
+
+    let hash = user.password_hash.as_deref().ok_or(AuthError::InvalidCredentials)?;
+    if !verify_password(&req.password, hash)? {
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    let auth = state.auth.read().await;
+    auth.issue_user_tokens(
+        &user.id,
+        user.role.as_str(),
+        user.display_name.as_deref(),
+    )
+    .map(Json)
+}
+
+/// GET /api/me — return the calling user's profile (decoded from claims).
+pub async fn me(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<MeResponse>, AuthError> {
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or(AuthError::InvalidToken)?;
+    let auth = state.auth.read().await;
+    let claims = auth.validate_token(token)?;
+    drop(auth);
+
+    // Legacy admin token: no role claim → return synthetic admin.
+    let role = claims.role.clone().unwrap_or_else(|| "admin".to_string());
+    if claims.sub == "admin" || claims.role.is_none() {
+        return Ok(Json(MeResponse {
+            user_id: claims.sub,
+            username: "admin".to_string(),
+            display_name: claims.display_name,
+            role,
+        }));
+    }
+
+    // Multi-user token: look up the user.
+    let user = state.chat_db.get_user(&claims.sub)
+        .map_err(|_| AuthError::InvalidCredentials)?
+        .ok_or(AuthError::InvalidCredentials)?;
+
+    Ok(Json(MeResponse {
+        user_id: user.id,
+        username: user.username,
+        display_name: user.display_name,
+        role: user.role.as_str().to_string(),
+    }))
 }
 
 // === Middleware ===

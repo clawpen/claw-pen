@@ -1,5 +1,8 @@
 use std::collections::HashMap;
+mod agent_comms;
 mod andor;
+mod chat_db;
+mod direct_llm;
 mod api;
 mod auth;
 mod config;
@@ -63,6 +66,9 @@ pub struct AppState {
     pub executor: std::sync::Arc<executor::WorkflowExecutor>,
     /// Native inference service manager (optional)
     pub inference: Option<inference::InferenceManager>,
+    /// Chat database — users, classes, conversations, LTI mapping.
+    /// Message transcripts stay in JSONL; this holds metadata + indexes.
+    pub chat_db: std::sync::Arc<chat_db::ChatDb>,
 }
 
 fn load_api_keys(data_dir: &std::path::Path) -> HashMap<String, String> {
@@ -96,6 +102,130 @@ fn save_volumes(data_dir: &std::path::Path, volumes: &[types::Volume]) {
             tracing::error!("Failed to save volumes: {}", e);
         }
     }
+}
+
+/// Background task to sync container states with agent statuses
+/// This ensures that agents that have crashed or stopped are marked correctly
+async fn sync_container_states(state: &AppState) -> anyhow::Result<()> {
+    use crate::types::AgentStatus;
+
+    // Get actual container states from both runtimes (graceful if unavailable)
+    let mut runtime_containers = state.runtime.list_containers().await.unwrap_or_else(|e| {
+        tracing::debug!("Could not list containers during sync: {}", e);
+        Vec::new()
+    });
+    if let Ok(exo_containers) = state.exo_runtime.list_containers().await {
+        runtime_containers.extend(exo_containers);
+    }
+
+    // Map by container NAME since that's the common identifier
+    let runtime_map_by_name: std::collections::HashMap<String, AgentStatus> = runtime_containers
+        .iter()
+        .map(|c| (c.name.clone(), c.status.clone()))
+        .collect();
+
+    let mut containers = state.containers.write().await;
+    let mut has_changes = false;
+
+    for agent in containers.iter_mut() {
+        let actual_status = runtime_map_by_name.get(&agent.name);
+
+        match actual_status {
+            Some(AgentStatus::Stopped) | Some(AgentStatus::Error) => {
+                // Container exists but runtime reports stopped/error.
+                // For Exo, `ps` lies in rootless WSL — verify with a gateway TCP probe
+                // before downgrading. If the gateway answers, the agent is alive.
+                if agent.status == AgentStatus::Running {
+                    let gateway_alive = if agent.runtime.as_deref() == Some("exo") {
+                        let addr = format!("127.0.0.1:{}", agent.gateway_port);
+                        tokio::time::timeout(
+                            std::time::Duration::from_millis(300),
+                            tokio::net::TcpStream::connect(&addr),
+                        )
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok())
+                        .is_some()
+                    } else {
+                        false
+                    };
+
+                    if gateway_alive {
+                        tracing::debug!(
+                            "Agent {} runtime reports {:?} but gateway is reachable — keeping Running",
+                            agent.name,
+                            actual_status
+                        );
+                    } else {
+                        tracing::warn!(
+                            "Agent {} was marked as running but container is actually {:?}",
+                            agent.name,
+                            actual_status
+                        );
+                        agent.status = actual_status.map(|s| s.clone()).unwrap_or(AgentStatus::Error);
+                        has_changes = true;
+                    }
+                }
+            }
+            Some(AgentStatus::Running) => {
+                // Container is running - update if we thought it was stopped
+                if agent.status != AgentStatus::Running {
+                    tracing::info!(
+                        "Agent {} container is running, updating status from {:?}",
+                        agent.name,
+                        agent.status
+                    );
+                    agent.status = AgentStatus::Running;
+                    has_changes = true;
+                }
+            }
+            Some(AgentStatus::Starting) | Some(AgentStatus::Stopping) => {
+                // Container is in transition state - treat as running
+                if agent.status != AgentStatus::Running && agent.status != AgentStatus::Starting {
+                    agent.status = AgentStatus::Starting;
+                    has_changes = true;
+                }
+            }
+            None => {
+                // Container doesn't exist in any runtime — but direct-runtime
+                // agents have no container by design, so leave them alone.
+                if agent.runtime.as_deref() == Some("direct") {
+                    // direct agents are Running iff start_agent set them so;
+                    // there's nothing for the reconciler to verify here.
+                } else if agent.status == AgentStatus::Running || agent.status == AgentStatus::Starting {
+                    tracing::warn!(
+                        "Agent {} was marked as running but container not found",
+                        agent.name
+                    );
+                    agent.status = AgentStatus::Stopped;
+                    has_changes = true;
+                }
+            }
+        }
+    }
+
+    // Rebuild agent index if there were changes
+    if has_changes {
+        let agent_index: std::collections::HashMap<String, usize> = containers
+            .iter()
+            .enumerate()
+            .map(|(idx, agent)| (agent.id.clone(), idx))
+            .collect();
+
+        // Update the index
+        let mut index = state.agent_index.write().await;
+        *index = agent_index;
+        drop(index);
+
+        // Persist changes
+        for agent in containers.iter() {
+            if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
+                tracing::warn!("Failed to persist agent status for {}: {}", agent.name, e);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -202,8 +332,11 @@ async fn main() -> anyhow::Result<()> {
     let stored_agents = storage::load_agents().unwrap_or_default();
     tracing::info!("Loaded {} persisted agents", stored_agents.len());
 
-    // Get runtime containers to update status
-    let runtime_containers = runtime.list_containers().await?;
+    // Get runtime containers to update status (graceful fallback if Docker is unavailable)
+    let runtime_containers = runtime.list_containers().await.unwrap_or_else(|e| {
+        tracing::warn!("Could not list containers (Docker may not be running): {}", e);
+        Vec::new()
+    });
     let runtime_ids: std::collections::HashSet<String> =
         runtime_containers.iter().map(|c| c.id.clone()).collect();
 
@@ -284,6 +417,14 @@ async fn main() -> anyhow::Result<()> {
     ));
     tracing::info!("Workflow executor initialized");
 
+    // Open chat DB — stored alongside the existing data files.
+    let chat_db_path = data_dir.join("chat.db");
+    let chat_db = std::sync::Arc::new(
+        chat_db::ChatDb::open(&chat_db_path)
+            .expect("failed to open chat database"),
+    );
+    tracing::info!("Chat database initialized at {:?}", chat_db_path);
+
     let state = Arc::new(AppState {
         config,
         containers: containers_arc,
@@ -304,6 +445,7 @@ async fn main() -> anyhow::Result<()> {
         workflows,
         executor,
         inference: inference_manager,
+        chat_db,
     });
 
     // Create the protected API routes with auth middleware
@@ -354,6 +496,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/agents/:id/exec",
             post(api::exec_agent),
         )
+        .route(
+            "/api/agents/:id/terminal",
+            get(api::terminal_websocket),
+        )
         .route("/api/agents", get(api::list_agents).post(api::create_agent))
         // Batch operations
         .route("/api/agents/start-all", post(api::start_all))
@@ -363,6 +509,18 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/agents/tailscale", get(api::list_agents_with_tailscale))
         .route("/api/discovery/trigger", post(api::trigger_discovery))
         .route("/api/services/registry", get(api::get_service_registry))
+        // Conversation History
+        .route("/api/agents/:id/sessions", get(api::list_agent_sessions))
+        .route("/api/agents/:id/sessions/:session_id", get(api::get_session_messages))
+        // Agent RBAC assignments (admin/teacher only)
+        .route(
+            "/api/agents/:id/assignments",
+            get(api::list_agent_assignments).post(api::assign_agent_user),
+        )
+        .route(
+            "/api/agents/:id/assignments/:user_id",
+            delete(api::unassign_agent_user),
+        )
         // Agent-to-Agent Communication
         .route("/api/agents/:id/send", post(api::send_message))
         .route("/api/agents/:id/messages", get(api::get_agent_messages))
@@ -372,6 +530,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/system/stats", get(api::get_system_stats))
         // Templates
         .route("/api/templates", get(api::list_templates))
+        // Tags
+        .route("/api/tags", get(api::list_tags))
         // API Keys
         .route("/api/keys", get(api::list_api_keys).post(api::set_api_key))
         .route("/api/keys/:provider", delete(api::delete_api_key))
@@ -420,9 +580,14 @@ async fn main() -> anyhow::Result<()> {
     // Public routes (no auth required)
     let public_routes = Router::new()
         .route("/health", get(api::health))
+        .route("/terminal", get(api::terminal_page))
         .route("/auth/login", post(auth::login))
         .route("/auth/register", post(auth::register))
         .route("/auth/status", get(auth::auth_status))
+        // Multi-user auth (chat_db-backed). Coexists with the legacy admin path.
+        .route("/auth/user/register", post(auth::user_register))
+        .route("/auth/user/login", post(auth::user_login))
+        .route("/api/me", get(auth::me))
         // WebSocket chat routes (handle their own auth via query parameter)
         .route("/api/agents/:id/chat", get(api::chat_websocket))
         .route("/api/teams/:id/chat", get(api::team_chat_websocket));
@@ -466,6 +631,10 @@ async fn main() -> anyhow::Result<()> {
         .allow_credentials(true)
         .max_age(std::time::Duration::from_secs(86400));
 
+    // Clone state for background task and shutdown handler
+    let state_clone = state.clone();
+    let state_shutdown = state.clone();
+
     let app = Router::new()
         .merge(public_routes)
         .merge(protected_routes)
@@ -478,8 +647,30 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("   GET /auth/status to check auth configuration");
     tracing::info!("   POST /auth/login to authenticate");
 
+    // Spawn background task to sync container states every 10 seconds
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+            if let Err(e) = sync_container_states(&state_clone).await {
+                tracing::warn!("Failed to sync container states: {}", e);
+            }
+        }
+    });
+
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            tokio::signal::ctrl_c().await.ok();
+            tracing::info!("Shutdown signal received, cleaning up...");
+            if let Some(ref inference) = state_shutdown.inference {
+                tracing::info!("Stopping native inference service...");
+                if let Err(e) = inference.stop().await {
+                    tracing::warn!("Error stopping inference service: {}", e);
+                }
+            }
+        })
+        .await?;
 
     Ok(())
 }

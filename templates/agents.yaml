@@ -156,25 +156,24 @@ templates:
 
   kimi:
     name: "Kimi (Moonshot AI)"
-    description: "Long-context Chinese/English assistant (OAuth)"
+    description: "Kimi Coding assistant via Moonshot AI"
     identity:
-      role: "Bilingual Assistant"
+      role: "Coding Assistant"
       personality: "Articulate, context-aware"
       expertise:
-        - translation
+        - coding
         - long-context
-        - chinese
-        - english
+        - analysis
       system_prompt: |
         You are {{name}}, a {{role}}.
         Your personality: {{personality}}
         You specialize in: {{expertise}}
 
-        Provide thoughtful responses in Chinese or English.
+        Provide thoughtful, well-structured responses.
         Leverage your long context window to remember details.
     config:
       llm_provider: kimi
-      llm_model: moonshot-v1-128k
+      llm_model: kimi-code
       memory_mb: 2048
       cpu_cores: 1.0
 
@@ -199,7 +198,7 @@ templates:
 
   openclaw-agent:
     name: "OpenClaw Agent"
-    description: "Full OpenClaw instance with built-in AndOR Bridge chat - custom image with Zai GLM-5"
+    description: "Full OpenClaw instance with built-in AndOR Bridge chat"
     identity:
       role: "Advanced AI Agent"
       personality: "Capable, versatile, secure"
@@ -219,7 +218,6 @@ templates:
       llm_model: glm-5
       memory_mb: 2048
       cpu_cores: 2.0
-      image: openclaw-agent:latest
 
   tutor-box:
     name: "Tutor Box"

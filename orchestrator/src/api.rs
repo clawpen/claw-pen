@@ -81,6 +81,14 @@ pub async fn health() -> &'static str {
     "OK"
 }
 
+/// Serve the embedded terminal HTML page
+pub async fn terminal_page() -> Response {
+    Response::builder()
+        .header("Content-Type", "text/html; charset=utf-8")
+        .body(Body::from(include_str!("../terminal.html")))
+        .unwrap()
+}
+
 // === Agents ===
 
 pub async fn list_agents(
@@ -124,6 +132,31 @@ pub async fn list_agents(
     Json(filtered)
 }
 
+/// A tag with its usage count, returned by `GET /api/tags`
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TagInfo {
+    pub tag: String,
+    pub count: u32,
+}
+
+/// List all tags in use across agents, sorted by frequency (most used first).
+/// Used by the agent-creation UI for tag autocomplete suggestions.
+pub async fn list_tags(State(state): State<Arc<AppState>>) -> Json<Vec<TagInfo>> {
+    let containers = state.containers.read().await;
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    for c in containers.iter() {
+        for tag in &c.tags {
+            *counts.entry(tag.clone()).or_insert(0) += 1;
+        }
+    }
+    let mut tags: Vec<TagInfo> = counts
+        .into_iter()
+        .map(|(tag, count)| TagInfo { tag, count })
+        .collect();
+    tags.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.tag.cmp(&b.tag)));
+    Json(tags)
+}
+
 pub async fn create_agent(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateAgentRequest>,
@@ -152,10 +185,10 @@ pub async fn create_agent(
     // Validate runtime if provided
     let runtime = req.runtime.as_ref().map(|r| r.to_lowercase());
     if let Some(ref rt) = runtime {
-        if rt != "docker" && rt != "exo" {
+        if rt != "docker" && rt != "exo" && rt != "direct" {
             return Err((
                 StatusCode::BAD_REQUEST,
-                format!("Invalid runtime '{}'. Must be 'docker' or 'exo'.", rt),
+                format!("Invalid runtime '{}'. Must be 'docker', 'exo', or 'direct'.", rt),
             ));
         }
     }
@@ -381,7 +414,7 @@ pub async fn create_agent(
         LlmProvider::Anthropic => "ANTHROPIC_API_KEY",
         LlmProvider::OpenAI => "OPENAI_API_KEY",
         LlmProvider::Kimi => "KIMI_API_KEY",
-        LlmProvider::KimiCode => "KIMI_CODE_API_KEY",
+        LlmProvider::KimiCode => "KIMI_API_KEY",
         LlmProvider::Gemini => "GOOGLE_API_KEY",
         LlmProvider::Access => "ACCESS_API_KEY",
         LlmProvider::Huggingface => "HF_TOKEN",
@@ -412,7 +445,16 @@ pub async fn create_agent(
     // Setup persistent data volume for this agent
     // This must be done before creating the container
     let agent_name_for_volume = req.name.clone();
-    if let Err(e) = setup_persistent_data_volume(&agent_name_for_volume, "", &mut config).await {
+    let starter_prompt = req.template.as_ref()
+        .and_then(|name| state.templates.get(name))
+        .and_then(|t| t.identity.as_ref())
+        .and_then(|id| id.system_prompt.clone());
+    if let Err(e) = setup_persistent_data_volume(
+        &agent_name_for_volume,
+        "",
+        &mut config,
+        starter_prompt.as_deref(),
+    ).await {
         tracing::warn!("Failed to setup persistent data volume: {}", e);
         // Continue anyway - this is not critical
     }
@@ -425,7 +467,10 @@ pub async fn create_agent(
     });
 
     // Get the appropriate runtime client based on agent's runtime preference
-    let id = if let Some(ref rt) = agent_runtime {
+    let id = if agent_runtime.as_deref() == Some("direct") {
+        // Direct backend has no container; the agent ID is just the name.
+        req.name.clone()
+    } else if let Some(ref rt) = agent_runtime {
         if rt == "exo" {
             // Use exo-specific runtime if available
             state
@@ -540,6 +585,9 @@ pub async fn update_agent(
     }
     if let Some(ref partial) = req.config {
         agent.config.apply(partial);
+    }
+    if let Some(image) = req.image {
+        agent.config.image = Some(image);
     }
 
     // Persist to storage
@@ -656,6 +704,15 @@ pub async fn start_agent(
         .find(|a| a.id == id)
         .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
 
+    // Direct backend has no container — just flip status to Running.
+    if agent.runtime.as_deref() == Some("direct") {
+        agent.status = AgentStatus::Running;
+        if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
+            tracing::warn!("Failed to persist direct agent status: {}", e);
+        }
+        return Ok(Json(agent.clone()));
+    }
+
     // Choose the right runtime based on agent's runtime setting
     let runtime: &dyn ContainerRuntime = if agent.runtime.as_deref() == Some("exo") {
         &state.exo_runtime
@@ -675,7 +732,7 @@ pub async fn start_agent(
             LlmProvider::Anthropic => "ANTHROPIC_API_KEY",
             LlmProvider::OpenAI => "OPENAI_API_KEY",
             LlmProvider::Kimi => "KIMI_API_KEY",
-            LlmProvider::KimiCode => "KIMI_CODE_API_KEY",
+            LlmProvider::KimiCode => "KIMI_API_KEY",
             LlmProvider::Gemini => "GOOGLE_API_KEY",
             LlmProvider::Access => "ACCESS_API_KEY",
             LlmProvider::Huggingface => "HF_TOKEN",
@@ -726,6 +783,45 @@ pub async fn start_agent(
         .start_container(&agent.name)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Verify the container is actually running (not just started).
+    // For Exo we probe the agent's known gateway port directly — exo's `ps`
+    // view of state is unreliable in rootless WSL, and ExoClient::health_check
+    // doesn't know each agent's specific port. Docker still uses runtime probe.
+    // 30s budget: Docker is fast (~2s); Exo with plugin staging on cold start
+    // can take 20-25s the first time the runtime deps need to settle.
+    let health_ok = if agent.runtime.as_deref() == Some("exo") {
+        let port = agent.gateway_port;
+        // Exo cold start with plugin install can take ~45s the first time;
+        // 90s gives headroom for slower hardware.
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(90);
+        let mut ok = false;
+        while tokio::time::Instant::now() < deadline {
+            let probe = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port));
+            if let Ok(Ok(_)) = tokio::time::timeout(
+                tokio::time::Duration::from_millis(300), probe
+            ).await {
+                tracing::info!("Exo health probe: agent {} gateway reachable on port {}", agent.name, port);
+                ok = true;
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+        ok
+    } else {
+        tokio::time::timeout(
+            tokio::time::Duration::from_secs(30),
+            runtime.health_check(&agent.name)
+        )
+        .await
+        .unwrap_or(Ok(false))
+        .unwrap_or(false)
+    };
+
+    if !health_ok {
+        tracing::error!("Agent {} started but health check failed - container may have crashed", agent.name);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Agent {} failed to start - health check failed", agent.name)));
+    }
 
     agent.status = AgentStatus::Running;
 
@@ -927,6 +1023,165 @@ async fn handle_logs_stream(mut socket: WebSocket, state: Arc<AppState>, id: Str
             break;
         }
     }
+}
+
+// === Interactive Terminal (WebSocket exec) ===
+
+/// WebSocket-based interactive terminal for container exec.
+/// Connects a browser terminal (xterm.js) to a shell inside the container.
+///
+/// Query params: `?token=<jwt>&cmd=<shell>` (cmd defaults to /bin/sh)
+pub async fn terminal_websocket(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, (StatusCode, String)> {
+    // Validate JWT
+    let token = params.get("token").ok_or((
+        StatusCode::UNAUTHORIZED,
+        "Missing authentication token".to_string(),
+    ))?;
+    let auth = state.auth.read().await;
+    auth.validate_token(token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {}", e)))?;
+    drop(auth);
+
+    // Check agent exists and is running
+    let containers = state.containers.read().await;
+    let agent = containers
+        .iter()
+        .find(|c| c.id == id || c.name == id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
+    let container_id = agent.name.clone();
+    drop(containers);
+
+    let shell = params.get("cmd").cloned().unwrap_or_else(|| "/bin/sh".to_string());
+
+    Ok(ws.on_upgrade(move |socket| handle_terminal_stream(socket, container_id, shell)))
+}
+
+async fn handle_terminal_stream(mut socket: WebSocket, container_id: String, shell: String) {
+    use axum::extract::ws::Message;
+    use bollard::exec::{CreateExecOptions, ResizeExecOptions, StartExecResults};
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt as _;
+
+    // Connect to Docker
+    let docker = match bollard::Docker::connect_with_named_pipe_defaults() {
+        Ok(d) => d,
+        Err(_) => match bollard::Docker::connect_with_local_defaults() {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("Failed to connect to Docker for terminal: {}", e);
+                let _ = socket.send(Message::Text(format!("\r\nError: cannot connect to Docker: {}\r\n", e))).await;
+                return;
+            }
+        },
+    };
+
+    // Create exec with stdin attached and interactive TTY
+    let exec_opts = CreateExecOptions {
+        cmd: Some(vec![shell]),
+        attach_stdin: Some(true),
+        attach_stdout: Some(true),
+        attach_stderr: Some(true),
+        tty: Some(true),
+        ..Default::default()
+    };
+
+    let exec = match docker.create_exec(&container_id, exec_opts).await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::error!("Failed to create exec: {}", e);
+            let _ = socket.send(Message::Text(format!("\r\nError: exec failed: {}\r\n", e))).await;
+            return;
+        }
+    };
+
+    let exec_result = match docker.start_exec(&exec.id, Some(bollard::exec::StartExecOptions { detach: false, ..Default::default() })).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("Failed to start exec: {}", e);
+            let _ = socket.send(Message::Text(format!("\r\nError: start exec failed: {}\r\n", e))).await;
+            return;
+        }
+    };
+
+    let (mut docker_output, mut docker_input) = match exec_result {
+        StartExecResults::Attached { output, input } => (output, input),
+        StartExecResults::Detached => {
+            tracing::error!("Exec started in detached mode");
+            return;
+        }
+    };
+
+    let exec_id = exec.id.clone();
+
+    // Single select loop: forward data both directions
+    loop {
+        tokio::select! {
+            // Docker -> WebSocket
+            docker_msg = docker_output.next() => {
+                match docker_msg {
+                    Some(Ok(output)) => {
+                        let data = output.into_bytes().to_vec();
+                        if socket.send(Message::Binary(data)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Err(e)) => {
+                        tracing::debug!("Docker output error: {}", e);
+                        break;
+                    }
+                    None => {
+                        // Docker stream ended (shell exited)
+                        let _ = socket.send(Message::Text("\r\n[shell exited]\r\n".into())).await;
+                        break;
+                    }
+                }
+            }
+            // WebSocket -> Docker stdin
+            ws_msg = socket.recv() => {
+                match ws_msg {
+                    Some(Ok(Message::Text(text))) => {
+                        // Check for resize control message
+                        if let Ok(ctrl) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if ctrl.get("type").and_then(|t| t.as_str()) == Some("resize") {
+                                let cols = ctrl.get("cols").and_then(|c| c.as_u64()).unwrap_or(80) as u16;
+                                let rows = ctrl.get("rows").and_then(|r| r.as_u64()).unwrap_or(24) as u16;
+                                let _ = docker.resize_exec(&exec_id, ResizeExecOptions {
+                                    height: rows,
+                                    width: cols,
+                                }).await;
+                                continue;
+                            }
+                        }
+                        // Regular text input
+                        if docker_input.write_all(text.as_bytes()).await.is_err() {
+                            break;
+                        }
+                        let _ = docker_input.flush().await;
+                    }
+                    Some(Ok(Message::Binary(data))) => {
+                        if docker_input.write_all(&data).await.is_err() {
+                            break;
+                        }
+                        let _ = docker_input.flush().await;
+                    }
+                    Some(Ok(Message::Close(_))) | None => {
+                        break;
+                    }
+                    Some(Err(_)) => {
+                        break;
+                    }
+                    _ => {} // Ping/Pong handled by axum
+                }
+            }
+        }
+    }
+
+    let _ = socket.send(Message::Close(None)).await;
 }
 
 // === Metrics ===
@@ -1513,7 +1768,7 @@ pub async fn chat_websocket(
     ))?;
 
     let auth = state.auth.read().await;
-    let _claims = auth
+    let claims = auth
         .validate_token(token)
         .map_err(|e| {
             tracing::warn!("Token validation failed: {}", e);
@@ -1522,20 +1777,30 @@ pub async fn chat_websocket(
     drop(auth);
     tracing::info!("Token validated successfully");
 
+    let caller_role = claims.role.as_deref().unwrap_or("admin"); // legacy = admin
+    let caller_user_id = claims.sub.clone();
+
     // Check if agent exists and is running
     // First try direct ID lookup, then fallback to name search for convenience
     tracing::info!("Looking up agent '{}'...", id);
 
-    let (agent_id, agent_name, gateway_port) = {
+    let (agent_id, agent_name, gateway_port, runtime) = {
         let index = state.agent_index.read().await;
         let containers = state.containers.read().await;
 
-        let agent = if let Some(&idx) = index.get(&id) {
-            tracing::info!("Found agent by ID at index {}", idx);
-            containers.get(idx).ok_or_else(|| {
-                tracing::error!("Agent not found in containers at index {}", idx);
-                (StatusCode::NOT_FOUND, "Agent not found".to_string())
-            })?
+        // Try indexed lookup first, but fall back to scan if the index is
+        // stale (delete_agent doesn't currently rebuild it).
+        let indexed = index.get(&id).copied().and_then(|idx| {
+            // Verify the index still points at this id (off-by-one after delete)
+            containers.get(idx).filter(|c| c.id == id || c.name == id)
+        });
+
+        let agent = if let Some(a) = indexed {
+            tracing::info!("Found agent via index");
+            a
+        } else if let Some(a) = containers.iter().find(|c| c.id == id) {
+            tracing::info!("Found agent by ID scan: {}", a.name);
+            a
         } else {
             // Fallback: search by name for convenience
             tracing::info!("ID not found, searching by name...");
@@ -1550,19 +1815,83 @@ pub async fn chat_websocket(
 
         tracing::info!("Agent found: {} (status: {:?})", agent.name, agent.status);
 
-        if agent.status != AgentStatus::Running {
-            tracing::warn!("Agent {} is not running: {:?}", id, agent.status);
-            return Err((StatusCode::BAD_REQUEST, "Agent is not running".to_string()));
+        // Don't gate on cached status — the reconciler can flip Exo agents to
+        // Error based on `exo ps` while the gateway is actually alive (rootless
+        // WSL cgroup tracking is unreliable). Stopped is the only definitive
+        // negative; anything else, attempt the connection and let the gateway
+        // probe in connect_to_agent decide.
+        if agent.status == AgentStatus::Stopped {
+            tracing::warn!("Agent {} is stopped — start it first", id);
+            return Err((StatusCode::BAD_REQUEST, "Agent is stopped".to_string()));
         }
 
-        (agent.id.clone(), agent.name.clone(), agent.gateway_port)
+        (agent.id.clone(), agent.name.clone(), agent.gateway_port, agent.runtime.clone())
     };
 
-    tracing::info!("Upgrading WebSocket connection for agent '{}' (ID: {}, port: {})", agent_name, id, gateway_port);
-    tracing::info!("Calling on_upgrade...");
+    // RBAC: admin (and legacy tokens with no role claim) bypass.
+    // Otherwise require an assignment that permits chat. Agents with no
+    // assignments configured are admin-only by default — backward compat
+    // for the single-user era.
+    if caller_role != "admin" {
+        let unassigned = state
+            .chat_db
+            .agent_is_unassigned(&agent_id)
+            .unwrap_or(true);
+        if unassigned {
+            tracing::warn!(
+                "User {} blocked from {}: agent has no assignments (admin-only)",
+                caller_user_id, agent_id
+            );
+            return Err((
+                StatusCode::FORBIDDEN,
+                "Agent is admin-only (no assignments configured)".to_string(),
+            ));
+        }
+        let assignment = state
+            .chat_db
+            .get_assignment(&agent_id, &caller_user_id)
+            .unwrap_or(None);
+        match assignment {
+            Some(role) if role.can_chat() => {
+                tracing::info!(
+                    "User {} authorized for agent {} as {}",
+                    caller_user_id, agent_id, role.as_str()
+                );
+            }
+            _ => {
+                tracing::warn!(
+                    "User {} not authorized to chat with agent {}",
+                    caller_user_id, agent_id
+                );
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    "Not authorized for this agent".to_string(),
+                ));
+            }
+        }
+    }
 
-    let response = ws.on_upgrade(move |socket| handle_chat_stream(socket, state, agent_id, gateway_port));
-    tracing::info!("on_upgrade called, returning response");
+    // Session ID: explicit `?session=` from client wins, otherwise default to
+    // a stable per-agent session so reconnects continue the same conversation.
+    // Tauri client doesn't currently send the param, which is what we want —
+    // the agent "remembers" you across browser closes / restarts.
+    let session_id = params.get("session").cloned()
+        .unwrap_or_else(|| format!("default-{}", agent_id));
+
+    tracing::info!(
+        "Upgrading WebSocket connection for agent '{}' (ID: {}, port: {}, session: {}, runtime: {:?})",
+        agent_name, id, gateway_port, session_id, runtime
+    );
+
+    // Direct backend bypasses openclaw entirely.
+    if runtime.as_deref() == Some("direct") {
+        let response = ws.on_upgrade(move |socket| {
+            crate::direct_llm::handle_direct_chat(socket, state, agent_id, agent_name, session_id)
+        });
+        return Ok(response);
+    }
+
+    let response = ws.on_upgrade(move |socket| handle_chat_stream(socket, state, agent_id, agent_name, gateway_port, session_id));
 
     Ok(response)
 }
@@ -1614,36 +1943,154 @@ async fn get_container_ip(state: &Arc<AppState>, container_id: &str) -> anyhow::
     Err(anyhow::anyhow!("No IP address found for container"))
 }
 
-async fn handle_chat_stream(socket: WebSocket, state: Arc<AppState>, agent_id: String, gateway_port: u16) {
+/// Load or create Ed25519 device keys for OpenClaw device pairing.
+/// Keys are stored in ~/.openclaw/claw-pen-orchestrator-device.json
+pub fn load_or_create_device_keys() -> anyhow::Result<(ed25519_dalek::SigningKey, String)> {
+    use base64::Engine;
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let path = home.join(".openclaw").join("claw-pen-orchestrator-device.json");
+
+    if path.exists() {
+        let data = std::fs::read_to_string(&path)?;
+        let keys: serde_json::Value = serde_json::from_str(&data)?;
+        let private_key_b64 = keys["privateKey"].as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing privateKey"))?;
+        let private_key_bytes = base64::engine::general_purpose::STANDARD.decode(private_key_b64)?;
+        let bytes: [u8; 32] = private_key_bytes.try_into()
+            .map_err(|_| anyhow::anyhow!("Invalid key length"))?;
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&bytes);
+        let device_id = keys["deviceId"].as_str().unwrap_or("unknown").to_string();
+        return Ok((signing_key, device_id));
+    }
+
+    let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+    let verifying_key = signing_key.verifying_key();
+    let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
+    sha2::Digest::update(&mut hasher, verifying_key.to_bytes());
+    let device_id = hex::encode(sha2::Digest::finalize(hasher));
+
+    let keys_json = serde_json::json!({
+        "privateKey": base64::engine::general_purpose::STANDARD.encode(signing_key.to_bytes()),
+        "publicKey": base64::engine::general_purpose::STANDARD.encode(verifying_key.to_bytes()),
+        "deviceId": device_id
+    });
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&keys_json)?)?;
+    tracing::info!("Created new device identity: {}", &device_id[..16]);
+
+    Ok((signing_key, device_id))
+}
+
+/// Build an OpenClaw connect request with Ed25519 device identity
+pub fn build_device_connect_request(req_id: &str, nonce: &str, signing_key: &ed25519_dalek::SigningKey, device_id: &str, gateway_token: Option<&str>, device_token: Option<&str>) -> serde_json::Value {
+    use ed25519_dalek::Signer;
+    use base64::Engine;
+
+    let signed_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    // OpenClaw normalizes scopes server-side: when "operator.admin" is present
+    // it implicitly adds "operator.read" and "operator.write", then sorts the
+    // resulting set lexicographically. The signature payload must use the same
+    // post-normalization scope list, otherwise verification fails.
+    // (see: openclaw normalizeDeviceAuthScopes in shared/device-auth.ts)
+    let scopes_array = [
+        "operator.admin",
+        "operator.approvals",
+        "operator.pairing",
+        "operator.read",
+        "operator.write",
+    ];
+    let scopes = scopes_array.join(",");
+    // OpenClaw's resolveSignatureToken: auth.token ?? auth.deviceToken ?? auth.bootstrapToken.
+    // The signature payload's `token` field MUST be whichever of those is
+    // present, in that priority. We typically only send deviceToken (no gateway
+    // token in this deployment), so the signed token is the deviceToken.
+    let token_str = gateway_token
+        .or(device_token)
+        .unwrap_or("");
+
+    // OpenClaw tries v3 first, then falls back to v2. Use v3 to match the
+    // current verifier's preferred path. v3 includes platform + deviceFamily,
+    // both lowercased ASCII (per normalizeDeviceMetadataForAuth).
+    let platform = "rust";       // already lowercase
+    let device_family = "desktop"; // signed lowercase per the normalization
+    let message = format!(
+        "v3|{}|cli|cli|operator|{}|{}|{}|{}|{}|{}",
+        device_id, scopes, signed_at, token_str, nonce, platform, device_family
+    );
+
+    println!("[device-auth] Signing message (v3): {}", &message);
+
+    let signature = signing_key.sign(message.as_bytes());
+    // OpenClaw expects base64url encoding (no padding)
+    let b64url = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let signature_b64 = b64url.encode(signature.to_bytes());
+    let public_key_b64 = b64url.encode(signing_key.verifying_key().to_bytes());
+
+    let mut params = serde_json::json!({
+        "minProtocol": 3,
+        "maxProtocol": 3,
+        "client": {
+            "id": "cli",
+            "version": env!("CARGO_PKG_VERSION"),
+            "platform": "rust",
+            "mode": "cli",
+            "deviceFamily": "Desktop"
+        },
+        "role": "operator",
+        "scopes": scopes_array,
+        "device": {
+            "id": device_id,
+            "publicKey": public_key_b64,
+            "signature": signature_b64,
+            "signedAt": signed_at,
+            "nonce": nonce
+        },
+        "caps": [],
+        "commands": []
+    });
+
+    // Include auth credentials
+    let mut auth = serde_json::Map::new();
+    if let Some(token) = gateway_token {
+        auth.insert("token".to_string(), serde_json::json!(token));
+    }
+    if let Some(dt) = device_token {
+        auth.insert("deviceToken".to_string(), serde_json::json!(dt));
+    }
+    if !auth.is_empty() {
+        params["auth"] = serde_json::Value::Object(auth);
+    }
+
+    serde_json::json!({
+        "type": "req",
+        "id": req_id,
+        "method": "connect",
+        "params": params
+    })
+}
+
+async fn handle_chat_stream(socket: WebSocket, state: Arc<AppState>, agent_id: String, agent_name: String, gateway_port: u16, session_id: String) {
     use axum::extract::ws::Message;
     use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::{connect_async_with_config, tungstenite::protocol::WebSocketConfig, tungstenite::Message as TungsteniteMessage};
-    
+    use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
 
     println!("[handle_chat_stream] Starting for agent {} on port {}", agent_id, gateway_port);
     let (mut client_tx, mut client_rx) = socket.split();
 
-    // Use localhost for orchestrator-to-agent connections (via Docker port forwarding)
-    // Tailscale IPs are preserved for agent-to-agent communication
-    let agent_ip = {
+    // Resolve gateway token from agent config
+    let gateway_token = {
         let containers = state.containers.read().await;
         if let Some(agent) = containers.iter().find(|a| a.id == agent_id) {
-            // Always use localhost for orchestrator-to-agent connections
-            // The agent's gateway port is forwarded to localhost by Docker
-            #[cfg(windows)]
-            let ip = "127.0.0.1".to_string();
-            #[cfg(not(windows))]
-            let ip = match get_container_ip(&state, &agent_id).await {
-                Ok(container_ip) => container_ip,
-                Err(e) => {
-                    tracing::warn!("Failed to get container IP for {}: {}", agent_id, e);
-                    "127.0.0.1".to_string()
-                }
-            };
-            println!("[handle_chat_stream] Using local IP {} for orchestrator-to-agent connection", ip);
-            println!("[handle_chat_stream] Agent Tailscale IP {} preserved for agent-to-agent communication",
-                agent.tailscale_ip.as_deref().unwrap_or("none"));
-            ip
+            agent.config.env_vars.get("GATEWAY_TOKEN")
+                .or_else(|| agent.config.env_vars.get("OPENCLAW_GATEWAY_TOKEN"))
+                .cloned()
         } else {
             tracing::error!("Agent {} not found", agent_id);
             let error_msg = serde_json::json!({
@@ -1657,205 +2104,25 @@ async fn handle_chat_stream(socket: WebSocket, state: Arc<AppState>, agent_id: S
         }
     };
 
-    // Connect to agent websocket using OpenClaw protocol
-    // OpenClaw gateway listens on the root path (no /ws or /chat path)
-    let agent_ws_url = format!("ws://{}:{}", agent_ip, gateway_port);
-    println!("[handle_chat_stream] Connecting to agent at: {}", agent_ws_url);
-
-    // Configure websocket with more lenient settings
-    let config = WebSocketConfig {
-        accept_unmasked_frames: true,  // Be lenient with protocol
-        ..Default::default()
-    };
-
-    // Retry connection with exponential backoff (agent might be starting up)
-    let mut agent_ws_stream = None;
-    let mut last_error_str = String::from("Unknown error");
-
-    for retry in 0..5 {
-        match connect_async_with_config(&agent_ws_url, Some(config), false).await {
-            Ok(result) => {
-                println!("[handle_chat_stream] Successfully connected to agent!");
-                tracing::info!("Connected to agent websocket at {} (attempt {})", agent_ws_url, retry + 1);
-                agent_ws_stream = Some(result);
-                break;
-            }
-            Err(e) => {
-                println!("[handle_chat_stream] ERROR connecting to agent (attempt {}): {:?}", retry + 1, e);
-                last_error_str = e.to_string();
-                if retry < 4 {
-                    // Exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms
-                    let delay = 100 * 2_u64.pow(retry as u32);
-                    tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
-                }
-            }
-        }
-    }
-
-    let (agent_ws_stream, _) = match agent_ws_stream {
-        Some(stream) => stream,
-        None => {
-            println!("[handle_chat_stream] Failed to connect after retries: {}", last_error_str);
-            tracing::warn!("Failed to connect to agent websocket at {} after 5 retries: {}", agent_ws_url, last_error_str);
+    // Connect and authenticate via reusable agent_comms module
+    let conn = match crate::agent_comms::connect_to_agent_with_token(
+        gateway_port,
+        gateway_token.as_deref(),
+    ).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Failed to connect to agent: {}", e);
             let error_msg = serde_json::json!({
                 "role": "system",
                 "error": "Could not connect to agent",
-                "content": format!("Agent websocket unavailable after retries: {}", last_error_str),
+                "content": format!("{}", e),
                 "timestamp": chrono::Utc::now().timestamp()
             });
             let _ = client_tx.send(Message::Text(error_msg.to_string())).await;
             return;
         }
     };
-
-    let (mut agent_tx, mut agent_rx) = agent_ws_stream.split();
-
-    // Handle authentication challenge (password mode uses challenge-response)
-    let auth_timeout = tokio::time::sleep(tokio::time::Duration::from_secs(5));
-    tokio::pin!(auth_timeout);
-    let mut authenticated = false;
-
-    tracing::info!("Waiting for authentication challenge...");
-    while !authenticated {
-        tokio::select! {
-            _ = &mut auth_timeout => {
-                tracing::warn!("Timeout waiting for authentication challenge");
-                let error_msg = serde_json::json!({
-                    "role": "system",
-                    "error": "Authentication timeout",
-                    "content": "Agent did not send authentication challenge",
-                    "timestamp": chrono::Utc::now().timestamp()
-                });
-                let _ = client_tx.send(Message::Text(error_msg.to_string())).await;
-                return;
-            }
-            msg_result = agent_rx.next() => {
-                match msg_result {
-                    Some(Ok(TungsteniteMessage::Text(text))) => {
-                        // Check if this is a challenge event
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                            if json["type"] == "event" && json["event"] == "connect.challenge" {
-                                tracing::info!("Received authentication challenge, sending OpenClaw connect request...");
-                                // Send OpenClaw connect request (RPC protocol)
-                                // Note: OpenClaw uses type="req"/"res"/"event", method names, and params
-                                let connect_request = serde_json::json!({
-                                    "type": "req",
-                                    "id": uuid::Uuid::new_v4().to_string(),
-                                    "method": "connect",
-                                    "params": {
-                                        "minProtocol": 3,
-                                        "maxProtocol": 3,
-                                        "client": {
-                                            "id": "cli",
-                                            "version": env!("CARGO_PKG_VERSION"),
-                                            "platform": "rust",
-                                            "mode": "cli"
-                                        },
-                                        "role": "operator",
-                                        "scopes": ["operator.read", "operator.write"],
-                                        "caps": [],
-                                        "commands": [],
-                                        "permissions": {},
-                                        "auth": {
-                                            "password": "clawpen"
-                                        },
-                                        "locale": "en-US",
-                                        "userAgent": format!("claw-pen-orchestrator/{}", env!("CARGO_PKG_VERSION"))
-                                    }
-                                });
-                                tracing::info!("Sending connect request: {}", connect_request.to_string());
-
-                                // Try to send the connect request
-                                if agent_tx.send(TungsteniteMessage::Text(connect_request.to_string())).await.is_err() {
-                                    tracing::error!("Failed to send connect request");
-                                    return;
-                                }
-
-                                tracing::info!("Connect request sent successfully, waiting for response...");
-                                // Wait for agent's response to our connect request
-                                let confirm_timeout = tokio::time::sleep(tokio::time::Duration::from_secs(3));
-                                tokio::pin!(confirm_timeout);
-                                let mut auth_confirmed = false;
-
-                                // Read next message to see if auth succeeded
-                                loop {
-                                    tokio::select! {
-                                        _ = &mut confirm_timeout => {
-                                            tracing::warn!("Timeout waiting for authentication response");
-                                            break;
-                                        }
-                                        confirm_result = agent_rx.next() => {
-                                            match confirm_result {
-                                                Some(Ok(TungsteniteMessage::Text(confirm_text))) => {
-                                                    tracing::info!("Received response: {}", confirm_text);
-                                                    if let Ok(confirm_json) = serde_json::from_str::<serde_json::Value>(&confirm_text) {
-                                                        // OpenClaw sends type="res" responses
-                                                        if confirm_json["type"] == "res" {
-                                                            if confirm_json["ok"] == true {
-                                                                tracing::info!("✅ Authentication successful! Connected to OpenClaw agent");
-                                                                auth_confirmed = true;
-                                                                break;
-                                                            } else {
-                                                                tracing::error!("❌ Authentication failed: {}", confirm_text);
-                                                                let error_msg = confirm_json["error"].as_str().unwrap_or("Unknown error");
-                                                                tracing::error!("Error details: {}", error_msg);
-                                                                return;
-                                                            }
-                                                        }
-                                                    }
-                                                    // If not an error, assume success and continue
-                                                    auth_confirmed = true;
-                                                    break;
-                                                }
-                                                Some(Ok(TungsteniteMessage::Close(_))) => {
-                                                    tracing::error!("Agent closed connection after authentication attempt");
-                                                    return;
-                                                }
-                                                Some(Err(e)) => {
-                                                    tracing::error!("WebSocket error after auth: {}", e);
-                                                    return;
-                                                }
-                                                None => {
-                                                    tracing::warn!("Agent stream ended after auth");
-                                                    return;
-                                                }
-                                                Some(Ok(_)) => {}
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if auth_confirmed {
-                                    authenticated = true;
-                                } else {
-                                    tracing::warn!("Authentication not explicitly confirmed, proceeding anyway");
-                                    authenticated = true;
-                                }
-                                continue;
-                            }
-                        }
-                        // Forward any other messages to client (might be auth confirmation or other events)
-                        if client_tx.send(Message::Text(text)).await.is_err() {
-                            return;
-                        }
-                    }
-                    Some(Ok(TungsteniteMessage::Close(_))) => {
-                        tracing::warn!("Agent closed connection during authentication");
-                        return;
-                    }
-                    Some(Err(e)) => {
-                        tracing::error!("WebSocket error during authentication: {}", e);
-                        return;
-                    }
-                    None => {
-                        tracing::warn!("Agent stream ended during authentication");
-                        return;
-                    }
-                    Some(Ok(_)) => {}
-                }
-            }
-        }
-    }
+    let (mut agent_tx, mut agent_rx) = (conn.tx, conn.rx);
 
     tracing::info!("Connected to agent gateway, starting message proxy");
 
@@ -1873,11 +2140,68 @@ async fn handle_chat_stream(socket: WebSocket, state: Arc<AppState>, agent_id: S
     }
     tracing::info!("Sent connection acknowledgment to browser");
 
-    // Spawn a task to forward messages from agent to client
+    // Spawn a task to forward messages from agent to client (with conversation persistence)
+    let persist_session_id = session_id.clone();
+    let persist_agent_id = agent_id.clone();
+    let persist_agent_name = agent_name.clone();
     let agent_to_client = tokio::spawn(async move {
         while let Some(msg_result) = agent_rx.next().await {
             match msg_result {
                 Ok(TungsteniteMessage::Text(text)) => {
+                    // Stream telemetry: tag each agent→client event so we can
+                    // measure streaming vs buffered. Costs one JSON parse,
+                    // matches the parse we'd do for persistence below.
+                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(&text) {
+                        let evt_kind = event.get("event").and_then(|e| e.as_str()).unwrap_or("?");
+                        let state = event.get("payload")
+                            .and_then(|p| p.get("state"))
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("");
+                        let stream = event.get("payload")
+                            .and_then(|p| p.get("stream"))
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("");
+                        if !matches!(evt_kind, "health" | "tick" | "?") {
+                            tracing::info!(
+                                "[agent→client] event={} state={} stream={} bytes={}",
+                                evt_kind, state, stream, text.len()
+                            );
+                        }
+                        if event.get("event").and_then(|e| e.as_str()) == Some("chat") {
+                            if let Some(payload) = event.get("payload") {
+                                if payload.get("state").and_then(|s| s.as_str()) == Some("final") {
+                                    if let Some(content_arr) = payload.get("message")
+                                        .and_then(|m| m.get("content"))
+                                        .and_then(|c| c.as_array())
+                                    {
+                                        let texts: Vec<&str> = content_arr.iter()
+                                            .filter_map(|c| {
+                                                if c.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                                    c.get("text").and_then(|t| t.as_str())
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .collect();
+                                        if !texts.is_empty() {
+                                            let msg = crate::types::ConversationMessage {
+                                                id: uuid::Uuid::new_v4().to_string(),
+                                                session_id: persist_session_id.clone(),
+                                                role: "assistant".to_string(),
+                                                content: texts.join("\n"),
+                                                agent_id: persist_agent_id.clone(),
+                                                timestamp: chrono::Utc::now().to_rfc3339(),
+                                                metadata: Default::default(),
+                                            };
+                                            if let Err(e) = append_conversation_message(&persist_agent_name, &msg).await {
+                                                tracing::warn!("Failed to persist assistant message: {}", e);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if client_tx.send(Message::Text(text)).await.is_err() {
                         break;
                     }
@@ -1949,6 +2273,20 @@ async fn handle_chat_stream(socket: WebSocket, state: Arc<AppState>, agent_id: S
 
                         // Only translate messages that have actual content to send
                         if !content.is_empty() {
+                            // Persist user message
+                            let user_msg = crate::types::ConversationMessage {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                session_id: session_id.clone(),
+                                role: "user".to_string(),
+                                content: content.to_string(),
+                                agent_id: agent_id.clone(),
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                                metadata: Default::default(),
+                            };
+                            if let Err(e) = append_conversation_message(&agent_name, &user_msg).await {
+                                tracing::warn!("Failed to persist user message: {}", e);
+                            }
+
                             let session = client_msg.get("session")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("main");
@@ -2045,6 +2383,112 @@ pub struct ClassifyRequest {
     pub message: String,
 }
 
+// === Conversation Persistence (JSONL) ===
+
+/// Get the path to a session's JSONL file
+fn get_session_file(agent_name: &str, session_id: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!(
+        "./data/agents/{}/conversations/{}.jsonl",
+        agent_name, session_id
+    ))
+}
+
+/// Append a conversation message to the session's JSONL file
+pub async fn append_conversation_message(
+    agent_name: &str,
+    msg: &crate::types::ConversationMessage,
+) -> anyhow::Result<()> {
+    use std::io::Write;
+    let path = get_session_file(agent_name, &msg.session_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    let line = serde_json::to_string(msg)?;
+    writeln!(file, "{}", line)?;
+    Ok(())
+}
+
+/// Load all messages from a session's JSONL file
+pub fn load_conversation_messages(
+    agent_name: &str,
+    session_id: &str,
+) -> anyhow::Result<Vec<crate::types::ConversationMessage>> {
+    use std::io::BufRead;
+    let path = get_session_file(agent_name, session_id);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let file = std::fs::File::open(&path)?;
+    let reader = std::io::BufReader::new(file);
+    let mut messages = Vec::new();
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<crate::types::ConversationMessage>(&line) {
+            Ok(msg) => messages.push(msg),
+            Err(e) => tracing::warn!("Skipping malformed JSONL line: {}", e),
+        }
+    }
+    Ok(messages)
+}
+
+/// List all conversation sessions for an agent
+fn list_sessions(agent_name: &str) -> anyhow::Result<Vec<crate::types::ConversationSession>> {
+    use std::io::BufRead;
+    let dir = std::path::PathBuf::from(format!("./data/agents/{}/conversations", agent_name));
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut sessions = Vec::new();
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
+            let session_id = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let file = std::fs::File::open(&path)?;
+            let reader = std::io::BufReader::new(file);
+            let mut first_ts = String::new();
+            let mut last_ts = String::new();
+            let mut agent_id = String::new();
+            let mut count = 0u64;
+            for line in reader.lines() {
+                let line = line?;
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if let Ok(msg) = serde_json::from_str::<crate::types::ConversationMessage>(&line) {
+                    if count == 0 {
+                        first_ts = msg.timestamp.clone();
+                        agent_id = msg.agent_id.clone();
+                    }
+                    last_ts = msg.timestamp.clone();
+                    count += 1;
+                }
+            }
+            if count > 0 {
+                sessions.push(crate::types::ConversationSession {
+                    id: session_id,
+                    agent_id,
+                    created_at: first_ts,
+                    last_message_at: last_ts,
+                    message_count: count,
+                });
+            }
+        }
+    }
+    sessions.sort_by(|a, b| b.last_message_at.cmp(&a.last_message_at));
+    Ok(sessions)
+}
+
 // === Persistent Data Volume Setup ===
 
 /// Setup persistent data volume for an agent
@@ -2053,6 +2497,7 @@ async fn setup_persistent_data_volume(
     agent_name: &str,
     agent_id: &str,
     config: &mut crate::types::AgentConfig,
+    starter_system_prompt: Option<&str>,
 ) -> anyhow::Result<()> {
     use tokio::fs as async_fs;
 
@@ -2074,6 +2519,7 @@ async fn setup_persistent_data_volume(
     let memory_dir = agent_data_dir.join("memory");
     let knowledge_dir = agent_data_dir.join("knowledge");
     let cache_dir = agent_data_dir.join("cache");
+    let identity_dir = agent_data_dir.join("identity");
 
     async_fs::create_dir_all(&conversations_dir).await
         .map_err(|e| anyhow::anyhow!("Failed to create conversations directory: {}", e))?;
@@ -2083,6 +2529,42 @@ async fn setup_persistent_data_volume(
         .map_err(|e| anyhow::anyhow!("Failed to create knowledge directory: {}", e))?;
     async_fs::create_dir_all(&cache_dir).await
         .map_err(|e| anyhow::anyhow!("Failed to create cache directory: {}", e))?;
+    async_fs::create_dir_all(&identity_dir).await
+        .map_err(|e| anyhow::anyhow!("Failed to create identity directory: {}", e))?;
+
+    // Seed system_prompt.md from template if not already present.
+    // The teacher edits this file directly to change the agent's voice.
+    let system_prompt_path = identity_dir.join("system_prompt.md");
+    if !system_prompt_path.exists() {
+        let starter = starter_system_prompt
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                format!(
+                    "# Identité de l'agent\n\n\
+                    Tu es {}, un assistant utile.\n\n\
+                    Modifiez ce fichier pour personnaliser le comportement, le ton et l'expertise de l'agent.\n\
+                    Les changements prennent effet au prochain redémarrage du conteneur.\n",
+                    agent_name
+                )
+            });
+        async_fs::write(&system_prompt_path, starter).await
+            .map_err(|e| anyhow::anyhow!("Failed to seed system_prompt.md: {}", e))?;
+    }
+
+    // Write a small README explaining the identity convention
+    let identity_readme = identity_dir.join("README.md");
+    if !identity_readme.exists() {
+        let readme = "# Identity Volume\n\n\
+            This folder is mounted **read-only** at `/identity` inside the agent container.\n\
+            The teacher (or whoever owns this agent) edits these files to shape the agent's voice.\n\n\
+            ## Convention\n\n\
+            - `system_prompt.md` — required. The agent's core instructions.\n\
+            - `examples.md` — optional. Few-shot examples.\n\
+            - `boundaries.md` — optional. Refusal rules / topic limits.\n\
+            - `knowledge/` — optional. Files for retrieval (future).\n\n\
+            Changes take effect when the agent container restarts.\n";
+        async_fs::write(&identity_readme, readme).await.ok();
+    }
 
     // Create README in data directory
     let readme_content = format!(
@@ -2124,6 +2606,23 @@ async fn setup_persistent_data_volume(
         tracing::info!(
             "Agent {} already has /data volume mounted",
             agent_name
+        );
+    }
+
+    // Mount identity folder read-only at /identity. The agent reads this on
+    // startup; teachers edit the files directly via shared folder / Syncthing.
+    let identity_dir_str = identity_dir.display().to_string().replace('\\', "/");
+    let has_identity_volume = config.volumes.iter().any(|v| v.target == "/identity");
+    if !has_identity_volume {
+        config.volumes.push(crate::types::VolumeMount {
+            source: identity_dir_str.clone(),
+            target: "/identity".to_string(),
+            read_only: true,
+        });
+        tracing::info!(
+            "Added read-only /identity volume to agent {} (mounted from {})",
+            agent_name,
+            identity_dir_str
         );
     }
 
@@ -2612,20 +3111,79 @@ async fn handle_team_chat_stream(
                                 break;
                             }
 
-                            // TODO: Forward message to actual agent and get response
-                            // For now, return a placeholder
-                            let agent_response = format!(
-                                "[{}] I received your message: \"{}\"\n\n(Forwarding to {} container...)",
-                                agent.description, user_content, agent.agent
-                            );
+                            // Look up agent's gateway port and token
+                            let agent_info = {
+                                let containers = state.containers.read().await;
+                                containers.iter()
+                                    .find(|a| a.id == agent.agent || a.name == agent.agent)
+                                    .filter(|a| a.status == crate::types::AgentStatus::Running)
+                                    .map(|a| {
+                                        let token = a.config.env_vars.get("GATEWAY_TOKEN")
+                                            .or_else(|| a.config.env_vars.get("OPENCLAW_GATEWAY_TOKEN"))
+                                            .cloned();
+                                        (a.gateway_port, token, a.name.clone())
+                                    })
+                            };
 
-                            serde_json::json!({
-                                "role": "assistant",
-                                "content": agent_response,
-                                "from_agent": agent.agent,
-                                "classification": classification,
-                                "timestamp": chrono::Utc::now().timestamp()
-                            })
+                            if let Some((port, token, agent_name)) = agent_info {
+                                match crate::agent_comms::send_message_to_agent(
+                                    port,
+                                    token.as_deref(),
+                                    user_content,
+                                    60,
+                                ).await {
+                                    Ok(response_text) => {
+                                        // Persist to team conversation log
+                                        let session_id = format!("team-{}-{}", team_id, agent_name);
+                                        let user_msg = crate::types::ConversationMessage {
+                                            id: uuid::Uuid::new_v4().to_string(),
+                                            session_id: session_id.clone(),
+                                            role: "user".to_string(),
+                                            content: user_content.to_string(),
+                                            agent_id: agent_name.clone(),
+                                            timestamp: chrono::Utc::now().to_rfc3339(),
+                                            metadata: Default::default(),
+                                        };
+                                        let _ = append_conversation_message(&agent_name, &user_msg).await;
+
+                                        let assistant_msg = crate::types::ConversationMessage {
+                                            id: uuid::Uuid::new_v4().to_string(),
+                                            session_id,
+                                            role: "assistant".to_string(),
+                                            content: response_text.clone(),
+                                            agent_id: agent_name.clone(),
+                                            timestamp: chrono::Utc::now().to_rfc3339(),
+                                            metadata: Default::default(),
+                                        };
+                                        let _ = append_conversation_message(&agent_name, &assistant_msg).await;
+
+                                        serde_json::json!({
+                                            "role": "assistant",
+                                            "content": response_text,
+                                            "from_agent": agent.agent,
+                                            "classification": classification,
+                                            "timestamp": chrono::Utc::now().timestamp()
+                                        })
+                                    }
+                                    Err(e) => {
+                                        serde_json::json!({
+                                            "role": "assistant",
+                                            "content": format!("Failed to get response from {}: {}", agent.description, e),
+                                            "from_agent": agent.agent,
+                                            "error": true,
+                                            "timestamp": chrono::Utc::now().timestamp()
+                                        })
+                                    }
+                                }
+                            } else {
+                                serde_json::json!({
+                                    "role": "assistant",
+                                    "content": format!("Agent {} is not running. Please start it first.", agent.agent),
+                                    "from_agent": agent.agent,
+                                    "error": true,
+                                    "timestamp": chrono::Utc::now().timestamp()
+                                })
+                            }
                         } else {
                             // No matching agent found
                             serde_json::json!({
@@ -3074,108 +3632,91 @@ pub async fn send_message(
     State(state): State<Arc<AppState>>,
     Json(request): Json<SendMessageRequest>,
 ) -> Result<Json<SendMessageResponse>, (StatusCode, String)> {
-    use crate::types::{AgentMessage, DirectMessage, MessageStatus, RequestMessage};
+    use crate::types::MessageStatus;
     use uuid::Uuid;
 
-    // Verify sender agent exists
-    let containers = state.containers.read().await;
-    let sender = containers
-        .iter()
-        .find(|a| a.id == from_id)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Sender agent not found".to_string()))?;
-
-    if sender.status != crate::types::AgentStatus::Running {
-        return Err((StatusCode::BAD_REQUEST, "Sender agent is not running".to_string()));
-    }
-
-    // Find recipient agent (by ID or name)
-    let recipient = containers
-        .iter()
-        .find(|a| a.id == request.to || a.name == request.to)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Recipient agent not found".to_string()))?;
-
-    // Check if recipient has a Tailscale IP
-    let recipient_ip = recipient.tailscale_ip.as_ref()
-        .ok_or_else(|| (StatusCode::BAD_REQUEST, "Recipient agent is not on Tailscale network".to_string()))?;
-
-    // Generate message ID
     let message_id = Uuid::new_v4().to_string();
-    let timestamp = chrono::Utc::now().to_rfc3339();
 
-    // Create the message based on type
-    let message = match request.message_type.as_str() {
-        "request" => AgentMessage::Request(RequestMessage {
-            id: message_id.clone(),
-            from: from_id.clone(),
-            to: recipient.id.clone(),
-            content: request.content.clone(),
-            timestamp: timestamp.clone(),
-            timeout: request.timeout.unwrap_or(30),
-            metadata: request.metadata.clone(),
-        }),
-        _ => AgentMessage::Direct(DirectMessage {
-            id: message_id.clone(),
-            from: from_id.clone(),
-            to: recipient.id.clone(),
-            content: request.content.clone(),
-            timestamp: timestamp.clone(),
-            metadata: request.metadata.clone(),
-        }),
+    // Look up sender and recipient
+    let (sender_name, recipient_name, recipient_port, gateway_token) = {
+        let containers = state.containers.read().await;
+
+        let sender = containers
+            .iter()
+            .find(|a| a.id == from_id)
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "Sender agent not found".to_string()))?;
+
+        if sender.status != crate::types::AgentStatus::Running {
+            return Err((StatusCode::BAD_REQUEST, "Sender agent is not running".to_string()));
+        }
+        let sender_name = sender.name.clone();
+
+        let recipient = containers
+            .iter()
+            .find(|a| a.id == request.to || a.name == request.to)
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "Recipient agent not found".to_string()))?;
+
+        if recipient.status != crate::types::AgentStatus::Running {
+            return Err((StatusCode::BAD_REQUEST, "Recipient agent is not running".to_string()));
+        }
+
+        let token = recipient.config.env_vars.get("GATEWAY_TOKEN")
+            .or_else(|| recipient.config.env_vars.get("OPENCLAW_GATEWAY_TOKEN"))
+            .cloned();
+
+        (sender_name, recipient.name.clone(), recipient.gateway_port, token)
     };
 
-    // Serialize the message
-    let message_json = serde_json::to_string(&message)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to serialize message: {}", e)))?;
+    let timeout = request.timeout.unwrap_or(60);
 
-    // Send the message to the recipient via Tailscale
-    let client = reqwest::Client::new();
-    let url = format!("http://{}:{}/api/message", recipient_ip, recipient.gateway_port);
+    // Send message via OpenClaw WebSocket (Docker-local, no Tailscale needed)
+    match crate::agent_comms::send_message_to_agent(
+        recipient_port,
+        gateway_token.as_deref(),
+        &request.content,
+        timeout,
+    ).await {
+        Ok(response_text) => {
+            tracing::info!("Message {} delivered from {} to {}", message_id, from_id, recipient_name);
 
-    let send_result = tokio::time::timeout(
-        tokio::time::Duration::from_secs(5),
-        client.post(&url)
-            .header("Content-Type", "application/json")
-            .body(message_json.clone())
-            .send()
-    ).await;
+            // Persist both sides to inter-agent conversation log
+            let session_id = format!("inter-agent-{}-{}", sender_name, recipient_name);
+            let user_msg = crate::types::ConversationMessage {
+                id: Uuid::new_v4().to_string(),
+                session_id: session_id.clone(),
+                role: "user".to_string(),
+                content: request.content.clone(),
+                agent_id: from_id.clone(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                metadata: Default::default(),
+            };
+            let _ = append_conversation_message(&recipient_name, &user_msg).await;
 
-    match send_result {
-        Ok(Ok(response)) => {
-            if response.status().is_success() {
-                tracing::info!("Message {} delivered from {} to {}", message_id, from_id, recipient.id);
-                Ok(Json(SendMessageResponse {
-                    message_id: message_id.clone(),
-                    status: MessageStatus::Delivered,
-                    response: None,
-                    error: None,
-                }))
-            } else {
-                let error_text = response.text().await.unwrap_or_default();
-                tracing::warn!("Failed to deliver message {}: {}", message_id, error_text);
-                Ok(Json(SendMessageResponse {
-                    message_id: message_id.clone(),
-                    status: MessageStatus::Failed,
-                    response: None,
-                    error: Some(format!("Recipient rejected message: {}", error_text)),
-                }))
-            }
-        }
-        Ok(Err(e)) => {
-            tracing::error!("Network error sending message {}: {}", message_id, e);
+            let assistant_msg = crate::types::ConversationMessage {
+                id: Uuid::new_v4().to_string(),
+                session_id,
+                role: "assistant".to_string(),
+                content: response_text.clone(),
+                agent_id: recipient_name.clone(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                metadata: Default::default(),
+            };
+            let _ = append_conversation_message(&recipient_name, &assistant_msg).await;
+
             Ok(Json(SendMessageResponse {
-                message_id: message_id.clone(),
-                status: MessageStatus::Failed,
-                response: None,
-                error: Some(format!("Network error: {}", e)),
+                message_id,
+                status: MessageStatus::Delivered,
+                response: Some(response_text),
+                error: None,
             }))
         }
-        Err(_) => {
-            tracing::error!("Timeout sending message {}", message_id);
+        Err(e) => {
+            tracing::error!("Failed to send message {}: {}", message_id, e);
             Ok(Json(SendMessageResponse {
-                message_id: message_id.clone(),
+                message_id,
                 status: MessageStatus::Failed,
                 response: None,
-                error: Some("Request timeout".to_string()),
+                error: Some(e.to_string()),
             }))
         }
     }
@@ -3185,31 +3726,181 @@ pub async fn send_message(
 pub async fn get_agent_messages(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<TrackedMessage>>, (StatusCode, String)> {
-    // Verify agent exists
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Vec<crate::types::ConversationMessage>>, (StatusCode, String)> {
     let containers = state.containers.read().await;
-    let _agent = containers
+    let agent = containers
         .iter()
-        .find(|a| a.id == id)
+        .find(|a| a.id == id || a.name == id)
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
+    let agent_name = agent.name.clone();
+    drop(containers);
 
-    // TODO: Implement message persistence and retrieval
-    // For now, return empty list
-    Ok(Json(vec![]))
+    if let Some(session_id) = params.get("session") {
+        load_conversation_messages(&agent_name, session_id)
+            .map(Json)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    } else {
+        // Return messages from the most recent session
+        let sessions = list_sessions(&agent_name)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if let Some(latest) = sessions.first() {
+            load_conversation_messages(&agent_name, &latest.id)
+                .map(Json)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        } else {
+            Ok(Json(vec![]))
+        }
+    }
 }
 
-/// Tracked message wrapper for API responses
-#[derive(Debug, serde::Serialize)]
-pub struct TrackedMessage {
-    pub id: String,
-    pub from: String,
-    pub to: Option<String>,
-    pub message_type: String,
-    pub content: String,
-    pub status: String,
-    pub created_at: String,
-    pub delivered_at: Option<String>,
-    pub error: Option<String>,
+/// List conversation sessions for an agent
+pub async fn list_agent_sessions(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<crate::types::ConversationSession>>, (StatusCode, String)> {
+    let containers = state.containers.read().await;
+    let agent = containers
+        .iter()
+        .find(|a| a.id == id || a.name == id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
+    let agent_name = agent.name.clone();
+    drop(containers);
+
+    list_sessions(&agent_name)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// Get messages for a specific session
+pub async fn get_session_messages(
+    Path((id, session_id)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<crate::types::ConversationMessage>>, (StatusCode, String)> {
+    let containers = state.containers.read().await;
+    let agent = containers
+        .iter()
+        .find(|a| a.id == id || a.name == id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
+    let agent_name = agent.name.clone();
+    drop(containers);
+
+    load_conversation_messages(&agent_name, &session_id)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+// ============================================================================
+// AGENT RBAC ASSIGNMENT ENDPOINTS
+// ============================================================================
+
+#[derive(serde::Deserialize)]
+pub struct AssignAgentRequest {
+    pub user_id: String,
+    pub role: String, // "owner" | "chat_user" | "observer"
+}
+
+async fn require_admin_or_teacher(
+    state: &Arc<AppState>,
+    headers: &axum::http::HeaderMap,
+) -> Result<crate::auth::Claims, (StatusCode, String)> {
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or((StatusCode::UNAUTHORIZED, "Missing token".to_string()))?;
+    let auth = state.auth.read().await;
+    let claims = auth
+        .validate_token(token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {}", e)))?;
+    drop(auth);
+    let role = claims.role.as_deref().unwrap_or("admin"); // legacy = admin
+    if !matches!(role, "admin" | "teacher") {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "admin or teacher required".to_string(),
+        ));
+    }
+    Ok(claims)
+}
+
+/// POST /api/agents/:id/assignments — assign a user to an agent.
+/// Admin or teacher only. Body: { user_id, role }.
+pub async fn assign_agent_user(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<AssignAgentRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_admin_or_teacher(&state, &headers).await?;
+
+    // Resolve agent id (accept name too, mirrors chat_websocket).
+    let containers = state.containers.read().await;
+    let agent = containers
+        .iter()
+        .find(|a| a.id == id || a.name == id)
+        .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
+    let agent_id = agent.id.clone();
+    drop(containers);
+
+    let role = crate::chat_db::AgentRole::parse(&req.role);
+    state
+        .chat_db
+        .assign_agent(&agent_id, &req.user_id, role)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "agent_id": agent_id,
+        "user_id": req.user_id,
+        "role": role.as_str(),
+    })))
+}
+
+/// DELETE /api/agents/:id/assignments/:user_id — remove an assignment.
+pub async fn unassign_agent_user(
+    Path((id, user_id)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<StatusCode, (StatusCode, String)> {
+    require_admin_or_teacher(&state, &headers).await?;
+
+    let containers = state.containers.read().await;
+    let agent = containers
+        .iter()
+        .find(|a| a.id == id || a.name == id)
+        .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
+    let agent_id = agent.id.clone();
+    drop(containers);
+
+    state
+        .chat_db
+        .unassign_agent(&agent_id, &user_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /api/agents/:id/assignments — list users assigned to an agent.
+pub async fn list_agent_assignments(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Vec<crate::chat_db::AgentAssignment>>, (StatusCode, String)> {
+    require_admin_or_teacher(&state, &headers).await?;
+
+    let containers = state.containers.read().await;
+    let agent = containers
+        .iter()
+        .find(|a| a.id == id || a.name == id)
+        .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
+    let agent_id = agent.id.clone();
+    drop(containers);
+
+    state
+        .chat_db
+        .list_assignments_for_agent(&agent_id)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 // ============================================================================
@@ -3238,43 +3929,46 @@ async fn handle_websocket_proxy(
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
 
-    // Verify both agents exist and are running
-    let containers = state.containers.read().await;
+    // Look up both agents and resolve target's gateway info
+    let (from_name, target_name, target_port, gateway_token) = {
+        let containers = state.containers.read().await;
 
-    let from_agent = match containers.iter().find(|a| a.id == from_id) {
-        Some(agent) => agent,
-        None => {
-            tracing::error!("Source agent {} not found", from_id);
+        let from_agent = match containers.iter().find(|a| a.id == from_id) {
+            Some(agent) => agent,
+            None => {
+                tracing::error!("Source agent {} not found", from_id);
+                return;
+            }
+        };
+
+        let target_agent = match containers.iter().find(|a| a.id == target_id || a.name == target_id) {
+            Some(agent) => agent,
+            None => {
+                tracing::error!("Target agent {} not found", target_id);
+                return;
+            }
+        };
+
+        if target_agent.status != crate::types::AgentStatus::Running {
+            tracing::error!("Target agent {} is not running", target_id);
             return;
         }
+
+        let token = target_agent.config.env_vars.get("GATEWAY_TOKEN")
+            .or_else(|| target_agent.config.env_vars.get("OPENCLAW_GATEWAY_TOKEN"))
+            .cloned();
+
+        (from_agent.name.clone(), target_agent.name.clone(), target_agent.gateway_port, token)
     };
 
-    let target_agent = match containers.iter().find(|a| a.id == target_id || a.name == target_id) {
-        Some(agent) => agent,
-        None => {
-            tracing::error!("Target agent {} not found", target_id);
-            return;
-        }
-    };
+    tracing::info!("Proxying WebSocket: {} -> {} (port {})", from_name, target_name, target_port);
 
-    // Get target agent's Tailscale IP and gateway port
-    let target_ip = match target_agent.tailscale_ip.as_ref() {
-        Some(ip) => ip,
-        None => {
-            tracing::error!("Target agent {} is not on Tailscale network", target_id);
-            return;
-        }
-    };
-
-    let target_url = format!("ws://{}:{}/gateway", target_ip, target_agent.gateway_port);
-    tracing::info!("Proxying WebSocket: {} -> {} ({})", from_agent.name, target_agent.name, target_url);
-
-    // Drop the read lock before connecting
-    drop(containers);
-
-    // Connect to target agent's WebSocket gateway
-    let target_ws = match tokio_tungstenite::connect_async(&target_url).await {
-        Ok((socket, _)) => socket,
+    // Connect and authenticate via agent_comms
+    let conn = match crate::agent_comms::connect_to_agent_with_token(
+        target_port,
+        gateway_token.as_deref(),
+    ).await {
+        Ok(c) => c,
         Err(e) => {
             tracing::error!("Failed to connect to target agent {}: {}", target_id, e);
             return;
@@ -3282,7 +3976,7 @@ async fn handle_websocket_proxy(
     };
 
     let (mut client_sender, mut client_receiver) = client_socket.split();
-    let (mut target_sender, mut target_receiver) = target_ws.split();
+    let (mut target_sender, mut target_receiver) = (conn.tx, conn.rx);
 
     // Spawn task to forward messages from client to target
     let client_to_target = tokio::spawn(async move {

@@ -1,17 +1,37 @@
-FROM openclaw-agent:latest
-
-# Update OpenClaw to latest version
-RUN npm install -g openclaw@latest 2>/dev/null || true
-
-# Universal entrypoint — configure any provider via env vars
-RUN cat > /entrypoint.sh << 'SCRIPT' && chmod +x /entrypoint.sh
 #!/bin/sh
+# Universal Claw Pen agent entrypoint for the Exo runtime.
+# Mirrors the Docker openclaw-agent:custom entrypoint, plus an npm install
+# at the top because Exo pulls vanilla node:20-alpine from docker.io and
+# we don't yet have a published openclaw-agent image.
+#
+# Phase 1 of the exo integration. Phase 2 publishes a real image to a
+# sovereign registry (Boréal-hosted) and this script collapses back into
+# the Dockerfile.
+
 set -e
+
+# Phase 1 — openclaw is bind-mounted from the WSL host at /clawpen-runtime
+# (installed once via `npm install openclaw` in /opt/clawpen-runtime). No npm
+# install runs in the container; that fights exo's seccomp filter.
+# Phase 2 replaces the bind-mount with a published image that has openclaw baked in.
+OPENCLAW_ENTRY="/clawpen-runtime/node_modules/openclaw/openclaw.mjs"
+if [ ! -f "$OPENCLAW_ENTRY" ]; then
+  echo "[entrypoint] FATAL: openclaw not found at $OPENCLAW_ENTRY"
+  echo "  Bootstrap on the host: sudo mkdir -p /opt/clawpen-runtime &&"
+  echo "    cd /opt/clawpen-runtime && npm init -y && npm install openclaw@latest"
+  ls -la /clawpen-runtime/ 2>&1 | head -10
+  exit 1
+fi
+echo "[entrypoint] Using openclaw from host bind-mount"
 
 MODEL="${LLM_MODEL:-glm-5}"
 PROVIDER="${LLM_PROVIDER:-zai}"
 PROVIDER=$(echo "$PROVIDER" | tr '[:upper:]' '[:lower:]')
 PORT="${PORT:-18790}"
+
+# Force the gateway to bind on PORT — newer openclaw reads OPENCLAW_GATEWAY_PORT
+# and falls back to a default (18789) ignoring the config file's gateway.port.
+export OPENCLAW_GATEWAY_PORT="$PORT"
 GATEWAY_PASSWORD="${GATEWAY_PASSWORD:-}"
 GATEWAY_TOKEN="${GATEWAY_TOKEN:-}"
 ORCHESTRATOR_DEVICE_ID="${ORCHESTRATOR_DEVICE_ID:-}"
@@ -24,9 +44,12 @@ case "$PROVIDER" in
     API_KEY="$ZAI_API_KEY"
     BASE_URL="https://api.z.ai/api/coding/paas/v4"
     ;;
-  kimi|kimi-code)
-    API_KEY="$KIMI_API_KEY"
-    PROVIDER="kimi-code"
+  kimi|kimi-code|kimicode)
+    # OpenClaw's kimi-coding plugin expects KIMI_API_KEY (no underscore in CODE).
+    # Plugin id is "kimi", provider id is "kimi", default model id is "kimi-code".
+    # Model ref written to openclaw.json is "kimi/kimi-code".
+    API_KEY="${KIMI_API_KEY:-$KIMICODE_API_KEY}"
+    PROVIDER="kimi"
     ;;
   moonshot)
     API_KEY="${MOONSHOT_API_KEY:-$KIMI_API_KEY}"
@@ -61,7 +84,6 @@ case "$PROVIDER" in
     PROVIDER="openai"
     ;;
   *)
-    # Fallback: try common env var names
     API_KEY="${API_KEY:-${ZAI_API_KEY:-${ANTHROPIC_API_KEY:-${OPENAI_API_KEY:-}}}}"
     ;;
 esac
@@ -82,7 +104,6 @@ else
   GATEWAY_AUTH="{\"mode\": \"none\"}"
 fi
 
-# Bind to LAN when auth is configured, loopback otherwise
 if [ -n "$GATEWAY_TOKEN" ] || [ -n "$GATEWAY_PASSWORD" ]; then
   BIND_MODE="lan"
 else
@@ -108,7 +129,7 @@ cat > /root/.openclaw/openclaw.json << CONF
       "id": "dev",
       "default": true,
       "workspace": "/root/.openclaw/workspace-dev",
-      "identity": {"name": "Agent", "emoji": "\ud83e\udd16"},
+      "identity": {"name": "Agent", "emoji": "🤖"},
       "model": {"primary": "${MODEL_ID}"}
     }]
   },
@@ -139,41 +160,15 @@ else
 fi
 
 # --- Identity volume (teacher-authored system prompt) ---
-# If /identity/system_prompt.md exists (mounted ro from data/agents/<name>/identity/),
-# read it and inject into the OpenClaw agent config. Optional examples.md and
-# boundaries.md are appended in order.
+# Phase 1 NOTE: openclaw's config schema no longer accepts `systemPrompt` under
+# `agents.list[*].identity` or `agents.defaults`. The correct injection path
+# in current openclaw is TBD — see follow-up. For now we just record that the
+# identity volume is present so the bind-mount is exercised end-to-end.
 if [ -f /identity/system_prompt.md ]; then
-  echo "[entrypoint] Identity volume detected — loading teacher-authored prompt"
-  CLAW_IDENTITY_PROMPT=$(cat /identity/system_prompt.md)
-  if [ -f /identity/examples.md ]; then
-    CLAW_IDENTITY_PROMPT="${CLAW_IDENTITY_PROMPT}
-
-# Examples
-$(cat /identity/examples.md)"
-  fi
-  if [ -f /identity/boundaries.md ]; then
-    CLAW_IDENTITY_PROMPT="${CLAW_IDENTITY_PROMPT}
-
-# Boundaries
-$(cat /identity/boundaries.md)"
-  fi
-  export CLAW_IDENTITY_PROMPT
-  node -e '
-    const fs = require("fs");
-    const path = "/root/.openclaw/openclaw.json";
-    const cfg = JSON.parse(fs.readFileSync(path, "utf8"));
-    const prompt = process.env.CLAW_IDENTITY_PROMPT || "";
-    if (prompt) {
-      cfg.agents.list[0].identity = cfg.agents.list[0].identity || {};
-      cfg.agents.list[0].identity.systemPrompt = prompt;
-      cfg.agents.defaults = cfg.agents.defaults || {};
-      cfg.agents.defaults.systemPrompt = prompt;
-      fs.writeFileSync(path, JSON.stringify(cfg, null, 2));
-    }
-  '
-  echo "[entrypoint] System prompt loaded from /identity/system_prompt.md (${#CLAW_IDENTITY_PROMPT} chars)"
+  CHARS=$(wc -c < /identity/system_prompt.md)
+  echo "[entrypoint] Identity volume present (${CHARS} chars) — injection deferred to Phase 1.5"
 else
-  echo "[entrypoint] No /identity/system_prompt.md — using template/env defaults"
+  echo "[entrypoint] No /identity/system_prompt.md found"
 fi
 
 # --- Pre-seed device pairing for orchestrator ---
@@ -214,7 +209,4 @@ else
 fi
 
 echo "[entrypoint] Starting OpenClaw gateway (bind: ${BIND_MODE})..."
-exec node /usr/local/lib/node_modules/openclaw/openclaw.mjs gateway run --dev --allow-unconfigured
-SCRIPT
-
-ENTRYPOINT ["/entrypoint.sh"]
+exec node "$OPENCLAW_ENTRY" gateway run --dev --allow-unconfigured

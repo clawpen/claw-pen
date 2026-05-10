@@ -417,32 +417,62 @@ impl DockerClient {
             LlmProvider::Lmstudio => "lmstudio",
             LlmProvider::Custom { .. } => "custom",
         };
-        env.push(format!("LLM_PROVIDER={}", provider_str));
-        if let Some(ref model) = config.llm_model {
-            env.push(format!("LLM_MODEL={}", model));
+        // Only set LLM_PROVIDER/LLM_MODEL if not overridden in custom env_vars
+        if !config.env_vars.contains_key("LLM_PROVIDER") {
+            env.push(format!("LLM_PROVIDER={}", provider_str));
+        }
+        if !config.env_vars.contains_key("LLM_MODEL") {
+            if let Some(ref model) = config.llm_model {
+                env.push(format!("LLM_MODEL={}", model));
+            }
         }
 
         // Agent port - get from env_vars if set, otherwise use default
-        let port = config
-            .env_vars
-            .get("PORT")
-            .cloned()
-            .unwrap_or_else(|| "18790".to_string());
-        env.push(format!("PORT={}", port));
+        if !config.env_vars.contains_key("PORT") {
+            let port = config
+                .env_vars
+                .get("PORT")
+                .cloned()
+                .unwrap_or_else(|| "18790".to_string());
+            env.push(format!("PORT={}", port));
+        }
 
-        // Pass all custom env vars
+        // Pass all custom env vars (skip ones already set above to avoid duplicates)
         for (key, value) in &config.env_vars {
-            if !key.starts_with("OPENAI_API_KEY")
-                && !key.starts_with("ANTHROPIC_API_KEY")
-                && !key.starts_with("GEMINI_API_KEY")
-                && !key.starts_with("KIMI_API_KEY")
-                && !key.starts_with("ZAI_API_KEY")
-                && !key.starts_with("HF_TOKEN")
-                && !key.starts_with("OLLAMA_ENDPOINT")
-                && !key.starts_with("LMSTUDIO_ENDPOINT")
-                && !key.starts_with("LM_API_TOKEN")
-            {
+            let already_set = env.iter().any(|e| e.starts_with(&format!("{}=", key)));
+            if !already_set {
                 env.push(format!("{}={}", key, value));
+            }
+        }
+
+        // Inject orchestrator device identity for pre-pairing (grants operator.write scope)
+        if !env.iter().any(|e| e.starts_with("ORCHESTRATOR_DEVICE_ID=")) {
+            if let Ok((_, device_id)) = crate::api::load_or_create_device_keys() {
+                use base64::Engine;
+                let keys_path = dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join(".openclaw")
+                    .join("claw-pen-orchestrator-device.json");
+                if let Ok(data) = std::fs::read_to_string(&keys_path) {
+                    if let Ok(keys) = serde_json::from_str::<serde_json::Value>(&data) {
+                        if let Some(pk_b64) = keys["publicKey"].as_str() {
+                            // Convert standard base64 to base64url (no padding)
+                            if let Ok(pk_bytes) = base64::engine::general_purpose::STANDARD.decode(pk_b64) {
+                                let pk_b64url = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&pk_bytes);
+                                // Derive a deterministic device token from device ID
+                                // This lets the orchestrator reconstruct it without storing it
+                                let token_input = format!("openclaw-device-token:{}", device_id);
+                                let token_hash = <sha2::Sha256 as sha2::Digest>::digest(token_input.as_bytes());
+                                let device_token = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                                    .encode(token_hash);
+                                env.push(format!("ORCHESTRATOR_DEVICE_ID={}", device_id));
+                                env.push(format!("ORCHESTRATOR_PUBLIC_KEY={}", pk_b64url));
+                                env.push(format!("ORCHESTRATOR_DEVICE_TOKEN={}", device_token));
+                                tracing::debug!("Injected orchestrator device identity for pre-pairing");
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -493,29 +523,9 @@ impl DockerClient {
         env
     }
 
-    fn get_image_for_provider(provider: &LlmProvider, network_backend: NetworkBackend) -> &'static str {
-        match provider {
-            LlmProvider::OpenAI => "node:20-alpine",
-            LlmProvider::Anthropic => "node:20-alpine",
-            LlmProvider::Gemini => "node:20-alpine",
-            LlmProvider::Kimi => "node:20-alpine",
-            // For Zai provider, use openclaw-agent image when Tailscale is enabled
-            LlmProvider::Zai => {
-                if matches!(network_backend, NetworkBackend::Tailscale) {
-                    "openclaw-agent:latest"
-                } else {
-                    "node:20-alpine"
-                }
-            }
-            LlmProvider::Huggingface => "node:20-alpine",
-            LlmProvider::Ollama => "node:20-alpine",
-            LlmProvider::KimiCode => "node:20-alpine",
-            LlmProvider::Access => "node:20-alpine",
-            LlmProvider::LlamaCpp => "node:20-alpine",
-            LlmProvider::Vllm => "node:20-alpine",
-            LlmProvider::Lmstudio => "node:20-alpine",
-            _ => "node:20-alpine",
-        }
+    fn get_image_for_provider(_provider: &LlmProvider, _network_backend: NetworkBackend) -> &'static str {
+        // Universal image — supports all providers via env vars (LLM_PROVIDER, LLM_MODEL, etc.)
+        "openclaw-agent:custom"
     }
 
     /// Build labels HashMap for a container
@@ -653,7 +663,7 @@ impl ContainerRuntime for DockerClient {
             .unwrap_or_else(|| Self::get_image_for_provider(&config.llm_provider, self.network_backend));
 
         // Check if this is an openclaw-agent image (needs special handling)
-        let is_openclaw_agent = image.contains("openclaw-agent");
+        let is_openclaw_agent = image.contains("openclaw");
 
         let mut env = Self::build_env_vars(config);
 
@@ -674,19 +684,21 @@ impl ContainerRuntime for DockerClient {
         if is_openclaw_agent {
             if is_custom_image {
                 // Custom image uses GATEWAY_PASSWORD and BIND (no OPENCLAW_ prefix)
-                if !config.env_vars.contains_key("GATEWAY_PASSWORD") {
+                if !config.env_vars.contains_key("GATEWAY_PASSWORD") && !config.env_vars.contains_key("GATEWAY_TOKEN") {
                     env.push("GATEWAY_PASSWORD=clawpen".to_string());
                 }
                 if !config.env_vars.contains_key("BIND") {
                     env.push("BIND=lan".to_string());
                 }
             } else {
-                // Official image uses OPENCLAW_GATEWAY_PASSWORD and OPENCLAW_BIND
-                if !config.env_vars.contains_key("OPENCLAW_GATEWAY_PASSWORD") {
-                    env.push("OPENCLAW_GATEWAY_PASSWORD=clawpen".to_string());
+                // Official image uses GATEWAY_PASSWORD and GATEWAY_TOKEN (no OPENCLAW_ prefix)
+                // Only add password if neither token nor password is already set
+                if !config.env_vars.contains_key("GATEWAY_PASSWORD")
+                    && !config.env_vars.contains_key("GATEWAY_TOKEN") {
+                    env.push("GATEWAY_PASSWORD=clawpen".to_string());
                 }
-                if !config.env_vars.contains_key("OPENCLAW_BIND") {
-                    env.push("OPENCLAW_BIND=lan".to_string());
+                if !config.env_vars.contains_key("BIND") {
+                    env.push("BIND=lan".to_string());
                 }
             }
         }
@@ -783,7 +795,7 @@ impl ContainerRuntime for DockerClient {
                 None
             },
             host_config: Some(bollard::models::HostConfig {
-                memory: Some((config.memory_mb * 1024 * 1024) as i64),
+                memory: Some(config.memory_mb as i64 * 1024 * 1024),
                 nano_cpus: Some((config.cpu_cores * 1_000_000_000.0) as i64),
                 // Use bridge mode for openclaw-agent (port mapping required)
                 // Use host mode for standard agents
@@ -980,8 +992,21 @@ impl ContainerRuntime for DockerClient {
     }
 
     async fn health_check(&self, id: &str) -> Result<bool> {
-        // For Docker, check if container is running
-        self.container_exists(id).await
+        // For Docker, check if container is actually running (not just exists)
+        match self.docker.inspect_container(id, None).await {
+            Ok(inspect) => {
+                // Check the actual container state - inspect.state is Option, and running is Option<bool>
+                let is_running = inspect
+                    .state
+                    .and_then(|s| s.running)
+                    .unwrap_or(false);
+                Ok(is_running)
+            }
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => Ok(false),
+            Err(e) => Err(anyhow::anyhow!("Failed to check container health: {}", e)),
+        }
     }
 
     async fn exec_container(&self, id: &str, cmd: Vec<String>) -> Result<String> {
@@ -1109,24 +1134,44 @@ impl ExoClient {
         })
     }
 
+    /// Convert a Windows host path to a WSL `/mnt/X/...` path so exo (running
+    /// in WSL) can use it as a bind-mount source. No-op on already-WSL paths.
+    /// Spaces are preserved — the .cmd wrapper now uses direct exec so they survive.
+    fn to_wsl_path(host_path: &str) -> String {
+        // Already a WSL/Linux-style path? leave alone.
+        if host_path.starts_with('/') {
+            return host_path.to_string();
+        }
+        // Drive-letter paths: F:\foo\bar  or  F:/foo/bar  →  /mnt/f/foo/bar
+        let bytes = host_path.as_bytes();
+        if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+            let drive = (bytes[0] as char).to_ascii_lowercase();
+            let rest = &host_path[2..].replace('\\', "/");
+            let rest = rest.strip_prefix('/').unwrap_or(rest);
+            return format!("/mnt/{}/{}", drive, rest);
+        }
+        // Fallback: just normalize separators
+        host_path.replace('\\', "/")
+    }
+
     /// Get the image name for a provider
     fn get_image_for_provider(provider: &LlmProvider, _network_backend: NetworkBackend) -> &'static str {
         // Exo uses the same images as Docker for compatibility
         // Note: Tailscale integration not yet supported for Exo
         match provider {
-            LlmProvider::OpenAI => "node:20-alpine",
-            LlmProvider::Anthropic => "node:20-alpine",
-            LlmProvider::Gemini => "node:20-alpine",
-            LlmProvider::Kimi => "node:20-alpine",
-            LlmProvider::Zai => "node:20-alpine",
-            LlmProvider::Huggingface => "node:20-alpine",
-            LlmProvider::Ollama => "node:20-alpine",
-            LlmProvider::KimiCode => "node:20-alpine",
-            LlmProvider::Access => "node:20-alpine",
-            LlmProvider::LlamaCpp => "node:20-alpine",
-            LlmProvider::Vllm => "node:20-alpine",
-            LlmProvider::Lmstudio => "node:20-alpine",
-            _ => "node:20-alpine",
+            LlmProvider::OpenAI => "node:22-slim",
+            LlmProvider::Anthropic => "node:22-slim",
+            LlmProvider::Gemini => "node:22-slim",
+            LlmProvider::Kimi => "node:22-slim",
+            LlmProvider::Zai => "node:22-slim",
+            LlmProvider::Huggingface => "node:22-slim",
+            LlmProvider::Ollama => "node:22-slim",
+            LlmProvider::KimiCode => "node:22-slim",
+            LlmProvider::Access => "node:22-slim",
+            LlmProvider::LlamaCpp => "node:22-slim",
+            LlmProvider::Vllm => "node:22-slim",
+            LlmProvider::Lmstudio => "node:22-slim",
+            _ => "node:22-slim",
         }
     }
 
@@ -1192,6 +1237,39 @@ impl ExoClient {
             {
                 args.push("-e".to_string());
                 args.push(format!("{}={}", key, value));
+            }
+        }
+
+        // Inject orchestrator device identity for pre-pairing (mirrors the Docker
+        // path). Without this, the entrypoint skips device pairing and openclaw
+        // rejects the orchestrator's signed connect request.
+        if !config.env_vars.contains_key("ORCHESTRATOR_DEVICE_ID") {
+            if let Ok((_, device_id)) = crate::api::load_or_create_device_keys() {
+                use base64::Engine;
+                let keys_path = dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join(".openclaw")
+                    .join("claw-pen-orchestrator-device.json");
+                if let Ok(data) = std::fs::read_to_string(&keys_path) {
+                    if let Ok(keys) = serde_json::from_str::<serde_json::Value>(&data) {
+                        if let Some(pk_b64) = keys["publicKey"].as_str() {
+                            if let Ok(pk_bytes) = base64::engine::general_purpose::STANDARD.decode(pk_b64) {
+                                let pk_b64url = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&pk_bytes);
+                                let token_input = format!("openclaw-device-token:{}", device_id);
+                                let token_hash = <sha2::Sha256 as sha2::Digest>::digest(token_input.as_bytes());
+                                let device_token = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                                    .encode(token_hash);
+                                args.push("-e".to_string());
+                                args.push(format!("ORCHESTRATOR_DEVICE_ID={}", device_id));
+                                args.push("-e".to_string());
+                                args.push(format!("ORCHESTRATOR_PUBLIC_KEY={}", pk_b64url));
+                                args.push("-e".to_string());
+                                args.push(format!("ORCHESTRATOR_DEVICE_TOKEN={}", device_token));
+                                tracing::debug!("Injected orchestrator device identity for exo agent");
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -1289,11 +1367,58 @@ impl ContainerRuntime for ExoClient {
         // Add environment variables
         args.extend(Self::build_env_args(config));
 
+        // Volume mounts (translate Windows paths to WSL form for exo)
+        for v in &config.volumes {
+            let src = Self::to_wsl_path(&v.source);
+            // exo's -v takes SRC:DEST (no :ro suffix support in current build);
+            // read-only enforcement still relies on the runtime config.
+            args.push("-v".to_string());
+            args.push(format!("{}:{}", src, v.target));
+        }
+
+        // Mount the universal entrypoint script. Lives next to the orchestrator
+        // binary at compile time. Bind-mounting it is Phase 1 — Phase 2 will
+        // bake it into a published image.
+        let entrypoint_host = format!(
+            "{}/exo-entrypoint.sh",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let entrypoint_wsl = Self::to_wsl_path(&entrypoint_host);
+        args.push("-v".to_string());
+        args.push(format!("{}:/clawpen-entrypoint.sh", entrypoint_wsl));
+
+        // Phase 1: bind-mount the host's pre-installed openclaw into the
+        // container so we don't run npm at startup (which fights exo's seccomp).
+        // The host install lives at /opt/clawpen-runtime; bootstrap it once with:
+        //   sudo mkdir -p /opt/clawpen-runtime && cd /opt/clawpen-runtime \
+        //     && npm init -y && npm install openclaw@latest
+        // Phase 2 publishes an image with openclaw baked in and drops this mount.
+        args.push("-v".to_string());
+        args.push("/opt/clawpen-runtime:/clawpen-runtime".to_string());
+
+        // Publish the gateway port to the host so the orchestrator can reach it.
+        let gateway_port = config
+            .env_vars
+            .get("PORT")
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(crate::types::default_gateway_port());
+        args.push("-p".to_string());
+        args.push(format!("{}:{}", gateway_port, gateway_port));
+
+        // Phase 1: use host networking so the container has DNS + outbound for
+        // the npm install at startup. Phase 2 (published image) drops this
+        // because the image already has openclaw baked in — no install needed.
+        args.push("--network".to_string());
+        args.push("host".to_string());
+
         // Add image
         args.push(image.to_string());
 
-        // Default command for agent containers
-        args.push("openclaw".to_string());
+        // Run the universal entrypoint instead of plain `openclaw` (which isn't
+        // in vanilla node:20-alpine — the entrypoint installs it, then starts
+        // the gateway).
+        args.push("sh".to_string());
+        args.push("/clawpen-entrypoint.sh".to_string());
 
         let output = Command::new(&self.exo_path)
             .args(&args)
@@ -1402,11 +1527,22 @@ impl ContainerRuntime for ExoClient {
     }
 
     async fn health_check(&self, id: &str) -> Result<bool> {
-        // For exo, check if container exists and is running
-        let containers = self.list_containers().await?;
-        Ok(containers
-            .iter()
-            .any(|c| (c.id == id || c.name == id) && c.status == AgentStatus::Running))
+        // Phase 1: probe the agent's gateway port directly. Exo's `ps` view of
+        // container state is unreliable in rootless WSL (the reconciler can't
+        // track cgroups so containers show as "exited" while openclaw is alive).
+        // Trust the gateway socket as the source of truth for "agent is up."
+        //
+        // Retry quickly — caller wraps us in a 5s outer timeout.
+        // Default port for now; port-per-agent lookup is a follow-up.
+        let port = crate::types::default_gateway_port();
+        loop {
+            let probe = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port));
+            if let Ok(Ok(_)) = tokio::time::timeout(tokio::time::Duration::from_millis(300), probe).await {
+                tracing::info!("Exo health_check: {} gateway reachable on port {}", id, port);
+                return Ok(true);
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+        }
     }
 
     async fn exec_container(&self, _id: &str, _cmd: Vec<String>) -> Result<String> {

@@ -2,7 +2,9 @@
 deployment-mode = "all-windows"
 network-backend = "local"
 runtime-socket = ""
-container-runtime = "docker"
+container-runtime = "exo"
+# Path to the exo binary. The .cmd wrapper bridges Windows → WSL2.
+exo-path = "F:\\Software\\exo\\exo.cmd"
 # Tailscale authentication key for agent mesh networking
 # Set via environment variable: TAILSCALE_AUTH_KEY
 # tailscale_auth_key = 'tskey-auth-xxx'

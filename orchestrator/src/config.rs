@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::fmt;
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -29,10 +30,14 @@ pub enum ContainerRuntimeType {
     Exo,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "kebab-case")]
 pub struct Config {
+    #[serde(default)]
     pub deployment_mode: DeploymentMode,
+    #[serde(default)]
     pub network_backend: NetworkBackend,
+    #[serde(default = "default_runtime_socket")]
     pub runtime_socket: String,
     /// Container runtime to use: "docker" (default) or "exo"
     #[serde(default)]
@@ -40,20 +45,45 @@ pub struct Config {
     /// Custom path to exo binary (defaults to "exo" in PATH)
     #[serde(default)]
     pub exo_path: Option<String>,
+    #[serde(default)]
     pub tailscale_auth_key: Option<String>,
     /// Headscale server URL (e.g., https://mesh.yourcompany.com)
     /// Used when network_backend = "headscale"
+    #[serde(default)]
     pub headscale_url: Option<String>,
     /// Headscale pre-authentication key for joining nodes
     /// Used when network_backend = "headscale"
+    #[serde(default)]
     pub headscale_auth_key: Option<String>,
     /// Headscale namespace (defaults to "claw-pen" if not specified)
+    #[serde(default)]
     pub headscale_namespace: Option<String>,
+    #[serde(default)]
     pub model_servers: ModelServers,
+    #[serde(default)]
     pub andor_bridge: Option<AndorBridgeConfig>,
     /// Native inference service configuration
     #[serde(default)]
     pub native_inference: Option<NativeInferenceConfig>,
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("deployment_mode", &self.deployment_mode)
+            .field("network_backend", &self.network_backend)
+            .field("runtime_socket", &self.runtime_socket)
+            .field("container_runtime", &self.container_runtime)
+            .field("exo_path", &self.exo_path)
+            .field("tailscale_auth_key", &self.tailscale_auth_key.as_ref().map(|_| "***REDACTED***"))
+            .field("headscale_url", &self.headscale_url)
+            .field("headscale_auth_key", &self.headscale_auth_key.as_ref().map(|_| "***REDACTED***"))
+            .field("headscale_namespace", &self.headscale_namespace)
+            .field("model_servers", &self.model_servers)
+            .field("andor_bridge", &self.andor_bridge)
+            .field("native_inference", &self.native_inference)
+            .finish()
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -97,7 +127,12 @@ fn default_top_p() -> f32 {
     0.9
 }
 
-#[derive(Debug, Deserialize, Clone)]
+fn default_runtime_socket() -> String {
+    "/var/run/claw-pen.sock".to_string()
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+#[serde(rename_all = "kebab-case")]
 pub struct ModelServers {
     pub ollama: Option<ModelServerConfig>,
     pub llama_cpp: Option<ModelServerConfig>,
@@ -106,6 +141,7 @@ pub struct ModelServers {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "kebab-case")]
 pub struct ModelServerConfig {
     pub endpoint: String,
     pub default_model: Option<String>,
@@ -154,21 +190,15 @@ pub fn load() -> anyhow::Result<Config> {
     dotenvy::dotenv().ok();
 
     let mut builder = config::Config::builder()
-        .set_default("deployment_mode", "windows-wsl")?
-        .set_default("network_backend", "tailscale")?
-        .set_default("runtime_socket", "/var/run/claw-pen.sock")?
-        .set_default("container_runtime", "docker")?
-        .set_default("exo_path", None::<String>)?
-        .set_default("tailscale_auth_key", None::<String>)?
-        .set_default("headscale_url", None::<String>)?
-        .set_default("headscale_auth_key", None::<String>)?
-        .set_default("headscale_namespace", None::<String>)?
-        .set_default("model_servers.ollama", None::<String>)?
-        .set_default("model_servers.llama_cpp", None::<String>)?
-        .set_default("model_servers.vllm", None::<String>)?
-        .set_default("model_servers.lm_studio", None::<String>)?
-        .set_default("andor_bridge", None::<String>)?
-        .set_default("native_inference", None::<String>)?;
+        .set_default("deployment-mode", "windows-wsl")?
+        .set_default("network-backend", "tailscale")?
+        .set_default("runtime-socket", "/var/run/claw-pen.sock")?
+        .set_default("container-runtime", "docker")?
+        .set_default("exo-path", None::<String>)?
+        .set_default("tailscale-auth-key", None::<String>)?
+        .set_default("headscale-url", None::<String>)?
+        .set_default("headscale-auth-key", None::<String>)?
+        .set_default("headscale-namespace", None::<String>)?;
 
     // Load from config file if found
     if let Some(config_path) = find_config_file() {

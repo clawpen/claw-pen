@@ -9,6 +9,15 @@ pub struct Template {
     pub config: TemplateConfig,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub identity: Option<TemplateIdentity>,
+}
+
+/// Optional identity block from template — used to seed the agent's identity volume
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TemplateIdentity {
+    #[serde(default)]
+    pub system_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
