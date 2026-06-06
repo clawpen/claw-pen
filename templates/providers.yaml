@@ -170,12 +170,18 @@ providers:
       - id: moonshot-api-key
         name: "API Key"
     models:
+      - id: "kimi-k2.6"
+        name: "Kimi K2.6"
+        context: 262144
+        vision: true
+        reasoning: true
+        recommended: true
       - id: "kimi-k2.5"
         name: "Kimi K2.5"
         context: 262144
         vision: true
         reasoning: false
-        recommended: true
+        recommended: false
       - id: "kimi-k2-thinking"
         name: "Kimi K2 Thinking"
         context: 262144
@@ -191,7 +197,7 @@ providers:
         context: 256000
         vision: false
         reasoning: false
-    default_model: "kimi-k2.5"
+    default_model: "kimi-k2.6"
     notes: "Uses MOONSHOT_API_KEY — separate from Kimi Coding keys"
 
   kimi-code:
@@ -203,13 +209,25 @@ providers:
       - id: kimi-code-api-key
         name: "API Key"
     models:
+      - id: "kimi-k2.6"
+        name: "Kimi K2.6"
+        context: 262144
+        vision: true
+        reasoning: true
+        recommended: true
+      - id: "kimi-for-coding"
+        name: "Kimi For Coding"
+        context: 262144
+        vision: false
+        reasoning: false
+        recommended: false
       - id: "kimi-code"
         name: "Kimi Code"
         context: 262144
         vision: false
         reasoning: false
-        recommended: true
-    default_model: "kimi-code"
+        recommended: false
+    default_model: "kimi-k2.6"
     notes: "Uses KIMI_API_KEY — separate from Moonshot Open Platform keys"
 
   mistral:
