@@ -1,10 +1,11 @@
-# Claw Pen Configuration - Windows
-deployment-mode = "all-windows"
+# Claw Pen Configuration - Linux VPS
+deployment-mode = "linux-native"
 network-backend = "local"
 runtime-socket = ""
-container-runtime = "exo"
-# Path to the exo binary. The .cmd wrapper bridges Windows → WSL2.
-exo-path = "F:\\Software\\exo\\exo.cmd"
+container-runtime = "docker"
+host = "127.0.0.1"
+port = 3001
+static-dir = "static-site"
 # Tailscale authentication key for agent mesh networking
 # Set via environment variable: TAILSCALE_AUTH_KEY
 # tailscale_auth_key = 'tskey-auth-xxx'
