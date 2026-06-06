@@ -86,7 +86,7 @@ fn default_cpu() -> f32 {
     1.0
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum LlmProvider {
     #[default]
@@ -95,6 +95,7 @@ pub enum LlmProvider {
     Gemini,
     Kimi,
     Zai,
+    #[serde(alias = "kimi-code")]
     KimiCode,
     Access,
     Huggingface,

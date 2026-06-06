@@ -34,11 +34,10 @@ enum ApiFormat {
 fn default_endpoint(provider: &LlmProvider) -> (&'static str, ApiFormat) {
     match provider {
         LlmProvider::OpenAI       => ("https://api.openai.com/v1",                       ApiFormat::OpenAi),
-        // Kimi Coding subscription uses Anthropic-messages on api.kimi.com/coding.
-        // Moonshot Open Platform uses OpenAI-format on api.moonshot.cn — different
-        // API, different key. Override LLM_BASE_URL + LLM_API_FORMAT to switch.
-        LlmProvider::Kimi
-        | LlmProvider::KimiCode   => ("https://api.kimi.com/coding",                     ApiFormat::AnthropicMessages),
+        // Kimi Code uses Anthropic-format on api.kimi.com/coding (v1/messages).
+        // Moonshot Open Platform uses OpenAI-format on api.moonshot.cn/v1.
+        LlmProvider::Kimi       => ("https://api.moonshot.cn/v1",                    ApiFormat::OpenAi),
+        LlmProvider::KimiCode   => ("https://api.kimi.com/coding",                   ApiFormat::AnthropicMessages),
         LlmProvider::Anthropic    => ("https://api.anthropic.com",                       ApiFormat::AnthropicMessages),
         LlmProvider::Zai          => ("https://api.z.ai/api/coding/paas/v4",             ApiFormat::OpenAi),
         LlmProvider::Gemini       => ("https://generativelanguage.googleapis.com/v1beta/openai", ApiFormat::OpenAi),
@@ -54,13 +53,10 @@ fn default_endpoint(provider: &LlmProvider) -> (&'static str, ApiFormat) {
 /// Some providers expect a different model id on the wire than the one users
 /// configure. Translate here.
 fn wire_model_id(provider: &LlmProvider, configured: &str) -> String {
-    match (provider, configured) {
-        // Kimi Coding's downstream catalog id is "kimi-code", but the upstream
-        // expects "kimi-for-coding".
-        (LlmProvider::Kimi | LlmProvider::KimiCode, "kimi-code")
-            => "kimi-for-coding".to_string(),
-        _ => configured.to_string(),
-    }
+    // Pass through as-is. Provider-specific translations can be added here
+    // if the upstream catalog uses different ids than the UI templates.
+    let _ = provider; // silence unused warning if no translations exist
+    configured.to_string()
 }
 
 // ─── OpenAI chat/completions wire types ─────────────────────────────────────
@@ -157,7 +153,17 @@ async fn resolve_api_key(state: &Arc<AppState>, agent: &AgentContainer) -> Optio
         _ => return None,
     };
     let keys = state.api_keys.read().await;
-    keys.get(key_lookup).cloned()
+    // Return the provider-specific key if present, otherwise fall back
+    // across the two Kimi key names so either works for both providers.
+    keys.get(key_lookup).cloned().or_else(|| {
+        if agent.config.llm_provider == LlmProvider::Kimi {
+            keys.get("kimi-code").cloned()
+        } else if agent.config.llm_provider == LlmProvider::KimiCode {
+            keys.get("kimi").cloned()
+        } else {
+            None
+        }
+    })
 }
 
 /// Send `chat`/`final` event with full text and persist the assistant turn.
