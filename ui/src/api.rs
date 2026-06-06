@@ -2,7 +2,24 @@ use crate::types::{AgentContainer, Team, TeamRoleAssignment, AssignRoleRequest};
 use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
 
-const API_BASE: &str = "http://localhost:3001/api";
+const API_BASE: &str = "/api";
+
+fn get_origin() -> String {
+    let window = web_sys::window().unwrap();
+    let location = window.location();
+    let protocol = location.protocol().unwrap_or_else(|_| "http:".to_string());
+    let host = location.host().unwrap_or_else(|_| "localhost:3001".to_string());
+    format!("{}//{}", protocol, host)
+}
+
+fn get_ws_origin() -> String {
+    let window = web_sys::window().unwrap();
+    let location = window.location();
+    let protocol = location.protocol().unwrap_or_else(|_| "http:".to_string());
+    let host = location.host().unwrap_or_else(|_| "localhost:3001".to_string());
+    let ws_protocol = if protocol == "https:" { "wss" } else { "ws" };
+    format!("{}://{}", ws_protocol, host)
+}
 
 // === Auth Types ===
 
@@ -33,7 +50,7 @@ pub struct AuthStatus {
 // === Auth API ===
 
 pub async fn get_auth_status() -> Result<AuthStatus, String> {
-    let response = Request::get("http://localhost:3001/auth/status")
+    let response = Request::get("/auth/status")
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -46,7 +63,7 @@ pub async fn get_auth_status() -> Result<AuthStatus, String> {
 }
 
 pub async fn login(password: &str) -> Result<TokenResponse, String> {
-    let response = Request::post("http://localhost:3001/auth/login")
+    let response = Request::post("/auth/login")
         .json(&LoginRequest {
             password: password.to_string(),
         })
@@ -67,7 +84,7 @@ pub async fn login(password: &str) -> Result<TokenResponse, String> {
 }
 
 pub async fn register(password: &str) -> Result<(), String> {
-    let response = Request::post("http://localhost:3001/auth/register")
+    let response = Request::post("/auth/register")
         .json(&LoginRequest {
             password: password.to_string(),
         })

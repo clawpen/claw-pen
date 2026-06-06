@@ -864,9 +864,9 @@
         let volumes = [];  // Volume list
         let roleAssignments = {};  // Team role assignments: {agentId: {teamId, teamName, roleId, roleName}}
         // Use config values (from config.js) or fallback to defaults
-        const ORCHESTRATOR_URL = typeof ORCHESTRATOR_URL_CFG !== 'undefined' ? ORCHESTRATOR_URL_CFG : 'http://localhost:3001';
-        const TEAMS_API_URL = typeof TEAMS_API_URL_CFG !== 'undefined' ? TEAMS_API_URL_CFG : 'http://localhost:3001/api';
-        const ORCHESTRATOR_WS_URL = typeof ORCHESTRATOR_WS_URL_CFG !== 'undefined' ? ORCHESTRATOR_WS_URL_CFG : 'ws://127.0.0.1:3001';
+        const ORCHESTRATOR_URL = typeof ORCHESTRATOR_URL_CFG !== 'undefined' ? ORCHESTRATOR_URL_CFG : (window.location.protocol !== 'file:' ? '' : 'http://localhost:3001');
+        const TEAMS_API_URL = typeof TEAMS_API_URL_CFG !== 'undefined' ? TEAMS_API_URL_CFG : (window.location.protocol !== 'file:' ? '/api' : 'http://localhost:3001/api');
+        const ORCHESTRATOR_WS_URL = typeof ORCHESTRATOR_WS_URL_CFG !== 'undefined' ? ORCHESTRATOR_WS_URL_CFG : (window.location.protocol !== 'file:' ? (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host : 'ws://127.0.0.1:3001');
         let authToken = localStorage.getItem('clawpen_token');
         let globalKeys = {};  // Store global API key status
         let intervalsSet = false;  // Track if we've started polling

@@ -33,6 +33,12 @@ pub enum ContainerRuntimeType {
 #[derive(Deserialize, Clone)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    #[serde(default = "default_orchestrator_port")]
+    pub port: u16,
+    #[serde(default = "default_orchestrator_host")]
+    pub host: String,
+    #[serde(default = "default_static_dir")]
+    pub static_dir: Option<String>,
     #[serde(default)]
     pub deployment_mode: DeploymentMode,
     #[serde(default)]
@@ -70,7 +76,9 @@ pub struct Config {
 impl fmt::Debug for Config {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Config")
-            .field("deployment_mode", &self.deployment_mode)
+            .field("port", &self.port)
+    .field("host", &self.host)
+    .field("static_dir", &self.static_dir)
             .field("network_backend", &self.network_backend)
             .field("runtime_socket", &self.runtime_socket)
             .field("container_runtime", &self.container_runtime)
@@ -125,6 +133,18 @@ fn default_temperature() -> f32 {
 
 fn default_top_p() -> f32 {
     0.9
+}
+
+fn default_orchestrator_port() -> u16 {
+    3001
+}
+
+fn default_orchestrator_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_static_dir() -> Option<String> {
+    Some("tauri-app/dist".to_string())
 }
 
 fn default_runtime_socket() -> String {
@@ -190,6 +210,9 @@ pub fn load() -> anyhow::Result<Config> {
     dotenvy::dotenv().ok();
 
     let mut builder = config::Config::builder()
+        .set_default("port", 3001)?
+        .set_default("host", "127.0.0.1")?
+        .set_default("static-dir", None::<String>)?
         .set_default("deployment-mode", "windows-wsl")?
         .set_default("network-backend", "tailscale")?
         .set_default("runtime-socket", "/var/run/claw-pen.sock")?
