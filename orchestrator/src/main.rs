@@ -33,6 +33,7 @@ use container::ContainerRuntime;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::services::ServeDir;
 
 use crate::auth::AuthManager;
 use crate::secret_manager::SecretsManager;
@@ -635,13 +636,31 @@ async fn main() -> anyhow::Result<()> {
     let state_clone = state.clone();
     let state_shutdown = state.clone();
 
+    // Static file serving - serve the web UI if configured
+    let static_dir = state.config.static_dir.clone();
     let app = Router::new()
         .merge(public_routes)
         .merge(protected_routes)
         .layer(cors)
-        .with_state(state);
+        .with_state(state.clone());
 
-    let addr = format!("{}:{}", "127.0.0.1", 3001);
+    let app = if let Some(dir) = static_dir {
+        let static_path = std::path::PathBuf::from(&dir);
+        if static_path.exists() {
+            tracing::info!("📁 Serving static files from: {}", dir);
+            app.fallback_service(ServeDir::new(&dir).append_index_html_on_directories(true))
+        } else {
+            tracing::warn!("⚠️  Static directory '{}' does not exist, skipping static file serving", dir);
+            app
+        }
+    } else {
+        app
+    };
+
+    // Get host and port from config
+    let host = state.config.host.clone();
+    let port = state.config.port;
+    let addr = format!("{}:{}", host, port);
     tracing::info!("🦀 Claw Pen orchestrator listening on {}", addr);
     tracing::info!("🔐 JWT authentication enabled - all API endpoints require Bearer token");
     tracing::info!("   GET /auth/status to check auth configuration");

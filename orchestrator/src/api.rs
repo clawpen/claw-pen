@@ -1068,16 +1068,13 @@ async fn handle_terminal_stream(mut socket: WebSocket, container_id: String, she
     use tokio::io::AsyncWriteExt as _;
 
     // Connect to Docker
-    let docker = match bollard::Docker::connect_with_named_pipe_defaults() {
+    let docker = match bollard::Docker::connect_with_local_defaults() {
         Ok(d) => d,
-        Err(_) => match bollard::Docker::connect_with_local_defaults() {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::error!("Failed to connect to Docker for terminal: {}", e);
-                let _ = socket.send(Message::Text(format!("\r\nError: cannot connect to Docker: {}\r\n", e))).await;
-                return;
-            }
-        },
+        Err(e) => {
+            tracing::error!("Failed to connect to Docker for terminal: {}", e);
+            let _ = socket.send(Message::Text(format!("\r\nError: cannot connect to Docker: {}\r\n", e))).await;
+            return;
+        }
     };
 
     // Create exec with stdin attached and interactive TTY
@@ -1912,16 +1909,12 @@ async fn get_container_ip(state: &Arc<AppState>, container_id: &str) -> anyhow::
     use bollard::Docker;
     use bollard::API_DEFAULT_VERSION;
 
-    // Create a new Docker connection (try Windows named pipe first, then Unix socket)
-    let docker = if cfg!(windows) {
-        Docker::connect_with_named_pipe(r"\\.\pipe\docker_engine", 120, API_DEFAULT_VERSION)
-    } else {
-        Docker::connect_with_socket("/var/run/docker.sock", 120, API_DEFAULT_VERSION)
-    }
-    .map_err(|e| anyhow::anyhow!("Failed to connect to Docker: {}", e))?;
+    // Create a new Docker connection
+    let docker = Docker::connect_with_local_defaults()
+        .map_err(|e| anyhow::anyhow!("Failed to connect to Docker: {}", e))?;
 
     let inspect = docker
-        .inspect_container(container_id, None::<InspectContainerOptions>)
+        .inspect_container(container_id, None)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to inspect container: {}", e))?;
 
@@ -1929,7 +1922,7 @@ async fn get_container_ip(state: &Arc<AppState>, container_id: &str) -> anyhow::
     if let Some(networks) = inspect.network_settings.and_then(|n| n.networks) {
         for (_name, network) in networks {
             if let Some(ip) = network.ip_address {
-                let ip_string = ip.to_string();
+                let ip_string: String = ip.to_string();
 
                 // Cache the IP for future requests (avoids repeated Docker inspect calls)
                 let mut cache = state.container_ips.write().await;

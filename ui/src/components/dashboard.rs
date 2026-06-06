@@ -1,5 +1,6 @@
-use crate::api::{fetch_agents, fetch_teams, fetch_team_roles, assign_team_role, remove_team_role};
+use crate::api::{fetch_agents, fetch_teams, fetch_team_roles, assign_team_role, remove_team_role, start_agent, stop_agent};
 use crate::components::chat::ChatPanel;
+use crate::components::logs::LogsPanel;
 use crate::types::{AgentContainer, AgentStatus, Team, TeamRoleAssignment};
 use std::collections::HashMap;
 use wasm_bindgen_futures::spawn_local;
@@ -13,6 +14,7 @@ pub fn dashboard() -> Html {
     let teams = use_state(Vec::new);
     let team_roles = use_state(HashMap::<String, Vec<TeamRoleAssignment>>::new);
     let chat_agent = use_state(|| None::<AgentContainer>);
+    let logs_agent = use_state(|| None::<AgentContainer>);
     let team_modal_agent = use_state(|| None::<AgentContainer>);
     let selected_team = use_state(|| None::<String>);
     let selected_role = use_state(|| None::<String>);
@@ -55,6 +57,13 @@ pub fn dashboard() -> Html {
         let chat_agent = chat_agent.clone();
         Callback::from(move |()| {
             chat_agent.set(None);
+        })
+    };
+
+    let on_close_logs = {
+        let logs_agent = logs_agent.clone();
+        Callback::from(move |()| {
+            logs_agent.set(None);
         })
     };
 
@@ -225,7 +234,7 @@ pub fn dashboard() -> Html {
             // Sidebar with agent list
             <div class="sidebar">
                 <div class="sidebar-header">
-                    <h1>{"🦞 Claw Pen"}</h1>
+                    <h1>{"🦀 Claw Pen"}</h1>
                 </div>
                 <div class="agent-list">
                     if *loading {
@@ -242,6 +251,57 @@ pub fn dashboard() -> Html {
                                     chat_agent.set(Some(agent.clone()));
                                 })
                             };
+                            let open_logs = {
+                                let logs_agent = logs_agent.clone();
+                                let agent = agent.clone();
+                                Callback::from(move |()| {
+                                    logs_agent.set(Some(agent.clone()));
+                                })
+                            };
+                            let on_start = {
+                                let agents = agents.clone();
+                                let agent = agent.clone();
+                                Callback::from(move |_| {
+                                    let agents = agents.clone();
+                                    let agent_id = agent.id.clone();
+                                    spawn_local(async move {
+                                        match start_agent(&agent_id).await {
+                                            Ok(updated) => {
+                                                let mut current = (*agents).clone();
+                                                if let Some(idx) = current.iter().position(|a| a.id == updated.id) {
+                                                    current[idx] = updated;
+                                                    agents.set(current);
+                                                }
+                                            }
+                                            Err(e) => {
+                                                web_sys::console::error_1(&format!("Failed to start agent: {}", e).into());
+                                            }
+                                        }
+                                    });
+                                })
+                            };
+                            let on_stop = {
+                                let agents = agents.clone();
+                                let agent = agent.clone();
+                                Callback::from(move |_| {
+                                    let agents = agents.clone();
+                                    let agent_id = agent.id.clone();
+                                    spawn_local(async move {
+                                        match stop_agent(&agent_id).await {
+                                            Ok(updated) => {
+                                                let mut current = (*agents).clone();
+                                                if let Some(idx) = current.iter().position(|a| a.id == updated.id) {
+                                                    current[idx] = updated;
+                                                    agents.set(current);
+                                                }
+                                            }
+                                            Err(e) => {
+                                                web_sys::console::error_1(&format!("Failed to stop agent: {}", e).into());
+                                            }
+                                        }
+                                    });
+                                })
+                            };
                             let on_open_teams = on_open_teams.clone();
                             let agent_clone = agent.clone();
                             let agent_for_card = agent.clone();
@@ -250,6 +310,9 @@ pub fn dashboard() -> Html {
                                     agent={agent_for_card}
                                     is_active={is_active}
                                     on_chat={open_chat}
+                                    on_logs={open_logs}
+                                    on_start={on_start}
+                                    on_stop={on_stop}
                                     on_teams={on_open_teams.reform(move |_| agent_clone.clone())}
                                 />
                             }
@@ -278,11 +341,13 @@ pub fn dashboard() -> Html {
             <div class="main">
                 if let Some(agent) = (*chat_agent).clone() {
                     <ChatPanel agent={agent} on_close={on_close_chat} />
+                } else if let Some(agent) = (*logs_agent).clone() {
+                    <LogsPanel agent_id={agent.id} agent_name={agent.name} on_close={on_close_logs} />
                 } else {
                     <div class="empty-main">
-                        <div class="emoji">{"🦞"}</div>
+                        <div class="emoji">{"🦀"}</div>
                         <h2>{"Claw Pen"}</h2>
-                        <p>{"Select an agent to start chatting"}</p>
+                        <p>{"Select an agent to start chatting or view logs"}</p>
                     </div>
                 }
             </div>
@@ -313,6 +378,9 @@ pub struct AgentCardProps {
     pub agent: AgentContainer,
     pub is_active: bool,
     pub on_chat: Callback<()>,
+    pub on_logs: Callback<()>,
+    pub on_start: Callback<MouseEvent>,
+    pub on_stop: Callback<MouseEvent>,
     pub on_teams: Callback<AgentContainer>,
 }
 
@@ -342,6 +410,13 @@ fn agent_card(props: &AgentCardProps) -> Html {
         })
     };
 
+    let on_logs_click = {
+        let on_logs = props.on_logs.clone();
+        Callback::from(move |_e: MouseEvent| {
+            on_logs.emit(());
+        })
+    };
+
     let on_teams_click = {
         let on_teams = props.on_teams.clone();
         let agent = props.agent.clone();
@@ -363,6 +438,23 @@ fn agent_card(props: &AgentCardProps) -> Html {
                     onclick={on_chat_click}
                     title="Chat with agent"
                 >{"💬"}</button>
+                <button
+                    class="action-btn logs-btn"
+                    onclick={on_logs_click}
+                    title="View logs"
+                >{"📋"}</button>
+                <button
+                    class={format!("action-btn start-btn {}", if props.agent.status == AgentStatus::Running { "hidden" } else { "" })}
+                    onclick={props.on_start.clone()}
+                    disabled={props.agent.status == AgentStatus::Starting || props.agent.status == AgentStatus::Stopping}
+                    title="Start agent"
+                >{"▶️"}</button>
+                <button
+                    class={format!("action-btn stop-btn {}", if props.agent.status != AgentStatus::Running { "hidden" } else { "" })}
+                    onclick={props.on_stop.clone()}
+                    disabled={props.agent.status == AgentStatus::Starting || props.agent.status == AgentStatus::Stopping}
+                    title="Stop agent"
+                >{"⏹️"}</button>
                 <button
                     class="action-btn teams-btn"
                     onclick={on_teams_click}
