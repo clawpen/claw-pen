@@ -32,7 +32,11 @@ pub fn chat_panel(props: &ChatPanelProps) -> Html {
         let agent_id = props.agent.id.clone();
 
         use_effect_with(agent_id.clone(), move |_| {
-            let ws_url = format!("ws://localhost:3001/api/agents/{}/chat", agent_id);
+            let window = web_sys::window().unwrap();
+            let protocol = window.location().protocol().unwrap_or_else(|_| "ws:".to_string());
+            let host = window.location().host().unwrap_or_else(|_| "localhost:3001".to_string());
+            let ws_protocol = if protocol.starts_with("https") { "wss" } else { "ws" };
+            let ws_url = format!("{}://{}/api/agents/{}/chat", ws_protocol, host, agent_id);
 
             match WebSocket::open(&ws_url) {
                 Ok(_ws) => {

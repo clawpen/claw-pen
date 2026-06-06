@@ -26,9 +26,14 @@ pub fn logs_panel(props: &LogsPanelProps) -> Html {
 
         use_effect_with(agent_id.clone(), move |_| {
             let token = get_token().unwrap_or_default();
+            let window = web_sys::window().unwrap();
+            let protocol = window.location().protocol().unwrap_or_else(|_| "http:".to_string());
+            let ws_protocol = if protocol.starts_with("https") { "wss" } else { "ws" };
+            let host = window.location().host().unwrap_or_else(|_| "localhost:3001".to_string());
             let ws_url = format!(
-                "ws://{}/api/agents/{}/logs/stream?token={}",
-                web_sys::window().unwrap().location().host().unwrap_or_else(|_| "localhost:3001".to_string()),
+                "{}://{}/api/agents/{}/logs/stream?token={}",
+                ws_protocol,
+                host,
                 agent_id,
                 token
             );

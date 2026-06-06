@@ -1,0 +1,2425 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Claw Pen</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            background: #1a1a2e; 
+            color: #eee; 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Color Emoji', sans-serif;
+            min-height: 100vh;
+            display: flex;
+        }
+        
+        #sidebar {
+            width: 320px;
+            background: #0f0f1a;
+            border-right: 1px solid #2a2a4a;
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            height: 100vh;
+        }
+        
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid #2a2a4a;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        
+        .sidebar-header h1 { color: #e94560; font-size: 24px; margin: 0; }
+        .sidebar-header { display: flex; align-items: center; justify-content: space-between; }
+        
+        .system-stats {
+            padding: 16px 20px;
+            background: #16162a;
+            border-bottom: 1px solid #2a2a4a;
+            flex-shrink: 0;
+        }
+        
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+        
+        .stat-label { color: #888; }
+        .stat-value { color: #22c55e; font-weight: 500; }
+        .stat-value.warning { color: #f59e0b; }
+        .stat-value.danger { color: #ef4444; }
+        
+        .stat-bar {
+            height: 4px;
+            background: #2a2a4a;
+            border-radius: 2px;
+            margin-top: 4px;
+            overflow: hidden;
+        }
+        
+        .stat-bar-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.5s, background 0.3s;
+        }
+        
+        .stat-bar-fill.ok { background: #22c55e; }
+        .stat-bar-fill.warning { background: #f59e0b; }
+        .stat-bar-fill.danger { background: #ef4444; }
+        
+        .stat-section { margin-bottom: 16px; }
+        .stat-section:last-child { margin-bottom: 0; }
+        
+        .create-agent-btn {
+            margin: 16px 20px;
+            padding: 12px;
+            background: #e94560;
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+        
+        .create-agent-btn:hover { background: #d63050; }
+        
+        .agent-list-header {
+            padding: 12px 20px;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #666;
+            border-bottom: 1px solid #2a2a4a;
+            flex-shrink: 0;
+        }
+        
+        #agent-list { 
+            flex: 1; 
+            overflow-y: auto;
+            min-height: 0;
+        }
+        
+        .agent-card {
+            padding: 16px 20px;
+            border-bottom: 1px solid #2a2a4a;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .agent-card:hover { background: #1a1a2e; }
+        .agent-card.selected { background: #1a1a2e; border-left: 3px solid #e94560; }
+        
+        .agent-name { font-weight: 500; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+        
+        .agent-status {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+        
+        .agent-status.running { background: #22c55e33; color: #22c55e; }
+        .agent-status.stopped { background: #66666633; color: #888; }
+        
+        .agent-model { font-size: 12px; color: #888; margin-bottom: 8px; }
+        .agent-team { font-size: 11px; color: #8b5cf6; margin-bottom: 8px; }
+        .team-indicator { display: inline-flex; align-items: center; gap: 4px; background: #8b5cf633; padding: 2px 8px; border-radius: 4px; }
+        .agent-resources { display: flex; gap: 16px; font-size: 11px; color: #666; }
+        
+        .agent-actions { margin-top: 8px; display: flex; gap: 8px; }
+        .agent-actions button { padding: 4px 10px; font-size: 11px; border: none; border-radius: 4px; cursor: pointer; }
+        .btn-start { background: #22c55e33; color: #22c55e; }
+        .btn-stop { background: #ef444433; color: #ef4444; }
+        .btn-delete { background: #66666633; color: #888; }
+        .btn-volumes { background: #2a2a4a; color: #e94560; }
+        .btn-shell { background: #3b82f633; color: #3b82f6; }
+        .btn-shell:disabled { opacity: 0.3; cursor: not-allowed; }
+        .btn-teams { background: #8b5cf633; color: #8b5cf6; }
+        .agent-actions button:hover { opacity: 0.8; }
+        
+        /* Volume section styles */
+        .volume-section {
+            padding: 12px 20px;
+            border-bottom: 1px solid #2a2a4a;
+            flex-shrink: 0;
+        }
+        .volume-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .volume-header h3 {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #666;
+        }
+        .btn-add-volume {
+            background: transparent;
+            border: 1px solid #2a2a4a;
+            color: #888;
+            font-size: 18px;
+            cursor: pointer;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+        .btn-add-volume:hover { background: #2a2a4a; color: #e94560; }
+        
+        .volume-list { max-height: 150px; overflow-y: auto; }
+        .volume-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 8px;
+            border-radius: 4px;
+            margin-bottom: 4px;
+            background: #16162a;
+        }
+        .volume-item:hover { background: #1a1a2e; }
+        .volume-name { font-size: 12px; color: #ccc; }
+        .volume-target { font-size: 10px; color: #666; }
+        .volume-actions button {
+            background: transparent;
+            border: none;
+            color: #666;
+            cursor: pointer;
+            padding: 2px 4px;
+            font-size: 12px;
+        }
+        .volume-actions button:hover { color: #e94560; }
+        
+        /* Tab bar styles */
+        .tab-bar {
+            display: flex;
+            align-items: center;
+            background: #0f0f1a;
+            border-bottom: 1px solid #2a2a4a;
+            padding: 0 12px;
+            min-height: 40px;
+            gap: 4px;
+            overflow-x: auto;
+            flex-shrink: 0;
+        }
+        .tab-bar.hidden { display: none; }
+        
+        .tab {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: transparent;
+            border: none;
+            border-radius: 6px 6px 0 0;
+            color: #888;
+            font-size: 13px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.2s;
+        }
+        .tab:hover { background: #1a1a2e; color: #ccc; }
+        .tab.active { background: #1a1a2e; color: #eee; border-bottom: 2px solid #e94560; }
+        
+        .tab-status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #666;
+        }
+        .tab-status.connected { background: #22c55e; }
+        .tab-status.connecting { background: #f59e0b; animation: pulse 1s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        
+        .tab-popout {
+            padding: 2px 4px;
+            background: transparent;
+            border: none;
+            color: #666;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 12px;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        .tab:hover .tab-popout { opacity: 1; }
+        .tab-popout:hover { background: #2a2a4a; color: #e94560; }
+        
+        /* Floating window mode */
+        body.floating-mode #sidebar { display: none; }
+        body.floating-mode #main { padding: 12px; }
+        body.floating-mode .chat-header { margin-bottom: 12px; }
+        body.floating-mode .tab-bar { display: none; }
+        
+        #main { flex: 1; display: flex; flex-direction: column; padding: 20px; height: 100vh; }
+        
+        .chat-header { margin-bottom: 16px; flex-shrink: 0; }
+        .chat-header h2 { font-size: 18px; color: #eee; }
+        
+        .status { 
+            padding: 8px 12px; 
+            background: #0f0f1a; 
+            border-radius: 6px;
+            font-size: 14px;
+            display: inline-block;
+        }
+        .btn-refresh {
+            background: #0f0f1a;
+            border: 1px solid #2a2a4a;
+            border-radius: 6px;
+            padding: 6px 10px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .btn-refresh:hover {
+            background: #1a1a2e;
+            border-color: #3a3a5a;
+        }
+        .status.connected { color: #22c55e; }
+        .status.connecting { color: #f59e0b; }
+        .status.error { color: #ef4444; }
+        
+        #chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #0f0f1a;
+            border-radius: 12px;
+            overflow: hidden;
+            min-height: 0;
+        }
+        
+        #messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            min-height: 0;
+        }
+        
+        .message {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 16px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .message.user { align-self: flex-end; background: #e94560; color: white; border-bottom-right-radius: 4px; }
+        .message.assistant { align-self: flex-start; background: #2a2a4a; color: #eee; border-bottom-left-radius: 4px; }
+        .message.system { align-self: center; background: transparent; color: #666; font-size: 12px; }
+        .message.streaming { opacity: 0.9; }
+        .message.streaming::after { content: '▋'; animation: blink 1s infinite; }
+        @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+        
+        .replying-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 16px;
+            background: #2a2a4a;
+            border-radius: 16px;
+            border-bottom-left-radius: 4px;
+            align-self: flex-start;
+            color: #888;
+            font-size: 14px;
+        }
+        .replying-indicator.hidden { display: none; }
+        .typing-dots {
+            display: flex;
+            gap: 4px;
+        }
+        .typing-dots span {
+            width: 6px;
+            height: 6px;
+            background: #e94560;
+            border-radius: 50%;
+            animation: typing-bounce 1.4s infinite ease-in-out;
+        }
+        .typing-dots span:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dots span:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes typing-bounce {
+            0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+        
+        #input-area {
+            display: flex;
+            gap: 10px;
+            padding: 16px;
+            background: #16162a;
+            border-top: 1px solid #2a2a4a;
+            flex-shrink: 0;
+        }
+        
+        #message-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: none;
+            border-radius: 24px;
+            background: #1a1a2e;
+            color: white;
+            font-size: 14px;
+            outline: none;
+        }
+        #message-input:focus { box-shadow: 0 0 0 2px #e94560; }
+        
+        #send-btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 24px;
+            background: #e94560;
+            color: white;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        #send-btn:hover { background: #d63050; }
+        #send-btn:disabled { background: #444; cursor: not-allowed; }
+        
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+        
+        .modal-overlay.active { display: flex; }
+        
+        .modal {
+            background: #1a1a2e;
+            border-radius: 12px;
+            padding: 24px;
+            width: 450px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        
+        .modal h3 { margin-bottom: 20px; color: #e94560; }
+        
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; font-size: 12px; color: #888; margin-bottom: 6px; }
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #2a2a4a;
+            border-radius: 6px;
+            background: #0f0f1a;
+            color: #eee;
+            font-size: 14px;
+        }
+        .form-group input:focus, .form-group select:focus { outline: none; border-color: #e94560; }
+        
+        .modal-actions { display: flex; gap: 12px; margin-top: 20px; }
+        .btn { flex: 1; padding: 10px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
+        .btn-primary { background: #e94560; color: white; }
+        .btn-secondary { background: #2a2a4a; color: #eee; }
+        .btn:hover { opacity: 0.9; }
+        
+        .api-key-hint { font-size: 11px; color: #666; margin-top: 4px; }
+    
+.settings-btn {
+    background: transparent;
+    border: none;
+    color: #888;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 6px;
+    transition: all 0.2s;
+}
+.settings-btn:hover {
+    background: #2a2a4a;
+    color: #e94560;
+}
+
+/* Settings Modal */
+#settings-modal .modal-content {
+    max-width: 500px;
+}
+.api-key-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.api-key-row label {
+    width: 100px;
+    font-size: 14px;
+    color: #aaa;
+}
+.api-key-row input {
+    flex: 1;
+    padding: 10px 12px;
+    background: #1a1a2e;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    color: #eee;
+    font-family: monospace;
+    font-size: 13px;
+}
+.api-key-row input:focus {
+    outline: none;
+    border-color: #e94560;
+}
+.api-key-row .status {
+    width: 24px;
+    text-align: center;
+}
+.api-key-row .status.has-key { color: #22c55e; }
+.api-key-row .status.no-key { color: #666; }
+
+/* Login Modal */
+.login-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+}
+.login-overlay.hidden { display: none; }
+.login-box {
+    background: #16213e;
+    border-radius: 16px;
+    padding: 2.5rem;
+    width: 100%;
+    max-width: 400px;
+    border: 1px solid #0f3460;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+    text-align: center;
+}
+.login-box h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
+.login-box h2 { color: #94a3b8; font-size: 1.2rem; margin-bottom: 1.5rem; }
+.login-setup h2 { color: #e94560; margin-bottom: 0.5rem; }
+.login-setup p { color: #94a3b8; margin-bottom: 1.5rem; }
+.login-error {
+    background: #7f1d1d;
+    color: #fecaca;
+    padding: 0.75rem;
+    border-radius: 6px;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+}
+.login-box input {
+    width: 100%;
+    padding: 0.875rem 1rem;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    background: #1a1a2e;
+    color: #eee;
+    font-size: 1rem;
+    margin-bottom: 1rem;
+}
+.login-box input:focus { outline: none; border-color: #e94560; }
+.login-box input::placeholder { color: #6b7280; }
+.login-box button {
+    width: 100%;
+    padding: 0.875rem;
+    background: #e94560;
+    border: none;
+    border-radius: 8px;
+    color: white;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+}
+.login-box button:hover { background: #d63050; }
+.login-box button:disabled { background: #4a4a5e; cursor: not-allowed; }
+
+        /* Emoji support */
+        @font-face {
+            font-family: 'Emoji';
+            src: local('Noto Color Emoji'), local('Apple Color Emoji'), local('Segoe UI Emoji');
+        }
+        .emoji, .sidebar-header h1, .btn-refresh {
+            font-family: 'Emoji', 'Noto Color Emoji', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        /* Security badges and volume indicators */
+        .security-badge {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            margin-left: 8px;
+        }
+
+        .security-warning {
+            background: #ef444433;
+            color: #ef4444;
+        }
+
+        .security-safe {
+            background: #22c55e33;
+            color: #22c55e;
+        }
+
+        .volume-indicator {
+            background: #2a2a4a;
+            color: #e94560;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            margin-left: 4px;
+        }
+</style>
+
+
+</head>
+<body>
+    <!-- Login Modal -->
+    <div class="login-overlay hidden" id="login-modal">
+        <div class="login-box">
+            <h1>🦀 Claw Pen</h1>
+            <div id="login-setup" class="login-setup hidden">
+                <h2>Welcome!</h2>
+                <p>Create an admin password to get started.</p>
+            </div>
+            <h2 id="login-title">Login</h2>
+            <div id="login-error" class="login-error hidden"></div>
+            <form id="login-form">
+                <input type="password" id="login-password" placeholder="Password" autocomplete="current-password" />
+                <button type="submit" id="login-btn">Login</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="sidebar">
+        <div class="sidebar-header">
+            <h1>🦀 Claw Pen</h1>
+            <div style="display: flex; gap: 8px;">
+                <button class="settings-btn" onclick="doLogout()" title="Logout">🚪</button>
+                <button class="settings-btn" onclick="showSettingsModal()" title="Settings">⚙️</button>
+            </div>
+        </div>
+        
+        <div class="system-stats">
+            <div class="stat-section">
+                <div class="stat-row">
+                    <span class="stat-label">💾 RAM</span>
+                    <span class="stat-value" id="ram-value">-- / --</span>
+                </div>
+                <div class="stat-bar"><div class="stat-bar-fill" id="ram-bar" style="width:0%"></div></div>
+            </div>
+            
+            <div class="stat-section">
+                <div class="stat-row">
+                    <span class="stat-label">⚡ CPU</span>
+                    <span class="stat-value" id="cpu-value">-- cores</span>
+                </div>
+                <div class="stat-bar"><div class="stat-bar-fill" id="cpu-bar" style="width:0%"></div></div>
+            </div>
+            
+            <div class="stat-row" style="margin-top:12px">
+                <span class="stat-label">Agents</span>
+                <span class="stat-value" id="agent-count">0 / 0</span>
+            </div>
+        </div>
+
+        <div style="padding: 10px 20px; text-align: center;">
+            <a href="#" onclick="doLogout(); return false;" style="color: #e94560; text-decoration: none; font-size: 14px;">🚪 Logout</a>
+        </div>
+
+        <button class="create-agent-btn" onclick="openAgentCreator()">+ Create Agent</button>
+        
+        <div class="volume-section">
+            <div class="volume-header">
+                <h3>Volumes</h3>
+                <button class="btn-add-volume" onclick="showVolumeModal()" title="Create volume">+</button>
+            </div>
+            <div class="volume-list" id="volume-list"></div>
+        </div>
+        
+        <div class="agent-list-header">Your Agents</div>
+        <div id="agent-list"></div>
+    </div>
+    
+
+    <div class="modal-overlay" id="settings-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>⚙️ Settings</h3>
+                <button class="modal-close" onclick="hideSettingsModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <h4 style="margin-bottom: 16px; color: #aaa;">API Keys</h4>
+                <p style="font-size: 13px; color: #666; margin-bottom: 20px;">
+                    Keys are stored encrypted and only used for agent LLM calls.
+                </p>
+                
+                <div class="api-key-row">
+                    <label>Z.AI</label>
+                    <input type="password" id="key-zai" placeholder="sk-..." />
+                    <span class="status" id="status-zai"></span>
+                </div>
+                
+                <div class="api-key-row">
+                    <label>Kimi</label>
+                    <input type="password" id="key-kimi" placeholder="sk-..." />
+                    <span class="status" id="status-kimi"></span>
+                </div>
+                
+                <div class="api-key-row">
+                    <label>Anthropic</label>
+                    <input type="password" id="key-anthropic" placeholder="sk-ant-..." />
+                    <span class="status" id="status-anthropic"></span>
+                </div>
+                
+                <div class="api-key-row">
+                    <label>OpenAI</label>
+                    <input type="password" id="key-openai" placeholder="sk-..." />
+                    <span class="status" id="status-openai"></span>
+                </div>
+                
+                <div class="api-key-row">
+                    <label>Google</label>
+                    <input type="password" id="key-google" placeholder="AIza..." />
+                    <span class="status" id="status-google"></span>
+                </div>
+                
+                <div style="margin-top: 24px; display: flex; gap: 12px;">
+                    <button class="btn-primary" onclick="saveApiKeys()">Save Keys</button>
+                    <button class="btn-secondary" onclick="hideSettingsModal()">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="main">
+        <div class="tab-bar" id="tab-bar"></div>
+        <div class="chat-header">
+            <h2 id="chat-title">Select an agent</h2>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <div class="status" id="status">Not connected</div>
+                <button class="btn-refresh" onclick="refreshConnection()" title="Reconnect">🔄</button>
+            </div>
+        </div>
+        
+        <div id="chat-container">
+            <div id="messages"></div>
+            <div class="replying-indicator hidden" id="replying-indicator">
+                <div class="typing-dots"><span></span><span></span><span></span></div>
+                <span>Replying...</span>
+            </div>
+            <div id="input-area">
+                <input type="text" id="message-input" placeholder="Type a message..." disabled>
+                <button id="send-btn" disabled>Send</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="modal-overlay" id="create-modal">
+        <div class="modal">
+            <h3>Create Agent</h3>
+            <div class="form-group">
+                <label>Name</label>
+                <input type="text" id="new-agent-name" placeholder="my-agent">
+            </div>
+            <div class="form-group">
+                <label>Provider</label>
+                <select id="new-agent-provider" onchange="updateModelOptions()">
+                    <option value="zai">Z.AI</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="kimi">Kimi</option>
+                    <option value="kimi-code">Kimi Code</option>
+                    <option value="google">Google</option>
+                    <option value="access">Access</option>
+                    <option value="huggingface">Hugging Face</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Model</label>
+                <select id="new-agent-model"></select>
+            </div>
+            <div class="form-group">
+                <label>API Key</label>
+                <input type="password" id="new-agent-apikey" placeholder="Your API key for this provider">
+                <div class="api-key-hint" id="apikey-hint">Key is stored per-agent, not shared</div>
+            </div>
+            <div class="form-group">
+                <label>Memory (MB)</label>
+                <input type="number" id="new-agent-memory" value="2048">
+            </div>
+            <div class="form-group">
+                <label>Volumes</label>
+                <div id="volume-checkboxes" style="max-height: 100px; overflow-y: auto; background: #0f0f1a; border-radius: 6px; padding: 8px;">
+                    <div style="color: #666; font-size: 12px;">No volumes available</div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="hideCreateModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="createAgent()">Create</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Volume Modal -->
+    <div class="modal-overlay" id="volume-modal">
+        <div class="modal">
+            <h3>Create Volume</h3>
+            <div class="form-group">
+                <label>Name</label>
+                <input type="text" id="new-volume-name" placeholder="my-data">
+            </div>
+            <div class="form-group">
+                <label>Host Path (leave empty for managed volume)</label>
+                <input type="text" id="new-volume-path" placeholder="/home/user/projects/myapp">
+                <div class="api-key-hint">Managed volumes are stored in ~/.claw-pen/volumes/</div>
+            </div>
+            <div class="form-group">
+                <label>Mount Point in Container</label>
+                <input type="text" id="new-volume-target" value="/data">
+            </div>
+            <div class="form-group">
+                <label style="display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="new-volume-readonly">
+                    <span>Read Only</span>
+                </label>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="hideVolumeModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="createVolume()">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Agent Volumes Modal -->
+    <div class="modal-overlay" id="agent-volumes-modal">
+        <div class="modal" style="max-width: 500px;">
+            <h3>📦 Manage Volumes</h3>
+            <p id="agent-volumes-agent-name" style="color: #666; font-size: 13px; margin-bottom: 16px;"></p>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; color: #aaa;">Current Volumes</label>
+                <div id="agent-current-volumes" style="min-height: 60px; background: #0f0f1a; border-radius: 6px; padding: 12px;">
+                    <div style="color: #666; font-size: 12px;">No volumes attached</div>
+                </div>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; color: #aaa;">Attach Volume</label>
+                <select id="attach-volume-select" style="width: 100%; padding: 10px; background: #0f0f1a; border: 1px solid #2a2a4a; color: #fff; border-radius: 6px; margin-bottom: 12px;">
+                    <option value="">Select a volume...</option>
+                </select>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="text" id="attach-volume-target" placeholder="/data" style="flex: 1; padding: 10px; background: #0f0f1a; border: 1px solid #2a2a4a; color: #fff; border-radius: 6px;">
+                    <button class="btn btn-primary" onclick="attachVolumeToAgent()">Attach & Restart</button>
+                </div>
+                <div style="font-size: 11px; color: #666; margin-top: 6px;">⚠️ Agent will restart to apply volume</div>
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="hideAgentVolumesModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="teams-modal">
+        <div class="modal" style="max-width: 500px;">
+            <h3>👥 Assign Team</h3>
+            <p id="teams-agent-name" style="color: #666; font-size: 13px; margin-bottom: 16px;"></p>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; color: #aaa;">Select Team</label>
+                <select id="team-select" style="width: 100%; padding: 10px; background: #0f0f1a; border: 1px solid #2a2a4a; color: #fff; border-radius: 6px; margin-bottom: 12px;" onchange="onTeamChange()">
+                    <option value="">Select a team...</option>
+                </select>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; color: #aaa;">Select Role</label>
+                <select id="role-select" style="width: 100%; padding: 10px; background: #0f0f1a; border: 1px solid #2a2a4a; color: #fff; border-radius: 6px; margin-bottom: 12px;">
+                    <option value="">Select a role...</option>
+                </select>
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="hideTeamsModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="assignTeam()">Assign</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Configuration -->
+    <script src="js/config.js"></script>
+
+    <script>
+        let agents = [], selectedAgent = null, isConnected = false, currentStreamEl = null, chatHistory = {};
+        let volumes = [];  // Volume list
+        let roleAssignments = {};  // Team role assignments: {agentId: {teamId, teamName, roleId, roleName}}
+        // Use config values (from config.js) or fallback to defaults
+        const ORCHESTRATOR_URL = typeof ORCHESTRATOR_URL_CFG !== 'undefined' ? ORCHESTRATOR_URL_CFG : (window.location.protocol !== 'file:' ? '' : 'http://localhost:3001');
+        const TEAMS_API_URL = typeof TEAMS_API_URL_CFG !== 'undefined' ? TEAMS_API_URL_CFG : (window.location.protocol !== 'file:' ? '/api' : 'http://localhost:3001/api');
+        const ORCHESTRATOR_WS_URL = typeof ORCHESTRATOR_WS_URL_CFG !== 'undefined' ? ORCHESTRATOR_WS_URL_CFG : (window.location.protocol !== 'file:' ? (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host : 'ws://127.0.0.1:3001');
+        let authToken = localStorage.getItem('clawpen_token');
+        let globalKeys = {};  // Store global API key status
+        let intervalsSet = false;  // Track if we've started polling
+        let listenersRegistered = false;  // Track if Tauri listeners are registered
+        
+        // Floating window mode
+        let isFloatingMode = false;
+        let floatingAgentId = null;
+        let floatingAgentName = null;
+        let floatingPort = null;
+        let windowLabel = null;
+        
+        function checkFloatingMode() {
+            const params = new URLSearchParams(window.location.search);
+            isFloatingMode = params.get('floating') === '1';
+            floatingAgentId = params.get('agent_id');
+            floatingAgentName = params.get('agent_name');
+            floatingPort = parseInt(params.get('port') || '18790');
+            
+            if (isFloatingMode) {
+                document.body.classList.add('floating-mode');
+                document.getElementById('chat-title').textContent = floatingAgentName || 'Agent';
+                console.log('[Floating] Mode enabled for', floatingAgentName, 'on port', floatingPort);
+            }
+        }
+        
+        // Tab bar rendering
+        function renderTabs() {
+            if (isFloatingMode) return;
+            
+            const tabBar = document.getElementById('tab-bar');
+            const runningAgents = agents.filter(a => a.status === 'running');
+            
+            if (runningAgents.length === 0) {
+                tabBar.classList.add('hidden');
+                return;
+            }
+            
+            tabBar.classList.remove('hidden');
+            tabBar.innerHTML = runningAgents.map(a => {
+                const isActive = selectedAgent?.id === a.id;
+                const port = a.config?.env_vars?.PORT || '18790';
+                return `
+                    <button class="tab ${isActive ? 'active' : ''}" onclick="selectAgent(agents.find(x => x.id === '${a.id}'))">
+                        <span class="tab-status ${isActive && isConnected ? 'connected' : isActive ? 'connecting' : ''}"></span>
+                        <span>${a.name}</span>
+                        <button class="tab-popout" onclick="event.stopPropagation(); popOutAgent('${a.id}', '${a.name}', ${port})" title="Pop out to window">⬚</button>
+                    </button>
+                `;
+            }).join('');
+        }
+        
+        async function popOutAgent(agentId, agentName, port) {
+            console.log('[PopOut] Creating floating window for', agentName);
+            try {
+                if (window.__TAURI__) {
+                    const label = await window.__TAURI__.core.invoke('pop_out_agent', { 
+                        agentId, 
+                        agentName, 
+                        port 
+                    });
+                    console.log('[PopOut] Created window:', label);
+                }
+            } catch (e) {
+                console.error('[PopOut] Failed:', e);
+                alert('Failed to pop out: ' + e);
+            }
+        }
+        
+        // Track if we're currently refreshing the token to prevent loops
+        let refreshingToken = false;
+        let tokenRefreshPromise = null;
+
+        // Decode JWT to get expiration time
+        function getTokenExpiration(token) {
+            try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                return payload.exp * 1000;  // Convert to milliseconds
+            } catch (e) {
+                return null;
+            }
+        }
+
+        // Check if token will expire soon (within 1 hour)
+        function isTokenExpiringSoon(token) {
+            const exp = getTokenExpiration(token);
+            if (!exp) return true;  // Can't determine, assume expiring
+            const oneHour = 60 * 60 * 1000;
+            return exp - Date.now() < oneHour;
+        }
+
+        // Proactive token refresh (runs every 30 minutes)
+        async function proactiveTokenRefresh() {
+            if (!authToken || refreshingToken) {
+                return;
+            }
+
+            if (isTokenExpiringSoon(authToken)) {
+                console.log('[Token] ⏰ Token expiring soon, refreshing proactively...');
+                try {
+                    await refreshToken();
+                } catch (e) {
+                    console.log('[Token] Proactive refresh failed, will try on next request');
+                }
+            }
+        }
+
+        async function refreshToken() {
+            // If already refreshing, return the existing promise
+            if (refreshingToken) {
+                return tokenRefreshPromise;
+            }
+
+            refreshingToken = true;
+            console.log('[Token] 🔄 Refreshing authentication token...');
+
+            try {
+                // Use stored credentials to get a new token
+                const password = localStorage.getItem('clawpen_password');
+                if (!password) {
+                    throw new Error('No stored credentials');
+                }
+
+                const res = await fetch(`${ORCHESTRATOR_URL}/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: 'admin', password })
+                });
+
+                if (!res.ok) {
+                    throw new Error('Token refresh failed');
+                }
+
+                const data = await res.json();
+                const newToken = data.token || data.access_token;
+
+                // Update token in memory and localStorage
+                authToken = newToken;
+                localStorage.setItem('clawpen_token', newToken);
+
+                console.log('[Token] ✅ Token refreshed successfully');
+                return newToken;
+            } catch (error) {
+                console.error('[Token] ❌ Refresh failed:', error);
+                // Clear everything and show login modal
+                authToken = null;
+                localStorage.removeItem('clawpen_token');
+                localStorage.removeItem('clawpen_password');
+                showLoginModal();
+                throw error;
+            } finally {
+                refreshingToken = false;
+                tokenRefreshPromise = null;
+            }
+        }
+
+        async function authFetch(url, options = {}) {
+            console.log('[authFetch]', url, authToken ? 'with token' : 'no token');
+
+            // Check if token exists
+            if (!authToken) {
+                const stored = localStorage.getItem('clawpen_token');
+                if (stored) {
+                    authToken = stored;
+                } else {
+                    // No token at all, show login
+                    showLoginModal();
+                    return new Response('{"error":"Not authenticated"}', { status: 401 });
+                }
+            }
+
+            // Add token to request
+            options.headers = options.headers || {};
+            options.headers['Authorization'] = `Bearer ${authToken}`;
+
+            // Make the request
+            let res = await fetch(url, options);
+
+            // If 401, try to refresh token and retry once
+            if (res.status === 401) {
+                console.log('[authFetch] Got 401, attempting token refresh...');
+
+                try {
+                    const newToken = await refreshToken();
+
+                    // Retry the original request with new token
+                    options.headers['Authorization'] = `Bearer ${newToken}`;
+                    res = await fetch(url, options);
+                    console.log('[authFetch] ✅ Retry successful after token refresh');
+                } catch (error) {
+                    console.error('[authFetch] ❌ Token refresh failed, showing login');
+                    return new Response('{"error":"Authentication failed"}', { status: 401 });
+                }
+            }
+
+            return res;
+        }
+        
+        let authStatus = null;
+        
+        function showLoginModal(isSetup = false) {
+            document.getElementById('login-modal').classList.remove('hidden');
+            document.getElementById('login-setup').classList.toggle('hidden', !isSetup);
+            document.getElementById('login-title').classList.toggle('hidden', isSetup);
+            document.getElementById('login-password').placeholder = isSetup ? 'Create password (min 8 chars)' : 'Password';
+            document.getElementById('login-btn').textContent = isSetup ? 'Create Account' : 'Login';
+            document.getElementById('login-password').focus();
+        }
+        
+        function hideLoginModal() {
+            document.getElementById('login-modal').classList.add('hidden');
+            // Now fetch data after successful login
+            fetchAgents();
+            fetchSystemStats();
+            fetchVolumes();  // Fetch volumes on login
+            if (!intervalsSet) {
+                setInterval(fetchAgents, 5000);
+                setInterval(fetchSystemStats, 3000);
+                // Proactive token refresh every 30 minutes (before 24h expiry)
+                setInterval(proactiveTokenRefresh, 30 * 60 * 1000);
+                intervalsSet = true;
+            }
+        }
+
+        function doLogout() {
+            localStorage.removeItem('clawpen_token');
+            localStorage.removeItem('clawpen_password');
+            authToken = null;
+            location.reload();
+        }
+
+        // Keyboard shortcut for logout: Ctrl+L
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'l') {
+                e.preventDefault();
+                doLogout();
+            }
+        });
+        
+        function showLoginError(msg) {
+            const el = document.getElementById('login-error');
+            el.textContent = msg;
+            el.classList.remove('hidden');
+        }
+        
+        function hideLoginError() {
+            document.getElementById('login-error').classList.add('hidden');
+        }
+        
+        async function checkAuthStatus() {
+            try {
+                const res = await fetch(`${ORCHESTRATOR_URL}/auth/status`);
+                authStatus = await res.json();
+                console.log('[auth] status:', authStatus);
+                return authStatus;
+            } catch (e) {
+                console.error('[auth] failed to check status:', e);
+                return null;
+            }
+        }
+        
+        async function login(password) {
+            console.log('[login] attempting login...');
+            hideLoginError();
+
+            // If first-time setup, register first
+            if (authStatus && !authStatus.has_admin) {
+                const regRes = await fetch(`${ORCHESTRATOR_URL}/auth/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password })
+                });
+                if (!regRes.ok) {
+                    const err = await regRes.text();
+                    showLoginError('Registration failed: ' + err);
+                    return false;
+                }
+            }
+
+            try {
+                const res = await fetch(`${ORCHESTRATOR_URL}/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: 'admin', password })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    authToken = data.token || data.access_token;  // Handle both response formats
+                    console.log('[login] success');
+
+                    // Save token AND password for automatic refresh
+                    localStorage.setItem('clawpen_token', authToken);
+                    localStorage.setItem('clawpen_password', password);
+
+                    hideLoginModal();
+                    return true;
+                } else {
+                    const err = await res.text();
+                    showLoginError('Invalid password');
+                }
+            } catch (e) {
+                console.error('Login failed:', e);
+                showLoginError('Connection failed');
+            }
+            return false;
+        }
+        
+        document.getElementById('login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const password = document.getElementById('login-password').value;
+            if (password.length < 8) {
+                showLoginError('Password must be at least 8 characters');
+                return;
+            }
+            document.getElementById('login-btn').disabled = true;
+            document.getElementById('login-btn').textContent = 'Please wait...';
+            await login(password);
+            document.getElementById('login-btn').disabled = false;
+            document.getElementById('login-btn').textContent = authStatus && !authStatus.has_admin ? 'Create Account' : 'Login';
+        });
+        
+        async function checkAuthAndShowModal() {
+            console.log('[auth] checking...');
+            const status = await checkAuthStatus();
+            if (!status) {
+                showLoginError('Cannot connect to server');
+                showLoginModal();
+                return false;
+            }
+            
+            // Auth disabled - proceed
+            if (!status.auth_enabled) {
+                console.log('[login] auth disabled');
+                return true;
+            }
+            
+            // Already have a token - try it
+            if (authToken) {
+                console.log('[login] have token, testing...');
+                return true;
+            }
+            
+            // Need to login
+            showLoginModal(!status.has_admin);
+            return false;
+        }
+        
+        const providerModels = {
+            zai: [{ value: 'glm-5', label: 'GLM-5' }],
+            anthropic: [{ value: 'claude-sonnet-4-5', label: 'Sonnet 4.5' }],
+            openai: [{ value: 'gpt-4.1', label: 'GPT-4.1' }],
+            kimi: [{ value: 'kimi-k2.5', label: 'Kimi K2.5' }, { value: 'moonshot-v1-128k', label: 'Moonshot 128K' }, { value: 'moonshot-v1-32k', label: 'Moonshot 32K' }],
+            'kimi-code': [{ value: 'kimi-code', label: 'Kimi Code' }],
+            google: [{ value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' }],
+            access: [{ value: 'access-standard', label: 'Access Standard' }],
+            huggingface: [{ value: 'meta-llama/Llama-3.3-70B-Instruct', label: 'Llama 3.3 70B' }]
+        };
+        
+        const providerKeyNames = {
+            zai: 'Z.AI',
+            anthropic: 'Anthropic',
+            openai: 'OpenAI',
+            kimi: 'Kimi',
+            'kimi-code': 'Kimi Code',
+            google: 'Google',
+            access: 'Access',
+            huggingface: 'Hugging Face'
+        };
+        
+        const statusEl = document.getElementById('status');
+        const messagesEl = document.getElementById('messages');
+        const inputEl = document.getElementById('message-input');
+        const sendBtn = document.getElementById('send-btn');
+        
+        async function fetchSystemStats() {
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/system/stats`);
+                const stats = await res.json();
+                
+                const ramPercent = (stats.used_memory_mb / stats.total_memory_mb * 100).toFixed(0);
+                document.getElementById('ram-value').textContent = 
+                    `${(stats.used_memory_mb / 1024).toFixed(1)} / ${(stats.total_memory_mb / 1024).toFixed(1)} GB`;
+                const ramBar = document.getElementById('ram-bar');
+                ramBar.style.width = ramPercent + '%';
+                ramBar.className = 'stat-bar-fill ' + (ramPercent > 80 ? 'danger' : ramPercent > 60 ? 'warning' : 'ok');
+                
+                const cpuPercent = (stats.agent_memory_mb / 1024 / (stats.total_memory_mb / 1024) * 100).toFixed(0);
+                document.getElementById('cpu-value').textContent = `${stats.total_cpu_cores.toFixed(0)} cores`;
+                const cpuBar = document.getElementById('cpu-bar');
+                cpuBar.style.width = Math.min(cpuPercent, 100) + '%';
+                cpuBar.className = 'stat-bar-fill ' + (cpuPercent > 80 ? 'danger' : cpuPercent > 60 ? 'warning' : 'ok');
+                
+                document.getElementById('agent-count').textContent = `${stats.running_agents} / ${stats.agent_count}`;
+            } catch (e) {}
+        }
+        
+        async function loadGlobalKeys() {
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/keys`);
+                const keys = await res.json();
+                globalKeys = {};
+                keys.forEach(k => { if (k.has_key) globalKeys[k.provider] = true; });
+            } catch (e) { console.error('Failed to load global keys:', e); }
+        }
+        
+        // === Volume Management ===
+        async function fetchVolumes() {
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/volumes`);
+                volumes = await res.json();
+                renderVolumes();
+                updateVolumeCheckboxes();
+            } catch (e) { console.error('Failed to fetch volumes:', e); }
+        }
+        
+        function renderVolumes() {
+            if (isFloatingMode) return;
+            const list = document.getElementById('volume-list');
+            if (volumes.length === 0) {
+                list.innerHTML = '<div style="color: #666; font-size: 12px; padding: 8px;">No volumes</div>';
+                return;
+            }
+            list.innerHTML = volumes.map(v => `
+                <div class="volume-item">
+                    <div>
+                        <div class="volume-name">${v.name}</div>
+                        <div class="volume-target">→ ${v.default_target}</div>
+                    </div>
+                    <div class="volume-actions">
+                        <button onclick="deleteVolume('${v.id}', '${v.name}')" title="Delete">🗑️</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        function updateVolumeCheckboxes() {
+            const container = document.getElementById('volume-checkboxes');
+            if (volumes.length === 0) {
+                container.innerHTML = '<div style="color: #666; font-size: 12px;">No volumes available. <a href="#" onclick="showVolumeModal()">Create one</a></div>';
+                return;
+            }
+            container.innerHTML = volumes.map(v => `
+                <label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px;">
+                    <input type="checkbox" data-volume-id="${v.id}" data-volume-name="${v.name}" data-volume-target="${v.default_target}" data-volume-readonly="${v.read_only}">
+                    <span>${v.name}</span>
+                    <span style="color: #666; font-size: 11px;">→ ${v.default_target}</span>
+                </label>
+            `).join('');
+        }
+        
+        function showVolumeModal() {
+            document.getElementById('volume-modal').classList.add('active');
+            document.getElementById('new-volume-name').value = '';
+            document.getElementById('new-volume-path').value = '';
+            document.getElementById('new-volume-target').value = '/data';
+            document.getElementById('new-volume-readonly').checked = false;
+        }
+        
+        function hideVolumeModal() {
+            document.getElementById('volume-modal').classList.remove('active');
+        }
+        
+        async function createVolume() {
+            const name = document.getElementById('new-volume-name').value.trim();
+            const hostPath = document.getElementById('new-volume-path').value.trim();
+            const target = document.getElementById('new-volume-target').value.trim() || '/data';
+            const readOnly = document.getElementById('new-volume-readonly').checked;
+            
+            if (!name) { alert('Enter a name'); return; }
+            
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/volumes`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name,
+                        host_path: hostPath || null,
+                        default_target: target,
+                        read_only: readOnly
+                    })
+                });
+                if (res.ok) {
+                    hideVolumeModal();
+                    fetchVolumes();
+                } else {
+                    alert('Failed: ' + await res.text());
+                }
+            } catch (e) { alert('Error: ' + e); }
+        }
+        
+        async function deleteVolume(id, name) {
+            if (!confirm(`Delete volume "${name}"?`)) return;
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/volumes/${id}`, { method: 'DELETE' });
+                if (res.ok) fetchVolumes();
+                else alert('Failed: ' + await res.text());
+            } catch (e) { alert('Error: ' + e); }
+        }
+
+        // Agent Volume Management
+        let currentAgentVolumesId = null;
+
+        async function showAgentVolumesModal(agentId, agentName) {
+            currentAgentVolumesId = agentId;
+            document.getElementById('agent-volumes-agent-name').textContent = `Agent: ${agentName}`;
+            document.getElementById('agent-volumes-modal').classList.add('active');
+
+            // Load available volumes
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/volumes`);
+                if (res.ok) {
+                    const allVolumes = await res.json();
+                    const select = document.getElementById('attach-volume-select');
+                    select.innerHTML = '<option value="">Select a volume...</option>' +
+                        allVolumes.map(v => `<option value="${v.name}">${v.name} (${v.host_path || 'managed'})</option>`).join('');
+                }
+            } catch (e) {
+                console.error('[showAgentVolumesModal] failed to load volumes:', e);
+            }
+
+            // Load agent's current volumes
+            await loadAgentVolumes(agentId);
+        }
+
+        async function loadAgentVolumes(agentId) {
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents/${agentId}/volumes`);
+                if (res.ok) {
+                    const volumes = await res.json();
+                    const container = document.getElementById('agent-current-volumes');
+                    if (volumes.length === 0) {
+                        container.innerHTML = '<div style="color: #666; font-size: 12px;">No volumes attached</div>';
+                    } else {
+                        container.innerHTML = volumes.map(v => `
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; background: #1a1a2e; border-radius: 4px; margin-bottom: 6px;">
+                                <div>
+                                    <div style="font-size: 12px; color: #ccc;">${v.source}</div>
+                                    <div style="font-size: 10px; color: #666;">→ ${v.target} ${v.read_only ? '(read-only)' : '(read-write)'}</div>
+                                </div>
+                                <button onclick="detachVolumeFromAgent('${agentId}', '${v.target}')" style="background: #e94560; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px;">Detach</button>
+                            </div>
+                        `).join('');
+                    }
+                }
+            } catch (e) {
+                console.error('[loadAgentVolumes] error:', e);
+            }
+        }
+
+        function hideAgentVolumesModal() {
+            document.getElementById('agent-volumes-modal').classList.remove('active');
+            currentAgentVolumesId = null;
+        }
+
+        async function attachVolumeToAgent() {
+            if (!currentAgentVolumesId) return;
+
+            const volumeName = document.getElementById('attach-volume-select').value;
+            const target = document.getElementById('attach-volume-target').value.trim() || '/data';
+
+            if (!volumeName) {
+                alert('Please select a volume');
+                return;
+            }
+
+            // Security warning with detailed information
+            const volume = volumes.find(v => v.name === volumeName);
+            const isReadOnly = volume?.read_only || false;
+            const sourcePath = volume?.host_path || 'Managed volume';
+
+            if (!confirm(
+                `📦 Attach Volume to Agent\n\n` +
+                `Volume: ${volumeName}\n` +
+                `Source: ${sourcePath}\n` +
+                `Target: ${target}\n` +
+                `Access: ${isReadOnly ? 'Read-only' : 'Read/Write'}\n\n` +
+                `⚠️  Security Information:\n` +
+                `• Agent will have ${isReadOnly ? 'read-only' : 'full'} access to this data\n` +
+                `• Agent will be restarted to apply the volume\n` +
+                `• Data is isolated - agent cannot escape the volume\n` +
+                `• Root filesystem is protected\n` +
+                `• All container escape attempts are blocked\n` +
+                `• Process count limited (1024 max processes)\n` +
+                `• Seccomp filters restrict dangerous system calls\n` +
+                `• No privilege escalation possible\n\n` +
+                `Continue?`
+            )) {
+                return;
+            }
+
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents/${currentAgentVolumesId}/volumes`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        volume_id: volumeName,
+                        target: target
+                    })
+                });
+
+                if (res.ok) {
+                    alert('Volume attached! Agent is restarting...');
+                    hideAgentVolumesModal();
+                    setTimeout(() => {
+                        fetchAgents();
+                        fetchSystemStats();
+                    }, 3000);
+                } else {
+                    alert('Failed to attach volume: ' + await res.text());
+                }
+            } catch (e) {
+                console.error('[attachVolumeToAgent] error:', e);
+                alert('Error: ' + e);
+            }
+        }
+
+        async function detachVolumeFromAgent(agentId, target) {
+            if (!confirm(`Detach volume from target "${target}"?\n\nThe agent will be restarted to apply the change.`)) {
+                return;
+            }
+
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents/${agentId}/volumes/detach`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        target: target
+                    })
+                });
+
+                if (res.ok) {
+                    alert('Volume detached! Agent is restarting...');
+                    hideAgentVolumesModal();
+                    setTimeout(() => {
+                        fetchAgents();
+                        fetchSystemStats();
+                    }, 3000);
+                } else {
+                    alert('Failed to detach volume: ' + await res.text());
+                }
+            } catch (e) {
+                console.error('[detachVolumeFromAgent] error:', e);
+                alert('Error: ' + e);
+            }
+        }
+
+        // Teams functionality
+        let teamsData = [];
+        let currentTeamsAgentId = null;
+
+        async function showTeamsModal(agentId, agentName) {
+            currentTeamsAgentId = agentId;
+            document.getElementById('teams-agent-name').textContent = `Agent: ${agentName}`;
+
+            // Load teams
+            try {
+                const token = localStorage.getItem('clawpen_token');
+                const res = await fetch(`${TEAMS_API_URL}/teams`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (res.ok) {
+                    teamsData = await res.json();
+                    const teamSelect = document.getElementById('team-select');
+                    teamSelect.innerHTML = '<option value="">Select a team...</option>' +
+                        teamsData.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+                } else {
+                    console.error('[showTeamsModal] Failed to load teams:', await res.text());
+                    alert('Failed to load teams. Please ensure Teams API is running on port 3001.');
+                }
+            } catch (e) {
+                console.error('[showTeamsModal] Error loading teams:', e);
+                alert('Failed to connect to Teams API. Please ensure it is running on port 3001.');
+            }
+
+            // Reset role select
+            document.getElementById('role-select').innerHTML = '<option value="">Select a role...</option>';
+
+            document.getElementById('teams-modal').classList.add('active');
+        }
+
+        function hideTeamsModal() {
+            document.getElementById('teams-modal').classList.remove('active');
+            currentTeamsAgentId = null;
+            document.getElementById('team-select').value = '';
+            document.getElementById('role-select').innerHTML = '<option value="">Select a role...</option>';
+        }
+
+        function onTeamChange() {
+            const teamId = document.getElementById('team-select').value;
+            const roleSelect = document.getElementById('role-select');
+
+            if (!teamId) {
+                roleSelect.innerHTML = '<option value="">Select a role...</option>';
+                return;
+            }
+
+            const team = teamsData.find(t => t.id === teamId);
+            if (team && team.agents) {
+                // team.agents is an object with role names as keys
+                const roles = Object.keys(team.agents).map(roleId => {
+                    const agentInfo = team.agents[roleId];
+                    // Extract role name from description (e.g., "Design Assistant - ...")
+                    const roleName = agentInfo.description ? agentInfo.description.split(' - ')[0] : roleId;
+                    return {
+                        id: roleId,
+                        name: roleName
+                    };
+                });
+
+                roleSelect.innerHTML = '<option value="">Select a role...</option>' +
+                    roles.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+            } else {
+                roleSelect.innerHTML = '<option value="">No roles available</option>';
+            }
+        }
+
+        async function assignTeam() {
+            const teamId = document.getElementById('team-select').value;
+            const roleId = document.getElementById('role-select').value;
+
+            if (!teamId || !roleId) {
+                alert('Please select both a team and a role');
+                return;
+            }
+
+            try {
+                const token = localStorage.getItem('clawpen_token');
+                const res = await fetch(`${TEAMS_API_URL}/teams/${teamId}/roles/${roleId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        agent_id: currentTeamsAgentId,
+                        assigned_by: 'admin'
+                    })
+                });
+
+                if (res.ok) {
+                    alert('Team assigned successfully!');
+                    hideTeamsModal();
+                    // Refresh agent list to show updated team info
+                    fetchAgents();
+                } else {
+                    const error = await res.text();
+                    console.error('[assignTeam] Failed:', error);
+                    alert('Failed to assign team: ' + error);
+                }
+            } catch (e) {
+                console.error('[assignTeam] Error:', e);
+                alert('Error assigning team: ' + e);
+            }
+        }
+
+        function updateModelOptions() {
+            const provider = document.getElementById('new-agent-provider').value;
+            document.getElementById('new-agent-model').innerHTML = 
+                providerModels[provider].map(m => `<option value="${m.value}">${m.label}</option>`).join('');
+            // Check if global key exists for this provider
+            const globalKeyStatus = globalKeys[provider] ? '✓ Global key available' : 'No global key';
+            document.getElementById('apikey-hint').textContent = 
+                `${providerKeyNames[provider]} API key (optional - ${globalKeyStatus})`;
+        }
+
+        async function fetchRoleAssignments() {
+            try {
+                const token = localStorage.getItem('clawpen_token');
+                const res = await fetch(`${TEAMS_API_URL}/teams`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (res.ok) {
+                    const teams = await res.json();
+                    roleAssignments = {};
+
+                    // For each team, fetch its role assignments
+                    for (const team of teams) {
+                        try {
+                            const rolesRes = await fetch(`${TEAMS_API_URL}/teams/${team.id}/roles`, {
+                                headers: { 'Authorization': `Bearer ${token}` }
+                            });
+                            if (rolesRes.ok) {
+                                const assignments = await rolesRes.json();
+                                // assignments is an array of {team_id, intent, agent_id, assigned_at, assigned_by}
+                                assignments.forEach(assignment => {
+                                    // Find the role name from the team's agents object
+                                    const roleInfo = team.agents && team.agents[assignment.intent];
+                                    const roleName = roleInfo ? roleInfo.description.split(' - ')[0] : assignment.intent;
+
+                                    roleAssignments[assignment.agent_id] = {
+                                        teamId: team.id,
+                                        teamName: team.name,
+                                        roleId: assignment.intent,
+                                        roleName: roleName
+                                    };
+                                });
+                            }
+                        } catch (e) {
+                            console.error('[fetchRoleAssignments] Error fetching roles for team', team.id, e);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('[fetchRoleAssignments] Error:', e);
+            }
+        }
+
+        async function fetchAgents() {
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents`);
+                agents = await res.json();
+
+                // Update selectedAgent if it exists (handles agent ID changes after restart)
+                if (selectedAgent) {
+                    const updatedAgent = agents.find(a => a.name === selectedAgent.name);
+                    if (updatedAgent && updatedAgent.id !== selectedAgent.id) {
+                        console.log(`[fetchAgents] Updating agent ID for ${selectedAgent.name}: ${selectedAgent.id.substring(0, 12)}... -> ${updatedAgent.id.substring(0, 12)}...`);
+                        selectedAgent = updatedAgent;
+                    }
+                }
+
+                // Fetch role assignments to display team/role info
+                await fetchRoleAssignments();
+                renderAgents();
+            } catch (e) {}
+        }
+        
+        function renderAgents() {
+            if (isFloatingMode) return;  // Skip in floating mode
+
+            document.getElementById('agent-list').innerHTML = agents.map(a => {
+                // Count volumes and calculate security level
+                const volumeCount = a.config?.volumes?.length || 0;
+                const hasWriteAccess = a.config?.volumes?.some(v => !v.read_only) || false;
+
+                // Determine security badge
+                let securityBadge = '';
+                if (volumeCount > 0) {
+                    if (hasWriteAccess) {
+                        securityBadge = `<span class="security-badge security-warning" title="Has write access to volumes">🔓 Write Access</span>`;
+                    } else {
+                        securityBadge = `<span class="security-badge security-safe" title="Read-only volume access">🛡️ Read Only</span>`;
+                    }
+                }
+
+                // Volume indicator
+                const volumeIndicator = volumeCount > 0
+                    ? `<span class="volume-indicator" title="${volumeCount} volume(s) attached">📦 ${volumeCount}</span>`
+                    : '';
+
+                // Team/role assignment indicator
+                const assignment = roleAssignments[a.id];
+                const teamIndicator = assignment
+                    ? `<span class="team-indicator" title="Team: ${assignment.teamName}, Role: ${assignment.roleName}">👥 ${assignment.teamName} / ${assignment.roleName}</span>`
+                    : '';
+
+                return `
+                <div class="agent-card${selectedAgent?.id === a.id ? ' selected' : ''}" onclick="selectAgent(agents.find(x => x.id === '${a.id}'))">
+                    <div class="agent-name">${a.name} <span class="agent-status ${a.status}">${a.status}</span></div>
+                    <div class="agent-model">${a.config?.llm_provider}/${a.config?.llm_model}</div>
+                    ${teamIndicator ? `<div class="agent-team">${teamIndicator}</div>` : ''}
+                    <div class="agent-resources">
+                        <span>💾 ${(a.config?.memory_mb / 1024 || 2).toFixed(1)} GB</span>
+                        ${volumeIndicator}
+                        ${securityBadge}
+                    </div>
+                    <div class="agent-actions">
+                        ${a.status === 'running'
+                            ? `<button class="btn-stop" onclick="event.stopPropagation();stopAgent('${a.id}')">Stop</button>`
+                            : `<button class="btn-start" onclick="event.stopPropagation();startAgent('${a.id}')">Start</button>`}
+                        <button class="btn-shell" onclick="event.stopPropagation();openShell('${a.id}','${a.name}')" ${a.status !== 'running' ? 'disabled' : ''} title="Open Shell">🖥️</button>
+                        <button class="btn-volumes" onclick="event.stopPropagation();showAgentVolumesModal('${a.id}','${a.name}')" title="Manage Volumes">📦</button>
+                        <button class="btn-teams" onclick="event.stopPropagation();showTeamsModal('${a.id}','${a.name}')" title="Assign Team">👥</button>
+                        <button class="btn-delete" onclick="event.stopPropagation();deleteAgent('${a.id}','${a.name}')">Delete</button>
+                    </div>
+                </div>
+                `;
+            }).join('');
+
+            renderTabs();  // Update tab bar when agents change
+        }
+        
+        async function startAgent(id) {
+            console.log('[startAgent] starting', id);
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents/${id}/start`, { method: 'POST' });
+                if (!res.ok) {
+                    const err = await res.text();
+                    console.error('[startAgent] failed:', err);
+                    alert('Failed to start: ' + err);
+                    return;
+                }
+                console.log('[startAgent] started successfully');
+                setTimeout(() => { fetchAgents(); fetchSystemStats(); }, 2000);
+            } catch (e) {
+                console.error('[startAgent] error:', e);
+                alert('Error: ' + e);
+            }
+        }
+        
+        async function stopAgent(id) {
+            hideReplying();
+            await authFetch(`${ORCHESTRATOR_URL}/api/agents/${id}/stop`, { method: 'POST' });
+            fetchAgents();
+            fetchSystemStats();
+        }
+        
+        async function deleteAgent(id, name) {
+            if (!confirm(`Delete "${name}"?`)) return;
+            hideReplying();
+            await authFetch(`${ORCHESTRATOR_URL}/api/agents/${id}`, { method: 'DELETE' });
+            delete chatHistory[name];
+            fetchAgents();
+            fetchSystemStats();
+            if (selectedAgent?.id === id) {
+                selectedAgent = null;
+                document.getElementById('chat-title').textContent = 'Select an agent';
+                messagesEl.innerHTML = '';
+                inputEl.disabled = sendBtn.disabled = true;
+                setStatus('Not connected', '');
+            }
+        }
+
+        async function openShell(id, name) {
+            try {
+                console.log('[openShell] Attempting to launch shell for', name, '(', id, ')');
+                console.log('[openShell] window.__TAURI__:', window.__TAURI__);
+
+                // Check if running in Tauri
+                if (window.__TAURI__) {
+                    console.log('[openShell] Tauri detected, invoking launch_shell command');
+                    // Use Tauri command to launch terminal directly
+                    const { invoke } = window.__TAURI__.core;
+                    console.log('[openShell] invoke function:', invoke);
+                    await invoke('launch_shell', { containerId: id, containerName: name });
+                    console.log('[openShell] Command completed successfully');
+                } else {
+                    console.log('[openShell] Tauri not detected, showing fallback modal');
+                    // Fallback for non-Tauri environment: show instructions
+                    const shellWindow = window.open('', '_blank', 'width=800,height=600');
+                    shellWindow.document.write(`
+                        <html>
+                        <head><title>Shell: ${name}</title></head>
+                        <body style="font-family: monospace; padding: 20px; background: #1a1a2e; color: #eee;">
+                            <h2>🖥️ Shell Access: ${name}</h2>
+                            <p style="color: #22c55e;">Container ID: ${id}</p>
+                            <hr style="border-color: #2a2a4a;">
+                            <p>To access this container's shell, run:</p>
+                            <pre style="background: #0f0f1a; padding: 15px; border-radius: 8px; border: 1px solid #2a2a4a; overflow-x: auto;">
+docker exec -it ${id} /bin/bash
+                            </pre>
+                            <button onclick="window.close()" style="padding: 10px 20px; background: #e94560; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+                        </body>
+                        </html>
+                    `);
+                    shellWindow.document.close();
+                }
+            } catch (e) {
+                console.error('[openShell] error:', e);
+                alert(`Failed to launch shell: ${e}`);
+            }
+        }
+
+        function selectAgent(agent) {
+            console.log('[selectAgent] Switching to:', agent.name, 'ID:', agent.id);
+            hideReplying();  // Hide indicator when switching agents
+            if (selectedAgent && messagesEl.children.length) chatHistory[selectedAgent.name] = messagesEl.innerHTML;
+            selectedAgent = agent;
+            document.getElementById('chat-title').textContent = agent.name;
+            renderAgents();
+            renderTabs();  // Update tab selection
+            messagesEl.innerHTML = chatHistory[agent.name] || '<div class="message system">Connecting...</div>';
+            if (chatHistory[agent.name]) messagesEl.scrollTop = messagesEl.scrollHeight;
+            if (agent.status === 'running') {
+                console.log('[selectAgent] Agent is running, connecting...');
+                connectToAgent(agent).catch(err => {
+                    console.error('[selectAgent] Connection failed:', err);
+                });
+            } else {
+                setStatus('Stopped', 'error');
+                inputEl.disabled = sendBtn.disabled = true;
+            }
+        }
+
+        function sendRawMessage(data) {
+            if (window.agentWs && window.agentWs.readyState === WebSocket.OPEN) {
+                window.agentWs.send(JSON.stringify(data));
+                console.log('[WS] Sent:', data);
+            } else {
+                console.warn('[WS] Cannot send message - websocket not ready');
+            }
+        }
+
+        function handleAgentMessage(data) {
+            console.log('[Agent Message] Type:', data.type, 'Event:', data.event);
+
+            // Handle health events (heartbeat)
+            if (data.type === 'event' && data.event === 'health') {
+                return;
+            }
+
+            // Handle tick events
+            if (data.type === 'event' && data.event === 'tick') {
+                return;
+            }
+
+            // Handle agent lifecycle start (show replying indicator)
+            if (data.type === 'event' && data.event === 'agent' && data.payload?.stream === 'lifecycle' && data.payload?.data?.phase === 'start') {
+                showReplying();
+                // Only reset if we're starting a NEW message (not a re-stream)
+                if (!window.lastAssistantMessage || window.lastAssistantMessage !== '') {
+                    window.lastAssistantMessage = '';  // Reset for new message
+                }
+                return;
+            }
+
+            // Handle agent lifecycle end (hide replying indicator)
+            if (data.type === 'event' && data.event === 'agent' && data.payload?.stream === 'lifecycle' && data.payload?.data?.phase === 'end') {
+                hideReplying();
+                document.getElementById('sendBtn').disabled = false;
+                // Don't reset lastAssistantMessage here - we might still get final stream events
+                return;
+            }
+
+            // Handle agent assistant stream (streaming text responses)
+            // This is the PRIMARY source of agent text - chat events are duplicates
+            if (data.type === 'event' && data.event === 'agent' && data.payload?.stream === 'assistant' && data.payload?.data?.text) {
+                const text = data.payload.data.text;
+
+                // Check if this is a truly NEW message (not duplicate)
+                // If we haven't started a message yet, or if this is different from the last
+                if (!window.messageStarted) {
+                    // First message of the sequence
+                    console.log('[WS] Starting new message:', text.substring(0, 50));
+                    addMessage(text, 'agent');
+                    window.lastAssistantMessage = text;
+                    window.messageStarted = true;
+                } else if (text !== window.lastAssistantMessage) {
+                    // Update existing message with new content
+                    console.log('[WS] Updating message:', text.substring(0, 50));
+                    updateLastMessage(text, 'agent');
+                    window.lastAssistantMessage = text;
+                } else {
+                    console.log('[WS] Skipping duplicate message:', text.substring(0, 50));
+                }
+                return;
+            }
+
+            // Handle chat events (final agent responses)
+            if (data.type === 'event' && data.event === 'chat' && data.payload?.message) {
+                const message = data.payload.message;
+                const state = data.payload.state;
+                let content = '';
+
+                // Extract text from message (could be string, array, or object)
+                if (typeof message.content === 'string') {
+                    content = message.content;
+                } else if (Array.isArray(message.content)) {
+                    // Content is an array of parts (text, images, etc.)
+                    content = message.content
+                        .filter(part => part.type === 'text' || typeof part === 'string')
+                        .map(part => typeof part === 'string' ? part : (part.text || ''))
+                        .join('');
+                } else if (message.content) {
+                    // Fallback: stringify the content object
+                    content = JSON.stringify(message.content);
+                }
+
+                console.log('[WS] 📨 Chat event:', state, content.substring ? content.substring(0, 50) : content);
+
+                if (content && state === 'final') {
+                    // Final message - add to chat
+                    if (!window.messageStarted) {
+                        addMessage(content, 'agent');
+                        window.messageStarted = true;
+                    } else {
+                        updateLastMessage(content, 'agent');
+                    }
+                    window.lastAssistantMessage = content;
+                    hideReplying();
+                    document.getElementById('sendBtn').disabled = false;
+                } else if (content && state === 'delta') {
+                    // Streaming update
+                    if (!window.messageStarted) {
+                        showReplying();
+                        addMessage(content, 'agent');
+                        window.messageStarted = true;
+                    } else {
+                        // Append to existing message
+                        const currentText = window.lastAssistantMessage || '';
+                        const newText = currentText + content;
+                        updateLastMessage(newText, 'agent');
+                        window.lastAssistantMessage = newText;
+                    }
+                }
+                return;
+            }
+
+            // Handle response acknowledgments
+            if (data.type === 'res' && data.ok) {
+                console.log('[WS] ✅ Request acknowledged');
+                return;
+            }
+
+            console.log('[WS] ⚠️ Unhandled message type:', data.type, data.event);
+        }
+
+        async function connectToAgent(agent) {
+            // Prevent reconnection attempts when switching agents
+            if (window.switchingAgents) {
+                console.log('[connectToAgent] Already switching, skipping...');
+                return;
+            }
+
+            console.log('[connectToAgent] Starting connection for:', agent.name, 'ID:', agent.id);
+            setStatus('Connecting...', 'connecting');
+
+            // Check if token exists
+            const token = localStorage.getItem('clawpen_token');
+            if (!token) {
+                console.error('[connectToAgent] No auth token found!');
+                setStatus('Authentication required', 'error');
+                return;
+            }
+
+            // Connect through orchestrator's websocket proxy for multi-agent support
+            const wsUrl = `${ORCHESTRATOR_WS_URL}/api/agents/${agent.id}/chat?token=${token}`;
+            console.log('[connectToAgent] Connecting through orchestrator:', wsUrl.substring(0, 80) + '...');
+
+            try {
+                // Close existing websocket if any
+                if (window.agentWs) {
+                    console.log('[connectToAgent] Closing existing connection...');
+                    window.switchingAgents = true;  // Set flag to prevent reconnect
+
+                    // Remove event handlers to prevent them from firing
+                    window.agentWs.onopen = null;
+                    window.agentWs.onclose = null;
+                    window.agentWs.onerror = null;
+                    window.agentWs.onmessage = null;
+
+                    window.agentWs.close(1000, 'Switching agents');
+                    window.agentWs = null;
+
+                    // Small delay to ensure clean close
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+
+                // Reset streaming state
+                window.lastAssistantMessage = '';
+                window.currentStreamEl = null;
+                window.messageStarted = false;
+
+                // Create new WebSocket connection
+                console.log('[connectToAgent] Creating new WebSocket...');
+                window.agentWs = new WebSocket(wsUrl);
+
+                window.agentWs.onopen = () => {
+                    console.log('[connectToAgent] ✅ WebSocket connected, sending connect message');
+                    window.switchingAgents = false;  // Clear flag after successful connection
+                    // Send connect message required by OpenClaw gateway
+                    sendRawMessage({
+                        type: 'connect',
+                        payload: {
+                            userAgent: 'claw-pen-desktop/1.0'
+                        }
+                    });
+                    setConnected(true);
+                };
+
+                window.agentWs.onclose = (event) => {
+                    console.log('[connectToAgent] ❌ WebSocket disconnected, code:', event.code, 'reason:', event.reason);
+                    setConnected(false);
+                    hideReplying();
+
+                    // Only auto-reconnect if we're not intentionally switching agents
+                    // Allow reconnect for running, stopping, or starting agents (handles restart scenarios)
+                    const canReconnect = !window.switchingAgents && event.code !== 1000 && selectedAgent &&
+                                        ['running', 'stopping', 'starting'].includes(selectedAgent.status);
+
+                    if (canReconnect) {
+                        const retryDelay = selectedAgent.status === 'stopping' ? 3000 : 2000;
+                        console.log(`[connectToAgent] Agent is ${selectedAgent.status}, scheduling reconnect in ${retryDelay}ms...`);
+                        setTimeout(() => {
+                            if (!window.switchingAgents && selectedAgent) {
+                                console.log('[connectToAgent] Reconnecting...');
+                                // Refresh agent status before reconnecting
+                                fetchAgents().then(() => {
+                                    // Find agent by name (ID might have changed after restart)
+                                    const refreshedAgent = agents.find(a => a.name === selectedAgent.name);
+                                    if (refreshedAgent && ['running', 'stopping', 'starting'].includes(refreshedAgent.status)) {
+                                        console.log(`[connectToAgent] Found refreshed agent: ${refreshedAgent.name} (${refreshedAgent.status})`);
+                                        connectToAgent(refreshedAgent);
+                                    } else {
+                                        console.log('[connectToAgent] Agent no longer available, skipping reconnect');
+                                    }
+                                });
+                            }
+                        }, retryDelay);
+                    } else {
+                        window.switchingAgents = false;  // Clear flag if reconnect not needed
+                    }
+                };
+
+                window.agentWs.onerror = (e) => {
+                    console.error('[connectToAgent] ❌ WebSocket error:', e);
+                    setStatus('Connection error - retrying...', 'connecting');
+                    setConnected(false);
+                    hideReplying();
+
+                    // Auto-retry on connection errors (common during agent restarts)
+                    if (!window.switchingAgents && selectedAgent && ['running', 'stopping', 'starting'].includes(selectedAgent.status)) {
+                        const retryDelay = selectedAgent.status === 'stopping' ? 4000 : 3000;
+                        console.log(`[connectToAgent] Connection failed, retrying in ${retryDelay}ms...`);
+                        setTimeout(() => {
+                            if (!window.switchingAgents && selectedAgent) {
+                                fetchAgents().then(() => {
+                                    // Find agent by name (ID might have changed after restart)
+                                    const refreshedAgent = agents.find(a => a.name === selectedAgent.name);
+                                    if (refreshedAgent && ['running', 'stopping', 'starting'].includes(refreshedAgent.status)) {
+                                        console.log('[connectToAgent] Retrying connection...');
+                                        connectToAgent(refreshedAgent);
+                                    }
+                                });
+                            }
+                        }, retryDelay);
+                    } else {
+                        window.switchingAgents = false;
+                    }
+                };
+
+                window.agentWs.onmessage = (event) => {
+                    const preview = event.data.substring(0, 150);
+                    console.log('[WS] 📨 Received:', preview + (event.data.length > 150 ? '...' : ''));
+                    try {
+                        const data = JSON.parse(event.data);
+                        handleAgentMessage(data);
+                    } catch (e) {
+                        console.error('[WS] ❌ Failed to parse message:', e);
+                    }
+                };
+            } catch (e) {
+                console.error('[connectToAgent] ❌ Exception:', e);
+                setStatus('Error: ' + e, 'error');
+                setConnected(false);
+                hideReplying();
+                window.switchingAgents = false;
+            }
+        }
+        
+        async function showCreateModal() { 
+            await loadGlobalKeys();
+            updateModelOptions(); 
+            document.getElementById('create-modal').classList.add('active'); 
+        }
+        function hideCreateModal() { document.getElementById('create-modal').classList.remove('active'); }
+
+        async function openAgentCreator() {
+            try {
+                if (window.__TAURI__) {
+                    await window.__TAURI__.core.invoke('open_agent_creator');
+                } else {
+                    // Fallback for browser testing
+                    showCreateModal();
+                }
+            } catch (error) {
+                console.error('Failed to open agent creator:', error);
+                showCreateModal();
+            }
+        }
+        
+        async function createAgent() {
+            const name = document.getElementById('new-agent-name').value.trim();
+            const provider = document.getElementById('new-agent-provider').value;
+            const model = document.getElementById('new-agent-model').value;
+            const apiKey = document.getElementById('new-agent-apikey').value.trim();
+            const memory = parseInt(document.getElementById('new-agent-memory').value);
+            
+            if (!name) { alert('Enter a name'); return; }
+            // API key is optional - will use global key if available
+            
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        name, 
+                        template: 'openclaw-agent', 
+                        config: { 
+                            llm_provider: provider, 
+                            llm_model: model, 
+                            memory_mb: memory,
+                            api_key: apiKey
+                        } 
+                    })
+                });
+                if (res.ok) { 
+                    hideCreateModal(); 
+                    document.getElementById('new-agent-apikey').value = '';
+                    fetchAgents(); 
+                    fetchSystemStats(); 
+                }
+                else alert('Failed: ' + await res.text());
+            } catch (e) { alert('Error: ' + e); }
+        }
+        
+        function setStatus(text, state) { statusEl.textContent = text; statusEl.className = 'status ' + state; }
+        function setConnected(c) { isConnected = c; inputEl.disabled = sendBtn.disabled = !c; if (c) setStatus('Connected', 'connected'); }
+        
+        function refreshConnection() {
+            if (!selectedAgent) return;
+            console.log('[refresh] Reconnecting to', selectedAgent.name);
+            messagesEl.innerHTML = '<div class="message system">Reconnecting...</div>';
+            connectToAgent(selectedAgent);
+        }
+        
+        function addMessage(text, type = 'system') {
+            const div = document.createElement('div');
+            div.className = 'message ' + type;
+            div.textContent = text;
+            messagesEl.appendChild(div);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+            return div;
+        }
+        
+        function appendToStream(text) {
+            hideReplying();  // Hide indicator when response starts
+            if (!currentStreamEl) currentStreamEl = addMessage('', 'assistant streaming');
+            currentStreamEl.textContent += text;
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+        
+        function finalizeStream(text) {
+            hideReplying();  // Hide indicator when done
+            if (currentStreamEl) {
+                if (text) currentStreamEl.textContent = text;
+                currentStreamEl.classList.remove('streaming');
+            } else if (text) addMessage(text, 'assistant');
+            currentStreamEl = null;
+        }
+        
+        const replyingIndicator = document.getElementById('replying-indicator');
+        
+        function showReplying() { replyingIndicator.classList.remove('hidden'); messagesEl.scrollTop = messagesEl.scrollHeight; }
+        function hideReplying() { replyingIndicator.classList.add('hidden'); }
+        
+        async function sendMessage() {
+            const text = inputEl.value.trim();
+            if (!text || !isConnected) return;
+            addMessage(text, 'user');
+            inputEl.value = '';
+            showReplying();  // Show "Replying..." indicator
+            // Reset streaming state
+            window.lastAssistantMessage = '';
+            window.currentStreamEl = null;
+            window.messageStarted = false;  // Reset for new message
+            try {
+                // Send via WebSocket using OpenClaw protocol
+                sendRawMessage({
+                    type: 'req',
+                    method: 'chat.send',
+                    params: {
+                        sessionKey: 'main',
+                        message: text
+                    },
+                    id: 'msg-' + Date.now()
+                });
+            } catch (e) { hideReplying(); addMessage('Error: ' + e, 'system'); }
+        }
+
+        function updateLastMessage(text, type = 'agent') {
+            const messages = messagesEl.getElementsByClassName('message ' + type);
+            if (messages.length > 0) {
+                const lastMessage = messages[messages.length - 1];
+                lastMessage.textContent = text;
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+            }
+        }
+        
+        sendBtn.addEventListener('click', sendMessage);
+        inputEl.addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(); });
+        
+        function extractText(msg) {
+            if (typeof msg === 'string') return msg;
+            if (msg.text) return msg.text;
+            if (msg.content) {
+                if (typeof msg.content === 'string') return msg.content;
+                if (Array.isArray(msg.content)) return msg.content.filter(c => c.type === 'text').map(c => c.text).join('');
+            }
+            return '';
+        }
+        
+        
+        // === Settings Modal ===
+        function showSettingsModal() {
+            loadApiKeys();
+            document.getElementById('settings-modal').classList.add('active');
+        }
+        
+        function hideSettingsModal() {
+            document.getElementById('settings-modal').classList.remove('active');
+        }
+        
+        async function loadApiKeys() {
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/keys`);
+                const keys = await res.json();
+                
+                // Update status indicators
+                keys.forEach(k => {
+                    const status = document.getElementById(`status-${k.provider}`);
+                    if (status) {
+                        status.textContent = k.has_key ? '✓' : '—';
+                        status.className = 'status ' + (k.has_key ? 'has-key' : 'no-key');
+                    }
+                });
+            } catch (e) {
+                console.error('Failed to load API keys status:', e);
+            }
+        }
+        
+        async function saveApiKeys() {
+            const providers = ['zai', 'kimi', 'anthropic', 'openai', 'google'];
+            let saved = 0;
+            
+            for (const provider of providers) {
+                const input = document.getElementById(`key-${provider}`);
+                const value = input.value.trim();
+                
+                if (value) {
+                    try {
+                        const res = await authFetch(`${ORCHESTRATOR_URL}/api/keys`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ provider: provider, key: value })
+                        });
+                        
+                        if (res.ok) {
+                            saved++;
+                            input.value = ''; // Clear after save
+                            input.placeholder = '✓ Saved';
+                        }
+                    } catch (e) {
+                        console.error(`Failed to save ${provider} key:`, e);
+                    }
+                }
+            }
+            
+            if (saved > 0) {
+                alert(`Saved ${saved} API key(s)`);
+                loadApiKeys();
+            }
+            
+            hideSettingsModal();
+        }
+        
+
+        async function init() {
+            console.log('[init] starting...');
+            
+            // Check if we're in floating window mode
+            checkFloatingMode();
+            
+            if (isFloatingMode) {
+                // Floating window: skip auth, connect directly to agent
+                console.log('[init] floating mode - connecting to', floatingAgentName);
+                document.getElementById('chat-title').textContent = floatingAgentName || 'Agent';
+                
+                if (window.__TAURI__) {
+                    listenersRegistered = true;
+                    
+                    // Get window label from Tauri
+                    try {
+                        const win = window.__TAURI__.window.getCurrentWindow();
+                        windowLabel = win.label;
+                        console.log('[init] window label:', windowLabel);
+                    } catch (e) {
+                        console.error('[init] failed to get window label:', e);
+                    }
+                    
+                    // Listen for events targeted at this window
+                    await window.__TAURI__.event.listen('ws-connected', e => { 
+                        if (e.payload) setConnected(true); 
+                        else { setConnected(false); hideReplying(); }
+                    });
+                    await window.__TAURI__.event.listen('ws-authenticated', () => {
+                        console.log('[Floating] Authenticated!');
+                        setConnected(true);
+                    });
+                    await window.__TAURI__.event.listen('ws-message', event => {
+                        try {
+                            const data = JSON.parse(event.payload);
+                            if (data.type === 'event' && data.event === 'chat') {
+                                const p = data.payload;
+                                const text = extractText(p.message);
+                                if (p.state === 'delta' && text) appendToStream(text);
+                                else if (p.state === 'final') finalizeStream(text);
+                                else if (p.state === 'error') { hideReplying(); finalizeStream(); addMessage('Error: ' + (p.errorMessage || 'Unknown'), 'system'); }
+                            }
+                        } catch (e) {}
+                    });
+                    await window.__TAURI__.event.listen('ws-error', event => {
+                        console.error('[Floating] WS error:', event.payload);
+                        addMessage('Error: ' + event.payload, 'system');
+                    });
+                    
+                    // Connect to the agent
+                    setStatus('Connecting...', 'connecting');
+                    await window.__TAURI__.core.invoke('connect_floating_window', { windowLabel });
+                }
+                return;
+            }
+            
+            // Normal mode: check auth, fetch agents
+            const loggedIn = await checkAuthAndShowModal();
+            if (!loggedIn) {
+                console.log('[init] waiting for login...');
+                return;  // Stop here - login modal will call fetchAgents after success
+            }
+            await fetchAgents();
+            await fetchSystemStats();
+            setInterval(fetchAgents, 5000);
+            setInterval(fetchSystemStats, 3000);
+            
+            if (window.__TAURI__ && !listenersRegistered) {
+                listenersRegistered = true;
+                await window.__TAURI__.event.listen('ws-connected', e => { 
+                    if (e.payload) setConnected(true); 
+                    else { setConnected(false); hideReplying(); }
+                    renderTabs();  // Update tab status
+                });
+                await window.__TAURI__.event.listen('ws-authenticated', () => {
+                    setConnected(true);
+                    renderTabs();
+                });
+                await window.__TAURI__.event.listen('ws-message', event => {
+                    try {
+                        const data = JSON.parse(event.payload);
+                        if (data.type === 'event' && data.event === 'chat') {
+                            const p = data.payload;
+                            const text = extractText(p.message);
+                            if (p.state === 'delta' && text) appendToStream(text);
+                            else if (p.state === 'final') finalizeStream(text);
+                            else if (p.state === 'error') { hideReplying(); finalizeStream(); addMessage('Error: ' + (p.errorMessage || 'Unknown'), 'system'); }
+                        }
+                    } catch (e) {}
+                });
+            }
+        }
+        
+        init();
+    </script>
+</body>
+</html>
