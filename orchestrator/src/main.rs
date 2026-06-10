@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 mod agent_comms;
+mod gateway_harness;
 mod andor;
 mod chat_db;
 mod direct_llm;
@@ -59,6 +60,8 @@ pub struct AppState {
     pub container_ips: RwLock<std::collections::HashMap<String, String>>,
     /// Agent index for O(1) lookups by ID (critical for scaling to thousands of agents)
     pub agent_index: RwLock<std::collections::HashMap<String, usize>>,
+    /// Gateway registry for external agent connections
+    pub gateway_registry: Arc<tokio::sync::RwLock<gateway_harness::GatewayRegistry>>,
     /// RPC client for agent-to-agent communication
     pub rpc_client: rpc::RpcClient,
     /// Workflow registry for managing workflow definitions
@@ -481,6 +484,7 @@ async fn main() -> anyhow::Result<()> {
         executor,
         inference: inference_manager,
         chat_db,
+        gateway_registry: gateway_harness::init_registry(),
     });
 
     // Create the protected API routes with auth middleware
@@ -610,9 +614,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/inference/status", get(api::inference_status))
         .route("/api/inference/start", post(api::inference_start))
         .route("/api/inference/stop", post(api::inference_stop))
+        // Gateway management (admin only)
+        .route("/gateway/connections", get(gateway_harness::list_gateway_connections))
         .route("/api/auth/refresh", post(auth::refresh));
 
     // Public routes (no auth required)
+        // Gateway harness
+        .route("/gateway/ws", get(gateway_harness::gateway_websocket_handler))
+        .route("/gateway/health", get(gateway_harness::gateway_health));
+
     let public_routes = Router::new()
         .route("/health", get(api::health))
         .route("/terminal", get(api::terminal_page))
