@@ -6,6 +6,7 @@ members = [
     "ui",
     "tauri-app",
     "inference",
+    "agent-proxy",
 ]
 
 [workspace.package]

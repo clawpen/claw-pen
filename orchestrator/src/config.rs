@@ -71,6 +71,12 @@ pub struct Config {
     /// Native inference service configuration
     #[serde(default)]
     pub native_inference: Option<NativeInferenceConfig>,
+    /// Secret word for student registration. If set, students must provide this word to register.
+    #[serde(default)]
+    pub student_secret: Option<String>,
+    /// Secret word for admin registration. If set, admins must provide this word to register.
+    #[serde(default)]
+    pub admin_secret: Option<String>,
 }
 
 impl fmt::Debug for Config {
@@ -90,6 +96,8 @@ impl fmt::Debug for Config {
             .field("model_servers", &self.model_servers)
             .field("andor_bridge", &self.andor_bridge)
             .field("native_inference", &self.native_inference)
+            .field("student_secret", &self.student_secret.as_ref().map(|_| "***REDACTED***"))
+            .field("admin_secret", &self.admin_secret.as_ref().map(|_| "***REDACTED***"))
             .finish()
     }
 }
@@ -221,7 +229,9 @@ pub fn load() -> anyhow::Result<Config> {
         .set_default("tailscale-auth-key", None::<String>)?
         .set_default("headscale-url", None::<String>)?
         .set_default("headscale-auth-key", None::<String>)?
-        .set_default("headscale-namespace", None::<String>)?;
+        .set_default("headscale-namespace", None::<String>)?
+        .set_default("student-secret", None::<String>)?
+        .set_default("admin-secret", None::<String>)?;
 
     // Load from config file if found
     if let Some(config_path) = find_config_file() {

@@ -2,6 +2,9 @@
 <html>
 <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Claw Pen</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -149,9 +152,8 @@
         .agent-actions button:hover { opacity: 0.8; }
         
         /* Volume section styles */
-        .volume-section {
+        #volume-section, .volume-section {
             padding: 12px 20px;
-            border-bottom: 1px solid #2a2a4a;
             flex-shrink: 0;
         }
         .volume-header {
@@ -577,24 +579,71 @@
             font-size: 10px;
             margin-left: 4px;
         }
+
+        /* Agent health indicator */
+        .health-dot {
+            display: inline-block;
+            font-size: 0.7rem;
+            margin-left: 4px;
+        }
+        .health-healthy { filter: brightness(1.2); }
+        .health-unhealthy { filter: grayscale(0.3) brightness(0.8); }
+        .health-unknown { opacity: 0.5; }
+
+        /* Agent switcher in chat header */
+        .agent-switcher {
+            background: #1a1a2e;
+            border: 1px solid #2a2a4a;
+            border-radius: 6px;
+            padding: 6px 10px;
+            color: #eee;
+            font-size: 13px;
+            cursor: pointer;
+            max-width: 200px;
+            margin-right: 10px;
+        }
+        .agent-switcher:focus {
+            outline: none;
+            border-color: #e94560;
+        }
+        .agent-switcher option:disabled {
+            color: #666;
+            font-style: italic;
+        }
 </style>
 
 
 </head>
 <body>
     <!-- Login Modal -->
-    <div class="login-overlay hidden" id="login-modal">
+    <div class="login-overlay" id="login-modal">
         <div class="login-box">
             <h1>🦀 Claw Pen</h1>
             <div id="login-setup" class="login-setup hidden">
                 <h2>Welcome!</h2>
                 <p>Create an admin password to get started.</p>
             </div>
-            <h2 id="login-title">Login</h2>
+            <div id="login-tabs" style="display: flex; gap: 0; margin-bottom: 16px; border-bottom: 1px solid #0f3460;">
+                <button id="tab-login" onclick="switchLoginTab('login')" style="flex: 1; padding: 10px; background: transparent; border: none; border-bottom: 2px solid #e94560; color: #e94560; cursor: pointer;">Login</button>
+                <button id="tab-register" onclick="switchLoginTab('register')" style="flex: 1; padding: 10px; background: transparent; border: none; border-bottom: 2px solid transparent; color: #888; cursor: pointer;">Register</button>
+            </div>
+            <h2 id="login-title" style="display: none;">Login</h2>
             <div id="login-error" class="login-error hidden"></div>
+            
+            <!-- Login Form -->
             <form id="login-form">
+                <input type="text" id="login-username" placeholder="Username" style="display: none;" autocomplete="username" />
                 <input type="password" id="login-password" placeholder="Password" autocomplete="current-password" />
                 <button type="submit" id="login-btn">Login</button>
+            </form>
+            
+            <!-- Register Form -->
+            <form id="register-form" style="display: none;">
+                <input type="text" id="register-username" placeholder="Username" autocomplete="username" />
+                <input type="text" id="register-displayname" placeholder="Display Name (optional)" />
+                <input type="password" id="register-password" placeholder="Password (min 8 chars)" autocomplete="new-password" />
+                <input type="password" id="register-secret" placeholder="Secret Word" autocomplete="off" />
+                <button type="submit" id="register-btn">Register</button>
             </form>
         </div>
     </div>
@@ -631,22 +680,32 @@
             </div>
         </div>
 
-        <div style="padding: 10px 20px; text-align: center;">
+        <div id="admin-btn" style="display: none; padding: 10px 20px; text-align: center; border-bottom: 1px solid #2a2a4a;">
+            <button onclick="showAdminModal()" style="background: #e94560; border: none; color: white; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; width: 100%;">👑 Admin Panel</button>
+        </div>
+
+        <div style="padding: 10px 20px; text-align: center; border-bottom: 1px solid #2a2a4a;">
             <a href="#" onclick="doLogout(); return false;" style="color: #e94560; text-decoration: none; font-size: 14px;">🚪 Logout</a>
         </div>
 
-        <button class="create-agent-btn" onclick="openAgentCreator()">+ Create Agent</button>
+        <div id="create-agent-section">
+            <button class="create-agent-btn" onclick="openAgentCreator()">+ Create Agent</button>
+        </div>
         
-        <div class="volume-section">
+        <div id="student-notice" style="display: none; padding: 10px 20px; background: #1a472a; border-bottom: 1px solid #2a2a4a; font-size: 12px; color: #86efac; text-align: center;">
+            ✓ You can chat with assigned agents
+        </div>
+        
+        <div class="agent-list-header">Your Agents</div>
+        <div id="agent-list"></div>
+        
+        <div id="volume-section" class="volume-section" style="margin-top: auto; border-top: 1px solid #2a2a4a;">
             <div class="volume-header">
                 <h3>Volumes</h3>
                 <button class="btn-add-volume" onclick="showVolumeModal()" title="Create volume">+</button>
             </div>
             <div class="volume-list" id="volume-list"></div>
         </div>
-        
-        <div class="agent-list-header">Your Agents</div>
-        <div id="agent-list"></div>
     </div>
     
 
@@ -703,6 +762,7 @@
     <div id="main">
         <div class="tab-bar" id="tab-bar"></div>
         <div class="chat-header">
+            <select id="agent-switcher" class="agent-switcher" style="display:none;" onchange="switchAgent(this.value)"></select>
             <h2 id="chat-title">Select an agent</h2>
             <div style="display: flex; gap: 10px; align-items: center;">
                 <div class="status" id="status">Not connected</div>
@@ -745,26 +805,47 @@
             </div>
             <div class="form-group">
                 <label>Model</label>
-                <select id="new-agent-model"></select>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <select id="new-agent-model" style="flex: 1;"></select>
+                    <input type="text" id="new-agent-model-manual" placeholder="Or enter manually" style="flex: 1; display: none;">
+                    <button type="button" onclick="toggleModelInputMode()" style="background: #2a2a4a; border: none; color: #888; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;" title="Toggle between dropdown and manual input">✏️</button>
+                </div>
+                <div class="api-key-hint" id="model-hint">Select from available models or enter manually</div>
             </div>
             <div class="form-group">
                 <label>API Key</label>
-                <input type="password" id="new-agent-apikey" placeholder="Your API key for this provider">
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="password" id="new-agent-apikey" placeholder="Your API key for this provider" style="flex: 1;">
+                    <button type="button" onclick="toggleApiKeyVisibility()" style="background: #2a2a4a; border: none; color: #888; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;"
+                    >👁</button>
+                </div>
                 <div class="api-key-hint" id="apikey-hint">Key is stored per-agent, not shared</div>
             </div>
             <div class="form-group">
-                <label>Memory (MB)</label>
-                <input type="number" id="new-agent-memory" value="2048">
+                <label>Custom Endpoint (optional)</label>
+                <input type="text" id="new-agent-endpoint" placeholder="https://api.example.com/v1">
+                <div class="api-key-hint">Override the default endpoint URL for this provider</div>
             </div>
-            <div class="form-group">
-                <label>Volumes</label>
-                <div id="volume-checkboxes" style="max-height: 100px; overflow-y: auto; background: #0f0f1a; border-radius: 6px; padding: 8px;">
-                    <div style="color: #666; font-size: 12px;">No volumes available</div>
+            <div class="form-group" style="display: flex; gap: 12px;"
+            >
+                <div style="flex: 1;"
+                >
+                    <label>Memory (MB)</label>
+                    <input type="number" id="new-agent-memory" value="2048" style="width: 100%;">
+                </div>
+                <div style="flex: 1;"
+                >
+                    <label>Template</label>
+                    <select id="new-agent-template" style="width: 100%;">
+                        <option value="openclaw-agent">OpenClaw Agent</option>
+                    </select>
                 </div>
             </div>
             <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="hideCreateModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="createAgent()">Create</button>
+                <button class="btn btn-secondary" onclick="hideCreateModal()"
+                >Cancel</button>
+                <button class="btn btn-primary" onclick="createAgent()"
+                >Create</button>
             </div>
         </div>
     </div>
@@ -826,6 +907,31 @@
 
             <div class="modal-actions">
                 <button class="btn btn-secondary" onclick="hideAgentVolumesModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin Panel Modal -->
+    <div class="modal-overlay" id="admin-modal">
+        <div class="modal" style="max-width: 600px;">
+            <h3>👑 Admin Panel</h3>
+            <div id="admin-content">
+                <div id="admin-pending-section">
+                    <h4 style="margin: 16px 0 8px; color: #aaa;">⏳ Pending Users</h4>
+                    <div id="admin-pending-list" style="max-height: 300px; overflow-y: auto;">
+                        <div style="color: #666; font-size: 13px; padding: 16px; text-align: center;">Loading...</div>
+                    </div>
+                </div>
+                <div id="admin-all-users-section" style="margin-top: 24px;">
+                    <h4 style="margin: 16px 0 8px; color: #aaa;">👥 All Users</h4>
+                    <div id="admin-all-users-list" style="max-height: 300px; overflow-y: auto;">
+                        <div style="color: #666; font-size: 13px; padding: 16px; text-align: center;">Loading...</div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions" style="margin-top: 20px;">
+                <button class="btn btn-secondary" onclick="hideAdminModal()">Close</button>
+                <button class="btn btn-primary" onclick="refreshAdminPanel()">🔄 Refresh</button>
             </div>
         </div>
     </div>
@@ -1073,12 +1179,14 @@
             document.getElementById('login-title').classList.toggle('hidden', isSetup);
             document.getElementById('login-password').placeholder = isSetup ? 'Create password (min 8 chars)' : 'Password';
             document.getElementById('login-btn').textContent = isSetup ? 'Create Account' : 'Login';
+            switchLoginTab('login');
             document.getElementById('login-password').focus();
         }
         
         function hideLoginModal() {
             document.getElementById('login-modal').classList.add('hidden');
             // Now fetch data after successful login
+            if (authToken) updateUIBasedOnRole(authToken);
             fetchAgents();
             fetchSystemStats();
             fetchVolumes();  // Fetch volumes on login
@@ -1094,6 +1202,7 @@
         function doLogout() {
             localStorage.removeItem('clawpen_token');
             localStorage.removeItem('clawpen_password');
+            localStorage.removeItem('clawpen_username');
             authToken = null;
             location.reload();
         }
@@ -1106,10 +1215,20 @@
             }
         });
         
-        function showLoginError(msg) {
+        function hideLoginError() {
+            document.getElementById('login-error').classList.add('hidden');
+        }
+        function showLoginError(msg, isError = true) {
             const el = document.getElementById('login-error');
             el.textContent = msg;
             el.classList.remove('hidden');
+            if (!isError) {
+                el.style.background = '#1a472a';
+                el.style.color = '#86efac';
+            } else {
+                el.style.background = '#7f1d1d';
+                el.style.color = '#fecaca';
+            }
         }
         
         function hideLoginError() {
@@ -1128,7 +1247,7 @@
             }
         }
         
-        async function login(password) {
+        async function login(password, username) {
             console.log('[login] attempting login...');
             hideLoginError();
 
@@ -1147,25 +1266,36 @@
             }
 
             try {
-                const res = await fetch(`${ORCHESTRATOR_URL}/auth/login`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username: 'admin', password })
-                });
+                let res;
+                if (username && username.trim()) {
+                    // User login
+                    res = await fetch(`${ORCHESTRATOR_URL}/auth/user/login`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ username: username.trim(), password })
+                    });
+                } else {
+                    // Admin login
+                    res = await fetch(`${ORCHESTRATOR_URL}/auth/login`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ password })
+                    });
+                }
                 if (res.ok) {
                     const data = await res.json();
-                    authToken = data.token || data.access_token;  // Handle both response formats
+                    authToken = data.token || data.access_token;
                     console.log('[login] success');
-
-                    // Save token AND password for automatic refresh
                     localStorage.setItem('clawpen_token', authToken);
                     localStorage.setItem('clawpen_password', password);
-
+                    if (username) localStorage.setItem('clawpen_username', username);
+                    // Check role and show admin button
+                    updateUIBasedOnRole(authToken);
                     hideLoginModal();
                     return true;
                 } else {
-                    const err = await res.text();
-                    showLoginError('Invalid password');
+                    const data = await res.json().catch(() => ({}));
+                    showLoginError(data.error || 'Invalid credentials');
                 }
             } catch (e) {
                 console.error('Login failed:', e);
@@ -1174,19 +1304,214 @@
             return false;
         }
         
+        function updateUIBasedOnRole(token) {
+            try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                const role = payload.role || 'admin';
+                const displayName = payload.display_name || payload.sub || 'User';
+                const username = payload.sub || 'unknown';
+
+                // Update user info display
+                document.getElementById('user-display-name').textContent = displayName;
+                const roleBadge = document.getElementById('user-role-badge');
+                roleBadge.textContent = role;
+                roleBadge.style.background = role === 'admin' ? '#1a472a' : (role === 'student' ? '#1a1a4e' : '#2a2a4a');
+                roleBadge.style.color = role === 'admin' ? '#86efac' : '#aaa';
+                document.getElementById('user-info').style.display = 'block';
+
+                if (role === 'admin') {
+                    document.getElementById('admin-btn').style.display = 'block';
+                    document.getElementById('create-agent-section').style.display = 'block';
+                    document.getElementById('volume-section').style.display = 'block';
+                    document.getElementById('student-notice').style.display = 'none';
+                } else if (role === 'student') {
+                    document.getElementById('admin-btn').style.display = 'none';
+                    document.getElementById('create-agent-section').style.display = 'none';
+                    document.getElementById('volume-section').style.display = 'none';
+                    document.getElementById('student-notice').style.display = 'block';
+                } else {
+                    // teacher, observer, etc.
+                    document.getElementById('admin-btn').style.display = 'none';
+                    document.getElementById('create-agent-section').style.display = 'block';
+                    document.getElementById('volume-section').style.display = 'block';
+                    document.getElementById('student-notice').style.display = 'none';
+                }
+            } catch (e) {
+                console.error('Failed to decode token:', e);
+            }
+        }
+
+        async function fetchUserInfo() {
+            if (!authToken) return null;
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/me`);
+                if (res.ok) return await res.json();
+            } catch (e) {
+                console.error('Failed to fetch user info:', e);
+            }
+            return null;
+        }
+        
         document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const password = document.getElementById('login-password').value;
+            const username = document.getElementById('login-username')?.value;
             if (password.length < 8) {
                 showLoginError('Password must be at least 8 characters');
                 return;
             }
             document.getElementById('login-btn').disabled = true;
             document.getElementById('login-btn').textContent = 'Please wait...';
-            await login(password);
+            await login(password, username);
             document.getElementById('login-btn').disabled = false;
             document.getElementById('login-btn').textContent = authStatus && !authStatus.has_admin ? 'Create Account' : 'Login';
         });
+        
+        // ===== REGISTRATION & ADMIN FUNCTIONS =====
+        function switchLoginTab(tab) {
+            hideLoginError();
+            const loginTab = document.getElementById('tab-login');
+            const registerTab = document.getElementById('tab-register');
+            const loginForm = document.getElementById('login-form');
+            const registerForm = document.getElementById('register-form');
+            const loginUsername = document.getElementById('login-username');
+            
+            if (tab === 'login') {
+                loginTab.style.borderBottomColor = '#e94560';
+                loginTab.style.color = '#e94560';
+                registerTab.style.borderBottomColor = 'transparent';
+                registerTab.style.color = '#888';
+                loginForm.style.display = 'block';
+                registerForm.style.display = 'none';
+                loginUsername.style.display = 'block';
+                document.getElementById('login-btn').textContent = 'Login';
+            } else {
+                registerTab.style.borderBottomColor = '#e94560';
+                registerTab.style.color = '#e94560';
+                loginTab.style.borderBottomColor = 'transparent';
+                loginTab.style.color = '#888';
+                loginForm.style.display = 'none';
+                registerForm.style.display = 'block';
+            }
+        }
+
+        async function registerUser(username, password, displayName, secretWord) {
+            try {
+                const res = await fetch(`${ORCHESTRATOR_URL}/auth/user/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password, display_name: displayName, secret_word: secretWord })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    showLoginError(`Registration successful! Your account is pending approval. Admin has been notified.`, false);
+                    switchLoginTab('login');
+                } else {
+                    showLoginError(data.error || 'Registration failed');
+                }
+            } catch (e) {
+                showLoginError(e.message);
+            }
+        }
+
+        document.getElementById('register-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('register-username').value.trim();
+            const password = document.getElementById('register-password').value;
+            const displayName = document.getElementById('register-displayname').value.trim() || username;
+            const secretWord = document.getElementById('register-secret').value.trim();
+            if (!username || !password || !secretWord) {
+                showLoginError('All fields are required');
+                return;
+            }
+            if (password.length < 8) {
+                showLoginError('Password must be at least 8 characters');
+                return;
+            }
+            document.getElementById('register-btn').disabled = true;
+            document.getElementById('register-btn').textContent = 'Please wait...';
+            await registerUser(username, password, displayName, secretWord);
+            document.getElementById('register-btn').disabled = false;
+            document.getElementById('register-btn').textContent = 'Register';
+        });
+
+        // Admin Panel
+        function showAdminModal() { document.getElementById('admin-modal').classList.add('active'); refreshAdminPanel(); }
+        function hideAdminModal() { document.getElementById('admin-modal').classList.remove('active'); }
+
+        async function refreshAdminPanel() {
+            await loadPendingUsers();
+            await loadAllUsers();
+        }
+
+        async function loadPendingUsers() {
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/admin/users/pending`);
+                if (!res.ok) throw new Error('Failed to load pending users');
+                const data = await res.json();
+                const list = document.getElementById('admin-pending-list');
+                if (!data.users || data.users.length === 0) {
+                    list.innerHTML = '<div style="color: #666; font-size: 13px; padding: 16px; text-align: center;">No pending users</div>';
+                    return;
+                }
+                list.innerHTML = data.users.map(u => `
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #0f0f1a; border-radius: 6px; margin-bottom: 8px;">
+                        <div>
+                            <div style="font-weight: 500;">${u.display_name || u.username}</div>
+                            <div style="font-size: 12px; color: #666;">@${u.username} • ${u.role} • requested ${u.created_at}</div>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <button onclick="approveUser('${u.user_id}', 'approve')" style="background: #22c55e; border: none; color: white; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">✓ Approve</button>
+                            <button onclick="approveUser('${u.user_id}', 'reject')" style="background: #ef4444; border: none; color: white; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">✕ Reject</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                console.error('Failed to load pending users:', e);
+                document.getElementById('admin-pending-list').innerHTML = `<div style="color: #ef4444; padding: 16px;">Error: ${e.message}</div>`;
+            }
+        }
+
+        async function loadAllUsers() {
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/admin/users`);
+                if (!res.ok) throw new Error('Failed to load users');
+                const data = await res.json();
+                const list = document.getElementById('admin-all-users-list');
+                if (!data.users || data.users.length === 0) {
+                    list.innerHTML = '<div style="color: #666; font-size: 13px; padding: 16px; text-align: center;">No users</div>';
+                    return;
+                }
+                list.innerHTML = data.users.map(u => {
+                    const statusColor = u.approval_status === 'approved' ? '#22c55e' : u.approval_status === 'pending' ? '#f59e0b' : '#ef4444';
+                    return `
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #0f0f1a; border-radius: 6px; margin-bottom: 8px;">
+                        <div>
+                            <div style="font-weight: 500;">${u.display_name || u.username}</div>
+                            <div style="font-size: 12px; color: #666;">@${u.username} • ${u.role} • <span style="color: ${statusColor};">${u.approval_status}</span></div>
+                        </div>
+                    </div>
+                `;}).join('');
+            } catch (e) {
+                console.error('Failed to load users:', e);
+                document.getElementById('admin-all-users-list').innerHTML = `<div style="color: #ef4444; padding: 16px;">Error: ${e.message}</div>`;
+            }
+        }
+
+        async function approveUser(userId, action) {
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/admin/users/approve`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: userId, action })
+                });
+                if (!res.ok) throw new Error('Failed to update user');
+                refreshAdminPanel();
+            } catch (e) {
+                alert(`Error: ${e.message}`);
+            }
+        }
+        // ===== END REGISTRATION & ADMIN FUNCTIONS =====
         
         async function checkAuthAndShowModal() {
             console.log('[auth] checking...');
@@ -1214,17 +1539,40 @@
             return false;
         }
         
-        const providerModels = {
-            zai: [{ value: 'glm-5', label: 'GLM-5' }],
-            anthropic: [{ value: 'claude-sonnet-4-5', label: 'Sonnet 4.5' }],
-            openai: [{ value: 'gpt-4.1', label: 'GPT-4.1' }],
-            kimi: [{ value: 'kimi-k2.5', label: 'Kimi K2.5' }, { value: 'moonshot-v1-128k', label: 'Moonshot 128K' }, { value: 'moonshot-v1-32k', label: 'Moonshot 32K' }],
-            'kimi-code': [{ value: 'kimi-code', label: 'Kimi Code' }],
-            google: [{ value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' }],
-            access: [{ value: 'access-standard', label: 'Access Standard' }],
-            huggingface: [{ value: 'meta-llama/Llama-3.3-70B-Instruct', label: 'Llama 3.3 70B' }]
-        };
+        // === Dynamic Model Fetching ===
+        let fetchedModels = null;
+        let providerModels = {};
         
+        async function fetchModels() {
+            try {
+                const res = await authFetch(`${ORCHESTRATOR_URL}/api/models`);
+                if (!res.ok) throw new Error('Failed to fetch models');
+                const data = await res.json();
+                fetchedModels = data;
+                
+                // Convert API response to providerModels format
+                providerModels = {};
+                if (data.providers) {
+                    data.providers.forEach(p => {
+                        providerModels[p.id] = p.models.map(m => ({
+                            value: m.id,
+                            label: m.name
+                        }));
+                    });
+                }
+                
+                // Update the model select if the modal is open
+                updateModelOptions();
+                return true;
+            } catch (e) {
+                console.error('Failed to fetch models:', e);
+                // Clear providerModels so UI shows error state
+                providerModels = {};
+                updateModelOptions();
+                return false;
+            }
+        }
+
         const providerKeyNames = {
             zai: 'Z.AI',
             anthropic: 'Anthropic',
@@ -1625,12 +1973,27 @@
 
         function updateModelOptions() {
             const provider = document.getElementById('new-agent-provider').value;
-            document.getElementById('new-agent-model').innerHTML = 
-                providerModels[provider].map(m => `<option value="${m.value}">${m.label}</option>`).join('');
+            const modelSelect = document.getElementById('new-agent-model');
+            const models = providerModels[provider] || [];
+            
+            if (models.length === 0) {
+                modelSelect.innerHTML = '<option value="">-- No models available --</option>';
+                modelSelect.disabled = false;  // Allow manual input if API fails
+                modelSelect.setAttribute('placeholder', 'Enter model name manually');
+            } else {
+                modelSelect.innerHTML = models.map(m => `<option value="${m.value}">${m.label}</option>`).join('');
+                modelSelect.disabled = false;
+                modelSelect.removeAttribute('placeholder');
+                // Auto-select first model if none selected
+                if (!modelSelect.value) {
+                    modelSelect.value = models[0].value;
+                }
+            }
+            
             // Check if global key exists for this provider
             const globalKeyStatus = globalKeys[provider] ? '✓ Global key available' : 'No global key';
             document.getElementById('apikey-hint').textContent = 
-                `${providerKeyNames[provider]} API key (optional - ${globalKeyStatus})`;
+                `${providerKeyNames[provider] || provider} API key (optional - ${globalKeyStatus})`;
         }
 
         async function fetchRoleAssignments() {
@@ -1693,6 +2056,7 @@
                 // Fetch role assignments to display team/role info
                 await fetchRoleAssignments();
                 renderAgents();
+                renderAgentSwitcher();
             } catch (e) {}
         }
         
@@ -1725,9 +2089,15 @@
                     ? `<span class="team-indicator" title="Team: ${assignment.teamName}, Role: ${assignment.roleName}">👥 ${assignment.teamName} / ${assignment.roleName}</span>`
                     : '';
 
+                // Health indicator
+                const healthEmoji = a.health_status?.healthy ? '🟢' : (a.health_status ? '🔴' : '⚪');
+                const healthTitle = a.health_status?.message || 'Health status unknown';
+                const healthClass = a.health_status?.healthy ? 'health-healthy' : (a.health_status ? 'health-unhealthy' : 'health-unknown');
+                const canChat = a.status === 'running' && a.health_status?.healthy;
+
                 return `
                 <div class="agent-card${selectedAgent?.id === a.id ? ' selected' : ''}" onclick="selectAgent(agents.find(x => x.id === '${a.id}'))">
-                    <div class="agent-name">${a.name} <span class="agent-status ${a.status}">${a.status}</span></div>
+                    <div class="agent-name">${a.name} <span class="agent-status ${a.status}">${a.status}</span> <span class="health-dot ${healthClass}" title="${healthTitle}">${healthEmoji}</span></div>
                     <div class="agent-model">${a.config?.llm_provider}/${a.config?.llm_model}</div>
                     ${teamIndicator ? `<div class="agent-team">${teamIndicator}</div>` : ''}
                     <div class="agent-resources">
@@ -1739,7 +2109,7 @@
                         ${a.status === 'running'
                             ? `<button class="btn-stop" onclick="event.stopPropagation();stopAgent('${a.id}')">Stop</button>`
                             : `<button class="btn-start" onclick="event.stopPropagation();startAgent('${a.id}')">Start</button>`}
-                        <button class="btn-shell" onclick="event.stopPropagation();openShell('${a.id}','${a.name}')" ${a.status !== 'running' ? 'disabled' : ''} title="Open Shell">🖥️</button>
+                        <button class="btn-shell" onclick="event.stopPropagation();openShell('${a.id}','${a.name}')" ${a.status !== 'running' || !a.health_status?.healthy ? 'disabled' : ''} title="Open Shell">🖥️</button>
                         <button class="btn-volumes" onclick="event.stopPropagation();showAgentVolumesModal('${a.id}','${a.name}')" title="Manage Volumes">📦</button>
                         <button class="btn-teams" onclick="event.stopPropagation();showTeamsModal('${a.id}','${a.name}')" title="Assign Team">👥</button>
                         <button class="btn-delete" onclick="event.stopPropagation();deleteAgent('${a.id}','${a.name}')">Delete</button>
@@ -1840,17 +2210,44 @@ docker exec -it ${id} /bin/bash
             document.getElementById('chat-title').textContent = agent.name;
             renderAgents();
             renderTabs();  // Update tab selection
+            renderAgentSwitcher(); // Update agent switcher dropdown
             messagesEl.innerHTML = chatHistory[agent.name] || '<div class="message system">Connecting...</div>';
             if (chatHistory[agent.name]) messagesEl.scrollTop = messagesEl.scrollHeight;
-            if (agent.status === 'running') {
-                console.log('[selectAgent] Agent is running, connecting...');
+            if (agent.status === 'running' && agent.health_status?.healthy) {
+                console.log('[selectAgent] Agent is running and healthy, connecting...');
                 connectToAgent(agent).catch(err => {
                     console.error('[selectAgent] Connection failed:', err);
                 });
+            } else if (agent.status === 'running' && !agent.health_status?.healthy) {
+                setStatus('Agent unhealthy: ' + (agent.health_status?.message || 'health check failed'), 'error');
+                inputEl.disabled = sendBtn.disabled = true;
+                addMessage('⚠️ Agent is running but not responding. Check health status or restart the agent.', 'system');
             } else {
                 setStatus('Stopped', 'error');
                 inputEl.disabled = sendBtn.disabled = true;
             }
+        }
+
+        function renderAgentSwitcher() {
+            const switcher = document.getElementById('agent-switcher');
+            if (!switcher) return;
+            if (agents.length === 0) {
+                switcher.style.display = 'none';
+                return;
+            }
+            switcher.style.display = 'block';
+            switcher.innerHTML = agents.map(a => {
+                const healthEmoji = a.health_status?.healthy ? '🟢' : (a.health_status ? '🔴' : '⚪');
+                const canChat = a.status === 'running' && a.health_status?.healthy;
+                const selected = selectedAgent?.id === a.id ? 'selected' : '';
+                return `<option value="${a.id}" ${selected} ${!canChat ? 'disabled' : ''}>${healthEmoji} ${a.name} (${a.status})</option>`;
+            }).join('');
+            if (selectedAgent) switcher.value = selectedAgent.id;
+        }
+
+        function switchAgent(agentId) {
+            const agent = agents.find(a => a.id === agentId);
+            if (agent) selectAgent(agent);
         }
 
         function sendRawMessage(data) {
@@ -2121,6 +2518,12 @@ docker exec -it ${id} /bin/bash
         
         async function showCreateModal() { 
             await loadGlobalKeys();
+            await fetchModels();
+            // Reset to dropdown mode
+            modelInputMode = 'dropdown';
+            document.getElementById('new-agent-model').style.display = 'block';
+            document.getElementById('new-agent-model-manual').style.display = 'none';
+            document.getElementById('new-agent-model-manual').value = '';
             updateModelOptions(); 
             document.getElementById('create-modal').classList.add('active'); 
         }
@@ -2140,15 +2543,62 @@ docker exec -it ${id} /bin/bash
             }
         }
         
+        let modelInputMode = 'dropdown'; // 'dropdown' or 'manual'
+        
+        function toggleModelInputMode() {
+            modelInputMode = modelInputMode === 'dropdown' ? 'manual' : 'dropdown';
+            const select = document.getElementById('new-agent-model');
+            const manual = document.getElementById('new-agent-model-manual');
+            const hint = document.getElementById('model-hint');
+            if (modelInputMode === 'manual') {
+                select.style.display = 'none';
+                manual.style.display = 'block';
+                manual.value = select.value || '';
+                hint.textContent = 'Enter the model identifier manually (e.g., gpt-4o, kimi-k2.6)';
+            } else {
+                select.style.display = 'block';
+                manual.style.display = 'none';
+                hint.textContent = 'Select from available models or enter manually';
+                updateModelOptions();
+            }
+        }
+        
         async function createAgent() {
             const name = document.getElementById('new-agent-name').value.trim();
             const provider = document.getElementById('new-agent-provider').value;
-            const model = document.getElementById('new-agent-model').value;
+            const model = modelInputMode === 'manual' 
+                ? document.getElementById('new-agent-model-manual').value.trim()
+                : document.getElementById('new-agent-model').value;
             const apiKey = document.getElementById('new-agent-apikey').value.trim();
-            const memory = parseInt(document.getElementById('new-agent-memory').value);
+            const memory = parseInt(document.getElementById('new-agent-memory').value) || 2048;
+            const endpoint = document.getElementById('new-agent-endpoint').value.trim();
+            const template = document.getElementById('new-agent-template').value;
             
             if (!name) { alert('Enter a name'); return; }
+            if (!model) { alert('No model selected. Select from dropdown or enter manually.'); return; }
+            
+            // Validate model exists for provider only if using dropdown and models are available
+            const models = providerModels[provider] || [];
+            if (modelInputMode === 'dropdown' && models.length > 0) {
+                const validModel = models.find(m => m.value === model);
+                if (!validModel) {
+                    alert(`Model "${model}" is not valid for provider "${provider}". Please select a valid model from the dropdown or enter manually.`);
+                    updateModelOptions();
+                    return;
+                }
+            }
+            
             // API key is optional - will use global key if available
+            
+            const config = {
+                llm_provider: provider,
+                llm_model: model,
+                memory_mb: memory,
+                api_key: apiKey
+            };
+            if (endpoint) {
+                config.custom_endpoint = endpoint;
+            }
             
             try {
                 const res = await authFetch(`${ORCHESTRATOR_URL}/api/agents`, {
@@ -2156,23 +2606,24 @@ docker exec -it ${id} /bin/bash
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         name, 
-                        template: 'openclaw-agent', 
-                        config: { 
-                            llm_provider: provider, 
-                            llm_model: model, 
-                            memory_mb: memory,
-                            api_key: apiKey
-                        } 
+                        template,
+                        config
                     })
                 });
                 if (res.ok) { 
                     hideCreateModal(); 
                     document.getElementById('new-agent-apikey').value = '';
+                    document.getElementById('new-agent-endpoint').value = '';
                     fetchAgents(); 
                     fetchSystemStats(); 
                 }
                 else alert('Failed: ' + await res.text());
             } catch (e) { alert('Error: ' + e); }
+        }
+        
+        function toggleApiKeyVisibility() {
+            const input = document.getElementById('new-agent-apikey');
+            input.type = input.type === 'password' ? 'text' : 'password';
         }
         
         function setStatus(text, state) { statusEl.textContent = text; statusEl.className = 'status ' + state; }
@@ -2388,6 +2839,8 @@ docker exec -it ${id} /bin/bash
                 console.log('[init] waiting for login...');
                 return;  // Stop here - login modal will call fetchAgents after success
             }
+            // Update UI based on role
+            if (authToken) updateUIBasedOnRole(authToken);
             await fetchAgents();
             await fetchSystemStats();
             setInterval(fetchAgents, 5000);

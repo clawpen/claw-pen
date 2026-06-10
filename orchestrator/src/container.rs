@@ -525,7 +525,8 @@ impl DockerClient {
 
     fn get_image_for_provider(_provider: &LlmProvider, _network_backend: NetworkBackend) -> &'static str {
         // Universal image — supports all providers via env vars (LLM_PROVIDER, LLM_MODEL, etc.)
-        "openclaw-agent:custom"
+        // Fixed image with corrected entrypoint script (kimi provider no longer converted to openai)
+        "claw-pen-agent:minimal"
     }
 
     /// Build labels HashMap for a container
@@ -992,20 +993,56 @@ impl ContainerRuntime for DockerClient {
     }
 
     async fn health_check(&self, id: &str) -> Result<bool> {
-        // For Docker, check if container is actually running (not just exists)
-        match self.docker.inspect_container(id, None).await {
-            Ok(inspect) => {
-                // Check the actual container state - inspect.state is Option, and running is Option<bool>
-                let is_running = inspect
-                    .state
-                    .and_then(|s| s.running)
-                    .unwrap_or(false);
-                Ok(is_running)
-            }
+        // Step 1: Check if container is running via Docker inspect
+        let inspect = match self.docker.inspect_container(id, None).await {
+            Ok(inspect) => inspect,
             Err(bollard::errors::Error::DockerResponseServerError {
                 status_code: 404, ..
-            }) => Ok(false),
-            Err(e) => Err(anyhow::anyhow!("Failed to check container health: {}", e)),
+            }) => return Ok(false),
+            Err(e) => return Err(anyhow::anyhow!("Failed to check container health: {}", e)),
+        };
+
+        let is_running = inspect
+            .state
+            .as_ref()
+            .and_then(|s| s.running)
+            .unwrap_or(false);
+
+        if !is_running {
+            return Ok(false);
+        }
+
+        // Step 2: Probe the agent's gateway port to verify it's actually responding
+        // Extract the host port from the container's port bindings
+        let host_port = inspect
+            .host_config
+            .as_ref()
+            .and_then(|hc| hc.port_bindings.as_ref())
+            .and_then(|pb| {
+                // Find the first port binding that has a host port
+                pb.values().find_map(|bindings| {
+                    bindings.as_ref().and_then(|b| {
+                        b.first().and_then(|binding| {
+                            binding.host_port.as_ref().and_then(|p| p.parse::<u16>().ok())
+                        })
+                    })
+                })
+            });
+
+        if let Some(port) = host_port {
+            let probe = tokio::time::timeout(
+                tokio::time::Duration::from_millis(500),
+                tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port)),
+            ).await;
+            let reachable = probe.ok().and_then(|r| r.ok()).is_some();
+            if !reachable {
+                tracing::warn!("Docker container {} is running but gateway port {} is not reachable", id, port);
+            }
+            Ok(reachable)
+        } else {
+            // No port binding found - fall back to just checking if container is running
+            tracing::debug!("No host port binding found for container {}, falling back to container state check", id);
+            Ok(true)
         }
     }
 
@@ -1156,23 +1193,9 @@ impl ExoClient {
 
     /// Get the image name for a provider
     fn get_image_for_provider(provider: &LlmProvider, _network_backend: NetworkBackend) -> &'static str {
-        // Exo uses the same images as Docker for compatibility
-        // Note: Tailscale integration not yet supported for Exo
-        match provider {
-            LlmProvider::OpenAI => "node:22-slim",
-            LlmProvider::Anthropic => "node:22-slim",
-            LlmProvider::Gemini => "node:22-slim",
-            LlmProvider::Kimi => "node:22-slim",
-            LlmProvider::Zai => "node:22-slim",
-            LlmProvider::Huggingface => "node:22-slim",
-            LlmProvider::Ollama => "node:22-slim",
-            LlmProvider::KimiCode => "node:22-slim",
-            LlmProvider::Access => "node:22-slim",
-            LlmProvider::LlamaCpp => "node:22-slim",
-            LlmProvider::Vllm => "node:22-slim",
-            LlmProvider::Lmstudio => "node:22-slim",
-            _ => "node:22-slim",
-        }
+        // Exo uses a minimal Debian image since exo-agent is a standalone binary
+        // mounted from the host. No need for Node.js anymore.
+        "debian:bookworm-slim"
     }
 
     /// Build environment variables for exo run command
@@ -1360,9 +1383,12 @@ impl ContainerRuntime for ExoClient {
         args.push("--memory".to_string());
         args.push(format!("{}m", config.memory_mb));
 
-        // Add CPU limit (as fraction of 1)
+        // Add CPU limit (as integer for Exo cgroup v2 compatibility)
+        // Exo expects integer CPU count (e.g., 1, 2) or percentage (e.g., 200%)
+        // Fractional values like 0.5 or 1.0 cause "Invalid argument" in cgroup v2 cpu.max
         args.push("--cpu".to_string());
-        args.push(format!("{}", config.cpu_cores));
+        let cpu_int = config.cpu_cores.ceil() as u32;
+        args.push(format!("{}", cpu_int.max(1)));
 
         // Add environment variables
         args.extend(Self::build_env_args(config));
@@ -1386,6 +1412,17 @@ impl ContainerRuntime for ExoClient {
         let entrypoint_wsl = Self::to_wsl_path(&entrypoint_host);
         args.push("-v".to_string());
         args.push(format!("{}:/clawpen-entrypoint.sh", entrypoint_wsl));
+
+        // Mount the exo-agent binary if available (bare-bones Rust agent replacement for OpenClaw)
+        let exo_agent_host = "/root/.openclaw/workspace/claw-pen/exo-agent";
+        if std::path::Path::new(exo_agent_host).exists() {
+            let exo_agent_wsl = Self::to_wsl_path(exo_agent_host);
+            args.push("-v".to_string());
+            args.push(format!("{}:/clawpen/exo-agent", exo_agent_wsl));
+            tracing::info!("exo-agent binary mounted at /clawpen/exo-agent");
+        } else {
+            tracing::warn!("exo-agent binary not found at {}, will fall back to OpenClaw", exo_agent_host);
+        }
 
         // Phase 1: bind-mount the host's pre-installed openclaw into the
         // container so we don't run npm at startup (which fights exo's seccomp).
@@ -1432,8 +1469,25 @@ impl ContainerRuntime for ExoClient {
             ));
         }
 
-        // exo run --detach returns the container ID
-        let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        // exo run --detach returns the container ID, but may also include
+        // entrypoint output. Extract the UUID from the first line.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let id = stdout
+            .lines()
+            .next()
+            .and_then(|line| {
+                // Try to extract a UUID pattern from the line
+                line.split_whitespace()
+                    .find(|word| {
+                        word.len() == 36 &&
+                        word.chars().nth(8) == Some('-') &&
+                        word.chars().nth(13) == Some('-') &&
+                        word.chars().nth(18) == Some('-') &&
+                        word.chars().nth(23) == Some('-')
+                    })
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| stdout.trim().to_string());
         tracing::info!("Created exo container: {} ({})", name, id);
         Ok(id)
     }

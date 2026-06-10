@@ -777,8 +777,46 @@
             margin: 0;
         }
 
-        .start-btn:hover {
-            background: #22c55e;
+        .health-dot {
+            display: inline-block;
+            font-size: 0.6rem;
+            vertical-align: middle;
+        }
+        
+        .health-dot.health-healthy {
+            filter: brightness(1.2);
+        }
+        
+        .health-dot.health-unhealthy {
+            filter: grayscale(0.3) brightness(0.8);
+        }
+
+        .chat-header-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex: 1;
+        }
+        
+        .agent-switcher {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            padding: 4px 8px;
+            color: #eee;
+            font-size: 0.85rem;
+            cursor: pointer;
+            max-width: 200px;
+        }
+        
+        .agent-switcher:focus {
+            outline: none;
+            border-color: #e94560;
+        }
+        
+        .agent-switcher option:disabled {
+            color: #666;
+            font-style: italic;
         }
 
         .stop-btn:hover {

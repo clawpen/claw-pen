@@ -501,9 +501,33 @@ pub struct UserRegisterRequest {
     pub username: String,
     pub password: String,
     pub display_name: Option<String>,
-    /// Defaults to "student" if absent. Only "admin" callers can create
-    /// "teacher" or "admin" roles; "student" / "observer" are open.
-    pub role: Option<String>,
+    /// Secret word for registration. Must match one of the configured
+    /// secret words (student_secret or admin_secret).
+    pub secret_word: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserRegisterResponse {
+    pub user_id: String,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub role: String,
+    pub approval_status: String,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminCreateUserRequest {
+    pub username: String,
+    pub password: String,
+    pub display_name: Option<String>,
+    pub role: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApproveUserRequest {
+    pub user_id: String,
+    pub action: String, // "approve" or "reject"
 }
 
 #[derive(Debug, Deserialize)]
@@ -542,41 +566,39 @@ fn verify_password(password: &str, hash: &str) -> Result<bool, AuthError> {
 
 /// POST /auth/user/register
 ///
-/// Open registration for `student` and `observer` roles. To create a teacher
-/// or admin, the caller must already authenticate as one (via Bearer token).
+/// Registration requires a secret word. The secret word determines the role:
+/// - Matches student_secret → role: student
+/// - Matches admin_secret → role: admin
+/// All new registrations are created with approval_status = pending.
+/// Admin must approve before the user can log in.
 pub async fn user_register(
     State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
     Json(req): Json<UserRegisterRequest>,
-) -> Result<Json<MeResponse>, AuthError> {
-    use crate::chat_db::{NewUser, UserRole};
+) -> Result<Json<UserRegisterResponse>, AuthError> {
+    use crate::chat_db::{NewUser, UserRole, ApprovalStatus};
 
-    let requested_role = UserRole::parse(req.role.as_deref().unwrap_or("student"));
+    // Check secret word against config
+    let config = state.config.clone();
+    let student_secret = config.student_secret.unwrap_or_default();
+    let admin_secret = config.admin_secret.unwrap_or_default();
 
-    // Privileged-role check: caller must be admin or teacher to mint those.
-    if matches!(requested_role, UserRole::Teacher | UserRole::Admin) {
-        let token = headers
-            .get("authorization")
-            .and_then(|h| h.to_str().ok())
-            .and_then(|s| s.strip_prefix("Bearer "))
-            .ok_or(AuthError::InvalidToken)?;
-        let auth = state.auth.read().await;
-        let claims = auth.validate_token(token)?;
-        let caller_role = claims.role.as_deref().unwrap_or("admin"); // legacy = admin
-        if !matches!(caller_role, "admin" | "teacher") {
-            return Err(AuthError::InvalidCredentials);
-        }
-        // Only admin can mint admin
-        if requested_role == UserRole::Admin && caller_role != "admin" {
-            return Err(AuthError::InvalidCredentials);
-        }
+    if student_secret.is_empty() && admin_secret.is_empty() {
+        return Err(AuthError::RegistrationDisabled);
     }
+
+    let role = if req.secret_word == admin_secret && !admin_secret.is_empty() {
+        UserRole::Admin
+    } else if req.secret_word == student_secret && !student_secret.is_empty() {
+        UserRole::Student
+    } else {
+        return Err(AuthError::InvalidCredentials);
+    };
 
     if state.chat_db.get_user_by_username(&req.username)
         .map_err(|_| AuthError::InvalidCredentials)?
         .is_some()
     {
-        return Err(AuthError::InvalidCredentials);
+        return Err(AuthError::UserAlreadyExists);
     }
 
     if req.password.len() < 8 {
@@ -590,19 +612,201 @@ pub async fn user_register(
         username: req.username.clone(),
         display_name: req.display_name.clone(),
         password_hash: Some(pw_hash),
-        role: requested_role,
+        role,
+        approval_status: ApprovalStatus::Pending,
         lti_subject: None,
         lti_issuer: None,
     };
     state.chat_db.create_user(&new_user)
         .map_err(|_| AuthError::InvalidCredentials)?;
 
-    Ok(Json(MeResponse {
+    Ok(Json(UserRegisterResponse {
         user_id,
         username: req.username,
         display_name: req.display_name,
-        role: requested_role.as_str().to_string(),
+        role: role.as_str().to_string(),
+        approval_status: "pending".to_string(),
+        message: "Registration successful. Waiting for admin approval.".to_string(),
     }))
+}
+
+/// POST /api/admin/create-user
+///
+/// Admin-only endpoint to create a user directly (bypasses secret word and
+/// sets status to approved immediately).
+pub async fn admin_create_user(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<AdminCreateUserRequest>,
+) -> Result<Json<UserRegisterResponse>, AuthError> {
+    use crate::chat_db::{NewUser, UserRole, ApprovalStatus};
+
+    // Verify admin
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or(AuthError::InvalidToken)?;
+    let auth = state.auth.read().await;
+    let claims = auth.validate_token(token)?;
+    let caller_role = claims.role.as_deref().unwrap_or("admin");
+    if caller_role != "admin" {
+        return Err(AuthError::InvalidCredentials);
+    }
+    drop(auth);
+
+    let role = UserRole::parse(&req.role);
+
+    if state.chat_db.get_user_by_username(&req.username)
+        .map_err(|_| AuthError::InvalidCredentials)?
+        .is_some()
+    {
+        return Err(AuthError::UserAlreadyExists);
+    }
+
+    if req.password.len() < 8 {
+        return Err(AuthError::InvalidCredentials);
+    }
+    let pw_hash = hash_password(&req.password)?;
+
+    let user_id = uuid::Uuid::new_v4().to_string();
+    let new_user = NewUser {
+        id: user_id.clone(),
+        username: req.username.clone(),
+        display_name: req.display_name.clone(),
+        password_hash: Some(pw_hash),
+        role,
+        approval_status: ApprovalStatus::Approved,
+        lti_subject: None,
+        lti_issuer: None,
+    };
+    state.chat_db.create_user(&new_user)
+        .map_err(|_| AuthError::InvalidCredentials)?;
+
+    Ok(Json(UserRegisterResponse {
+        user_id,
+        username: req.username,
+        display_name: req.display_name,
+        role: role.as_str().to_string(),
+        approval_status: "approved".to_string(),
+        message: "User created and approved by admin.".to_string(),
+    }))
+}
+
+/// POST /api/admin/approve-user
+///
+/// Admin-only endpoint to approve or reject a pending user.
+pub async fn admin_approve_user(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<ApproveUserRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    use crate::chat_db::ApprovalStatus;
+
+    // Verify admin
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or(AuthError::InvalidToken)?;
+    let auth = state.auth.read().await;
+    let claims = auth.validate_token(token)?;
+    let caller_role = claims.role.as_deref().unwrap_or("admin");
+    if caller_role != "admin" {
+        return Err(AuthError::InvalidCredentials);
+    }
+    drop(auth);
+
+    let status = match req.action.as_str() {
+        "approve" => ApprovalStatus::Approved,
+        "reject" => ApprovalStatus::Rejected,
+        _ => return Err(AuthError::InvalidCredentials),
+    };
+
+    state.chat_db.update_user_status(&req.user_id, status)
+        .map_err(|_| AuthError::InvalidCredentials)?;
+
+    Ok(Json(serde_json::json!({
+        "user_id": req.user_id,
+        "action": req.action,
+        "status": status.as_str(),
+    })))
+}
+
+/// GET /api/admin/pending-users
+///
+/// Admin-only endpoint to list all pending users.
+pub async fn admin_pending_users(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    // Verify admin
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or(AuthError::InvalidToken)?;
+    let auth = state.auth.read().await;
+    let claims = auth.validate_token(token)?;
+    let caller_role = claims.role.as_deref().unwrap_or("admin");
+    if caller_role != "admin" {
+        return Err(AuthError::InvalidCredentials);
+    }
+    drop(auth);
+
+    let users = state.chat_db.list_pending_users()
+        .map_err(|_| AuthError::InvalidCredentials)?;
+
+    let users_json: Vec<serde_json::Value> = users.into_iter().map(|u| {
+        serde_json::json!({
+            "user_id": u.id,
+            "username": u.username,
+            "display_name": u.display_name,
+            "role": u.role.as_str(),
+            "approval_status": u.approval_status.as_str(),
+            "created_at": u.created_at,
+        })
+    }).collect();
+
+    Ok(Json(serde_json::json!({ "users": users_json })))
+}
+
+/// GET /api/admin/users
+///
+/// Admin-only endpoint to list all users.
+pub async fn admin_list_users(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    // Verify admin
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or(AuthError::InvalidToken)?;
+    let auth = state.auth.read().await;
+    let claims = auth.validate_token(token)?;
+    let caller_role = claims.role.as_deref().unwrap_or("admin");
+    if caller_role != "admin" {
+        return Err(AuthError::InvalidCredentials);
+    }
+    drop(auth);
+
+    let users = state.chat_db.list_all_users()
+        .map_err(|_| AuthError::InvalidCredentials)?;
+
+    let users_json: Vec<serde_json::Value> = users.into_iter().map(|u| {
+        serde_json::json!({
+            "user_id": u.id,
+            "username": u.username,
+            "display_name": u.display_name,
+            "role": u.role.as_str(),
+            "approval_status": u.approval_status.as_str(),
+            "created_at": u.created_at,
+        })
+    }).collect();
+
+    Ok(Json(serde_json::json!({ "users": users_json })))
 }
 
 /// POST /auth/user/login
@@ -616,6 +820,11 @@ pub async fn user_login(
 
     let hash = user.password_hash.as_deref().ok_or(AuthError::InvalidCredentials)?;
     if !verify_password(&req.password, hash)? {
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    // Check approval status
+    if user.approval_status != crate::chat_db::ApprovalStatus::Approved {
         return Err(AuthError::InvalidCredentials);
     }
 

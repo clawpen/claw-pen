@@ -337,10 +337,17 @@ pub fn dashboard() -> Html {
                 </div>
             </div>
 
-            // Main chat area
+            let on_switch_agent = {
+        let chat_agent = chat_agent.clone();
+        Callback::from(move |agent: AgentContainer| {
+            chat_agent.set(Some(agent));
+        })
+    };
+
+    // Main chat area
             <div class="main">
                 if let Some(agent) = (*chat_agent).clone() {
-                    <ChatPanel agent={agent} on_close={on_close_chat} />
+                    <ChatPanel agent={agent} agents={(*agents).clone()} on_close={on_close_chat} on_switch={on_switch_agent} />
                 } else if let Some(agent) = (*logs_agent).clone() {
                     <LogsPanel agent_id={agent.id} agent_name={agent.name} on_close={on_close_logs} />
                 } else {
@@ -402,7 +409,20 @@ fn agent_card(props: &AgentCardProps) -> Html {
         AgentStatus::Error => "error",
     };
 
-    let can_chat = props.agent.status == AgentStatus::Running;
+    let health_class = match props.agent.health_status {
+        Some(ref hs) if hs.healthy => "health-healthy",
+        Some(_) => "health-unhealthy",
+        None => "health-unknown",
+    };
+
+    let health_emoji = match props.agent.health_status {
+        Some(ref hs) if hs.healthy => "🟢",
+        Some(_) => "🔴",
+        None => "⚪",
+    };
+
+    let can_chat = props.agent.status == AgentStatus::Running && 
+        matches!(props.agent.health_status, Some(ref hs) if hs.healthy);
     let on_chat_click = {
         let on_chat = props.on_chat.clone();
         Callback::from(move |_e: MouseEvent| {
@@ -429,7 +449,7 @@ fn agent_card(props: &AgentCardProps) -> Html {
         <div class={format!("agent-card {}", if props.is_active { "active" } else { "" })}>
             <div class="agent-card-header">
                 <div class="name">{&props.agent.name}</div>
-                <div class={format!("status {}", status_class)}>{status_text}</div>
+                <div class={format!("status {}", status_class)}>{status_text} {" "} <span class={format!("health-dot {}", health_class)}>{health_emoji}</span></div>
             </div>
             <div class="agent-card-actions">
                 <button

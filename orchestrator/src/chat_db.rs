@@ -59,6 +59,29 @@ impl ChatDb {
             "INSERT OR IGNORE INTO schema_version (version) VALUES (1)",
             [],
         )?;
+
+        // Migration: add approval_status if not exists (schema v2)
+        let has_approval_status: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'approval_status'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_approval_status == 0 {
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'pending' CHECK(approval_status IN ('pending','approved','rejected'))",
+                [],
+            )?;
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_users_status ON users(approval_status)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO schema_version (version) VALUES (2)",
+                [],
+            )?;
+            tracing::info!("Migrated schema v2: added users.approval_status");
+        }
+
         Ok(())
     }
 
@@ -67,11 +90,11 @@ impl ChatDb {
     pub fn create_user(&self, user: &NewUser) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO users (id, username, display_name, password_hash, role, lti_subject, lti_issuer)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO users (id, username, display_name, password_hash, role, approval_status, lti_subject, lti_issuer)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 user.id, user.username, user.display_name,
-                user.password_hash, user.role.as_str(),
+                user.password_hash, user.role.as_str(), user.approval_status.as_str(),
                 user.lti_subject, user.lti_issuer,
             ],
         )?;
@@ -81,7 +104,7 @@ impl ChatDb {
     pub fn get_user_by_username(&self, username: &str) -> Result<Option<User>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, username, display_name, password_hash, role,
+            "SELECT id, username, display_name, password_hash, role, approval_status,
                     lti_subject, lti_issuer, created_at
              FROM users WHERE username = ?1",
             params![username],
@@ -94,7 +117,7 @@ impl ChatDb {
     pub fn get_user_by_lti(&self, issuer: &str, subject: &str) -> Result<Option<User>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, username, display_name, password_hash, role,
+            "SELECT id, username, display_name, password_hash, role, approval_status,
                     lti_subject, lti_issuer, created_at
              FROM users WHERE lti_issuer = ?1 AND lti_subject = ?2",
             params![issuer, subject],
@@ -107,7 +130,7 @@ impl ChatDb {
     pub fn get_user(&self, id: &str) -> Result<Option<User>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, username, display_name, password_hash, role,
+            "SELECT id, username, display_name, password_hash, role, approval_status,
                     lti_subject, lti_issuer, created_at
              FROM users WHERE id = ?1",
             params![id],
@@ -312,9 +335,78 @@ impl ChatDb {
         .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
+
+    // ─── Approval Workflow ────────────────────────────────────────────────
+
+    pub fn list_pending_users(&self) -> Result<Vec<User>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, username, display_name, password_hash, role, approval_status,
+                    lti_subject, lti_issuer, created_at
+             FROM users WHERE approval_status = 'pending' ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], row_to_user)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn list_all_users(&self) -> Result<Vec<User>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, username, display_name, password_hash, role, approval_status,
+                    lti_subject, lti_issuer, created_at
+             FROM users ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], row_to_user)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn update_user_status(&self, user_id: &str, status: ApprovalStatus) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE users SET approval_status = ?1 WHERE id = ?2",
+            params![status.as_str(), user_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_user(&self, user_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM users WHERE id = ?1",
+            params![user_id],
+        )?;
+        Ok(())
+    }
 }
 
 // ─── Types ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalStatus {
+    Pending,
+    Approved,
+    Rejected,
+}
+
+impl ApprovalStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ApprovalStatus::Pending  => "pending",
+            ApprovalStatus::Approved => "approved",
+            ApprovalStatus::Rejected  => "rejected",
+        }
+    }
+    pub fn parse(s: &str) -> ApprovalStatus {
+        match s {
+            "approved" => ApprovalStatus::Approved,
+            "rejected" => ApprovalStatus::Rejected,
+            _          => ApprovalStatus::Pending,
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserRole {
@@ -405,6 +497,7 @@ pub struct NewUser {
     pub display_name: Option<String>,
     pub password_hash: Option<String>,   // None for LTI-only users
     pub role: UserRole,
+    pub approval_status: ApprovalStatus,
     pub lti_subject: Option<String>,
     pub lti_issuer: Option<String>,
 }
@@ -424,6 +517,7 @@ pub struct User {
     pub display_name: Option<String>,
     pub password_hash: Option<String>,
     pub role: UserRole,
+    pub approval_status: ApprovalStatus,
     pub lti_subject: Option<String>,
     pub lti_issuer: Option<String>,
     pub created_at: String,
@@ -459,9 +553,10 @@ fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<User> {
         display_name: row.get(2)?,
         password_hash: row.get(3)?,
         role: UserRole::parse(&row.get::<_, String>(4)?),
-        lti_subject: row.get(5)?,
-        lti_issuer: row.get(6)?,
-        created_at: row.get(7)?,
+        approval_status: ApprovalStatus::parse(&row.get::<_, String>(5)?),
+        lti_subject: row.get(6)?,
+        lti_issuer: row.get(7)?,
+        created_at: row.get(8)?,
     })
 }
 

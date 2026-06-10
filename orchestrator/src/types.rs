@@ -43,7 +43,7 @@ pub enum AgentStatus {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     #[serde(default)]
     pub llm_provider: LlmProvider,
@@ -79,6 +79,26 @@ pub struct AgentConfig {
     pub image: Option<String>,
 }
 
+// Manual Default impl so that memory_mb and cpu_cores get their proper defaults
+// (the #[serde(default = "...")] attributes only affect serde, not std::default::Default)
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            llm_provider: LlmProvider::default(),
+            llm_model: None,
+            memory_mb: default_memory(),
+            cpu_cores: default_cpu(),
+            env_vars: HashMap::default(),
+            secrets: Vec::default(),
+            preset: None,
+            restart_policy: RestartPolicy::default(),
+            health_check: None,
+            volumes: Vec::default(),
+            api_key: None,
+            image: None,
+        }
+    }
+}
 fn default_memory() -> u32 {
     1024
 }

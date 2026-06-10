@@ -1,0 +1,28 @@
+[package]
+name = "claw-pen-agent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.43", features = ["full"] }
+tokio-tungstenite = "0.26"
+tungstenite = "0.26"
+futures-util = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest-eventsource = "0.6"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+axum = { version = "0.8", features = ["ws"] }
+sha2 = "0.10"
+base64 = "0.22"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"
+uuid = { version = "1.11", features = ["v4"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

@@ -77,8 +77,38 @@ fn allocate_port(existing_agents: &[AgentContainer]) -> u16 {
 
 // === Health ===
 
-pub async fn health() -> &'static str {
-    "OK"
+pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let containers = state.containers.read().await;
+    let total = containers.len();
+    let running = containers.iter().filter(|a| a.status == AgentStatus::Running).count();
+    
+    let mut agents = Vec::new();
+    for agent in containers.iter().filter(|a| a.status == AgentStatus::Running) {
+        let port = agent.gateway_port;
+        let probe = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port)),
+        ).await;
+        let reachable = probe.ok().and_then(|r| r.ok()).is_some();
+        agents.push(serde_json::json!({
+            "id": agent.id,
+            "name": agent.name,
+            "port": port,
+            "reachable": reachable,
+            "runtime": agent.runtime,
+        }));
+    }
+    drop(containers);
+    
+    Json(serde_json::json!({
+        "status": "ok",
+        "orchestrator": true,
+        "agents": {
+            "total": total,
+            "running": running,
+            "details": agents,
+        }
+    }))
 }
 
 /// Serve the embedded terminal HTML page
@@ -396,6 +426,38 @@ pub async fn create_agent(
         }
     }
 
+    // Validate provider-model combination
+    if let Some(ref model) = config.llm_model {
+        let valid = match config.llm_provider {
+            LlmProvider::Zai => ["glm-5", "glm-4"].contains(&model.as_str()),
+            LlmProvider::Anthropic => ["claude-sonnet-4-5", "claude-3-5-sonnet", "claude-3-opus", "claude-3-haiku"].contains(&model.as_str()),
+            LlmProvider::OpenAI => ["gpt-4o", "gpt-4o-mini", "o1", "o3-mini", "gpt-4.1", "gpt-4.1-mini"].contains(&model.as_str()),
+            LlmProvider::Kimi => ["kimi-k2.6", "kimi-k2.5", "moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k"].contains(&model.as_str()),
+            LlmProvider::KimiCode => ["kimi-code"].contains(&model.as_str()),
+            LlmProvider::Gemini => ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"].contains(&model.as_str()),
+            LlmProvider::Access => ["access-standard"].contains(&model.as_str()),
+            LlmProvider::Huggingface => ["meta-llama/Llama-3.3-70B-Instruct", "meta-llama/Llama-3.1-8B-Instruct", "Qwen/Qwen2.5-72B-Instruct", "deepseek-ai/DeepSeek-R1"].contains(&model.as_str()),
+            _ => true, // Unknown/local providers, skip validation
+        };
+        if !valid {
+            let provider_name = match config.llm_provider {
+                LlmProvider::Zai => "zai",
+                LlmProvider::Anthropic => "anthropic",
+                LlmProvider::OpenAI => "openai",
+                LlmProvider::Kimi => "kimi",
+                LlmProvider::KimiCode => "kimi-code",
+                LlmProvider::Gemini => "google",
+                LlmProvider::Access => "access",
+                LlmProvider::Huggingface => "huggingface",
+                _ => "unknown",
+            };
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Invalid model '{}' for provider '{}'. Please select a valid model from the dropdown.", model, provider_name),
+            ));
+        }
+    }
+
     // Create container
 
     // Allocate a port for this agent
@@ -457,6 +519,28 @@ pub async fn create_agent(
     ).await {
         tracing::warn!("Failed to setup persistent data volume: {}", e);
         // Continue anyway - this is not critical
+    }
+
+    // For openclaw-agent template, inject gateway auth env vars into config
+    // so the WebSocket proxy can authenticate when connecting to the agent
+    if req.template.as_deref() == Some("openclaw-agent") {
+        if !config.env_vars.contains_key("GATEWAY_PASSWORD") && !config.env_vars.contains_key("GATEWAY_TOKEN") {
+            config.env_vars.insert("GATEWAY_PASSWORD".to_string(), "clawpen".to_string());
+        }
+        if !config.env_vars.contains_key("BIND") {
+            config.env_vars.insert("BIND".to_string(), "lan".to_string());
+        }
+    }
+
+    // For openclaw-agent template, inject gateway auth env vars into config
+    // so the WebSocket proxy can authenticate when connecting to the agent
+    if req.template.as_deref() == Some("openclaw-agent") {
+        if !config.env_vars.contains_key("GATEWAY_PASSWORD") && !config.env_vars.contains_key("GATEWAY_TOKEN") {
+            config.env_vars.insert("GATEWAY_PASSWORD".to_string(), "clawpen".to_string());
+        }
+        if !config.env_vars.contains_key("BIND") {
+            config.env_vars.insert("BIND".to_string(), "lan".to_string());
+        }
     }
 
     // Determine which runtime to use
@@ -638,7 +722,7 @@ pub async fn delete_agent(
 
     // Remove from state
     let mut containers = state.containers.write().await;
-    containers.retain(|c| c.id != id);
+    containers.retain(|c| c.id != id && c.name != id);
 
     // Remove from storage
     if let Err(e) = crate::storage::remove_agent(&id) {
@@ -659,7 +743,7 @@ pub async fn exec_agent(
         let containers = state.containers.read().await;
         containers
             .iter()
-            .find(|a| a.id == id)
+            .find(|a| a.id == id || a.name == id)
             .map(|a| (true, a.runtime.clone(), a.name.clone()))
             .unwrap_or((false, None, String::new()))
     };
@@ -683,7 +767,7 @@ pub async fn exec_agent(
     };
 
     // Execute command in container
-    match runtime.exec_container(&id, cmd).await {
+    match runtime.exec_container(&agent_name, cmd).await {
         Ok(output) => Ok(Json(ExecResponse {
             output,
             container_id: id,
@@ -701,7 +785,7 @@ pub async fn start_agent(
 
     let agent = containers
         .iter_mut()
-        .find(|a| a.id == id)
+        .find(|a| a.id == id || a.name == id)
         .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
 
     // Direct backend has no container — just flip status to Running.
@@ -784,39 +868,25 @@ pub async fn start_agent(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Verify the container is actually running (not just started).
-    // For Exo we probe the agent's known gateway port directly — exo's `ps`
-    // view of state is unreliable in rootless WSL, and ExoClient::health_check
-    // doesn't know each agent's specific port. Docker still uses runtime probe.
+    // Verify the container is actually responding (not just started).
+    // For both Docker and Exo, we probe the agent's known gateway port directly —
+    // container state alone doesn't tell us if the agent process inside is healthy.
     // 30s budget: Docker is fast (~2s); Exo with plugin staging on cold start
     // can take 20-25s the first time the runtime deps need to settle.
-    let health_ok = if agent.runtime.as_deref() == Some("exo") {
-        let port = agent.gateway_port;
-        // Exo cold start with plugin install can take ~45s the first time;
-        // 90s gives headroom for slower hardware.
-        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(90);
-        let mut ok = false;
-        while tokio::time::Instant::now() < deadline {
-            let probe = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port));
-            if let Ok(Ok(_)) = tokio::time::timeout(
-                tokio::time::Duration::from_millis(300), probe
-            ).await {
-                tracing::info!("Exo health probe: agent {} gateway reachable on port {}", agent.name, port);
-                ok = true;
-                break;
-            }
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    let port = agent.gateway_port;
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(30);
+    let mut health_ok = false;
+    while tokio::time::Instant::now() < deadline {
+        let probe = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port));
+        if let Ok(Ok(_)) = tokio::time::timeout(
+            tokio::time::Duration::from_millis(300), probe
+        ).await {
+            tracing::info!("Health probe: agent {} gateway reachable on port {}", agent.name, port);
+            health_ok = true;
+            break;
         }
-        ok
-    } else {
-        tokio::time::timeout(
-            tokio::time::Duration::from_secs(30),
-            runtime.health_check(&agent.name)
-        )
-        .await
-        .unwrap_or(Ok(false))
-        .unwrap_or(false)
-    };
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    }
 
     if !health_ok {
         tracing::error!("Agent {} started but health check failed - container may have crashed", agent.name);
@@ -842,7 +912,7 @@ pub async fn stop_agent(
 
     let agent_name = containers
         .iter()
-        .find(|a| a.id == id)
+        .find(|a| a.id == id || a.name == id)
         .map(|a| a.name.clone())
         .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
 
@@ -850,7 +920,7 @@ pub async fn stop_agent(
     let agent_runtime = {
         containers
             .iter()
-            .find(|a| a.id == id)
+            .find(|a| a.id == id || a.name == id)
             .and_then(|a| a.runtime.clone())
     };
 
@@ -1247,13 +1317,14 @@ pub async fn run_health_check(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<HealthStatus>, (StatusCode, String)> {
-    // Get agent to find its runtime
-    let agent_runtime = {
+    // Get agent details including runtime and gateway port
+    let (agent_runtime, gateway_port, agent_name) = {
         let containers = state.containers.read().await;
         containers
             .iter()
             .find(|a| a.id == id)
-            .and_then(|a| a.runtime.clone())
+            .map(|a| (a.runtime.clone(), a.gateway_port, a.name.clone()))
+            .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?
     };
 
     // Choose the right runtime
@@ -1263,22 +1334,40 @@ pub async fn run_health_check(
         &state.runtime
     };
 
-    let healthy = runtime
+    // Step 1: Check if container exists and is running via runtime
+    let container_healthy = runtime
         .health_check(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    // Step 2: Probe the agent's gateway port directly
+    // The container may be "running" but the agent process inside may have crashed
+    let gateway_reachable = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        tokio::net::TcpStream::connect(format!("127.0.0.1:{}", gateway_port)),
+    )
+    .await
+    .ok()
+    .and_then(|r| r.ok())
+    .is_some();
+
+    let healthy = container_healthy && gateway_reachable;
+
+    let message = if !container_healthy {
+        format!("Container '{}' is not running", agent_name)
+    } else if !gateway_reachable {
+        format!("Container '{}' is running but agent gateway on port {} is not responding", agent_name, gateway_port)
+    } else {
+        format!("Agent '{}' is healthy on port {}", agent_name, gateway_port)
+    };
+
     let status = HealthStatus {
         healthy,
         last_check: chrono::Utc::now().to_rfc3339(),
-        message: if healthy {
-            Some("OK".to_string())
-        } else {
-            Some("Health check failed".to_string())
-        },
+        message: Some(message),
     };
 
-    // Update agent status
+    // Update agent health status in state
     let mut containers = state.containers.write().await;
     if let Some(agent) = containers.iter_mut().find(|c| c.id == id) {
         agent.health_status = Some(status.clone());
@@ -1353,6 +1442,120 @@ fn get_system_memory() -> (u64, u64) {
 }
 
 // === Templates ===
+
+pub async fn list_models(State(_state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "providers": [
+            {
+                "id": "zai",
+                "name": "Z.AI",
+                "models": [
+                    { "id": "glm-5", "name": "GLM-5" },
+                    { "id": "glm-5-flash", "name": "GLM-5 Flash" },
+                    { "id": "glm-4-plus", "name": "GLM-4 Plus" }
+                ]
+            },
+            {
+                "id": "anthropic",
+                "name": "Anthropic",
+                "models": [
+                    { "id": "claude-sonnet-4-5", "name": "Claude Sonnet 4.5" },
+                    { "id": "claude-opus-4", "name": "Claude Opus 4" },
+                    { "id": "claude-3-7-sonnet-20250219", "name": "Claude 3.7 Sonnet" },
+                    { "id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet" }
+                ]
+            },
+            {
+                "id": "openai",
+                "name": "OpenAI",
+                "models": [
+                    { "id": "gpt-4o", "name": "GPT-4o" },
+                    { "id": "gpt-4o-mini", "name": "GPT-4o Mini" },
+                    { "id": "o1", "name": "o1" },
+                    { "id": "o3-mini", "name": "o3-mini" },
+                    { "id": "gpt-4.1", "name": "GPT-4.1" },
+                    { "id": "gpt-4.1-mini", "name": "GPT-4.1 Mini" }
+                ]
+            },
+            {
+                "id": "kimi",
+                "name": "Kimi (Moonshot)",
+                "models": [
+                    { "id": "kimi-k2.6", "name": "Kimi K2.6" },
+                    { "id": "kimi-k2.5", "name": "Kimi K2.5" },
+                    { "id": "moonshot-v1-128k", "name": "Moonshot 128K" },
+                    { "id": "moonshot-v1-32k", "name": "Moonshot 32K" },
+                    { "id": "moonshot-v1-8k", "name": "Moonshot 8K" }
+                ]
+            },
+            {
+                "id": "kimi-code",
+                "name": "Kimi Code",
+                "models": [
+                    { "id": "kimi-code", "name": "Kimi Code" }
+                ]
+            },
+            {
+                "id": "google",
+                "name": "Google",
+                "models": [
+                    { "id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro" },
+                    { "id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash" },
+                    { "id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash" }
+                ]
+            },
+            {
+                "id": "access",
+                "name": "Access",
+                "models": [
+                    { "id": "access-standard", "name": "Access Standard" }
+                ]
+            },
+            {
+                "id": "huggingface",
+                "name": "Hugging Face",
+                "models": [
+                    { "id": "meta-llama/Llama-3.3-70B-Instruct", "name": "Llama 3.3 70B" },
+                    { "id": "meta-llama/Llama-3.1-8B-Instruct", "name": "Llama 3.1 8B" },
+                    { "id": "Qwen/Qwen2.5-72B-Instruct", "name": "Qwen 2.5 72B" },
+                    { "id": "deepseek-ai/DeepSeek-R1", "name": "DeepSeek R1" }
+                ]
+            },
+            {
+                "id": "ollama",
+                "name": "Ollama (Local)",
+                "models": [
+                    { "id": "llama3.2", "name": "Llama 3.2" },
+                    { "id": "llama3.1", "name": "Llama 3.1" },
+                    { "id": "qwen2.5", "name": "Qwen 2.5" },
+                    { "id": "mistral", "name": "Mistral" },
+                    { "id": "codellama", "name": "CodeLlama" }
+                ]
+            },
+            {
+                "id": "lmstudio",
+                "name": "LM Studio (Local)",
+                "models": [
+                    { "id": "", "name": "Use LM Studio default" }
+                ]
+            },
+            {
+                "id": "llamacpp",
+                "name": "llama.cpp (Local)",
+                "models": [
+                    { "id": "", "name": "Use llama.cpp default" }
+                ]
+            },
+            {
+                "id": "vllm",
+                "name": "vLLM (Local)",
+                "models": [
+                    { "id": "", "name": "Use vLLM default" }
+                ]
+            }
+        ]
+    }))
+}
 
 pub async fn list_templates(
     State(state): State<Arc<AppState>>,
@@ -2002,11 +2205,12 @@ pub fn build_device_connect_request(req_id: &str, nonce: &str, signing_key: &ed2
     let scopes = scopes_array.join(",");
     // OpenClaw's resolveSignatureToken: auth.token ?? auth.deviceToken ?? auth.bootstrapToken.
     // The signature payload's `token` field MUST be whichever of those is
-    // present, in that priority. We typically only send deviceToken (no gateway
-    // token in this deployment), so the signed token is the deviceToken.
-    let token_str = gateway_token
-        .or(device_token)
-        .unwrap_or("");
+    // present, in that priority. 
+    // IMPORTANT: auth.password is NOT part of the signature payload. The
+    // password is verified separately by the gateway. The device signature
+    // proves device identity only, using auth.token/deviceToken/bootstrapToken.
+    // When we send auth.password (gateway password mode), token_str must be "".
+    let token_str = device_token.unwrap_or("");
 
     // OpenClaw tries v3 first, then falls back to v2. Use v3 to match the
     // current verifier's preferred path. v3 includes platform + deviceFamily,
@@ -2027,14 +2231,14 @@ pub fn build_device_connect_request(req_id: &str, nonce: &str, signing_key: &ed2
     let public_key_b64 = b64url.encode(signing_key.verifying_key().to_bytes());
 
     let mut params = serde_json::json!({
-        "minProtocol": 3,
-        "maxProtocol": 3,
+        "minProtocol": 4,
+        "maxProtocol": 4,
         "client": {
             "id": "cli",
             "version": env!("CARGO_PKG_VERSION"),
             "platform": "rust",
             "mode": "cli",
-            "deviceFamily": "Desktop"
+            "deviceFamily": "desktop"
         },
         "role": "operator",
         "scopes": scopes_array,
@@ -2050,9 +2254,10 @@ pub fn build_device_connect_request(req_id: &str, nonce: &str, signing_key: &ed2
     });
 
     // Include auth credentials
+    // The agent gateway in password mode expects auth.password
     let mut auth = serde_json::Map::new();
     if let Some(token) = gateway_token {
-        auth.insert("token".to_string(), serde_json::json!(token));
+        auth.insert("password".to_string(), serde_json::json!(token));
     }
     if let Some(dt) = device_token {
         auth.insert("deviceToken".to_string(), serde_json::json!(dt));
@@ -2083,6 +2288,8 @@ async fn handle_chat_stream(socket: WebSocket, state: Arc<AppState>, agent_id: S
         if let Some(agent) = containers.iter().find(|a| a.id == agent_id) {
             agent.config.env_vars.get("GATEWAY_TOKEN")
                 .or_else(|| agent.config.env_vars.get("OPENCLAW_GATEWAY_TOKEN"))
+                .or_else(|| agent.config.env_vars.get("GATEWAY_PASSWORD"))
+                .or_else(|| agent.config.env_vars.get("OPENCLAW_GATEWAY_PASSWORD"))
                 .cloned()
         } else {
             tracing::error!("Agent {} not found", agent_id);
@@ -3949,6 +4156,8 @@ async fn handle_websocket_proxy(
 
         let token = target_agent.config.env_vars.get("GATEWAY_TOKEN")
             .or_else(|| target_agent.config.env_vars.get("OPENCLAW_GATEWAY_TOKEN"))
+            .or_else(|| target_agent.config.env_vars.get("GATEWAY_PASSWORD"))
+            .or_else(|| target_agent.config.env_vars.get("OPENCLAW_GATEWAY_PASSWORD"))
             .cloned();
 
         (from_agent.name.clone(), target_agent.name.clone(), target_agent.gateway_port, token)

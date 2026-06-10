@@ -1,8 +1,6 @@
 #!/bin/sh
 # Universal Claw Pen agent entrypoint for the Exo runtime.
-# Mirrors the Docker openclaw-agent:custom entrypoint, plus an npm install
-# at the top because Exo pulls vanilla node:20-alpine from docker.io and
-# we don't yet have a published openclaw-agent image.
+# Supports both exo-agent (bare-bones Rust agent) and OpenClaw (legacy).
 #
 # Phase 1 of the exo integration. Phase 2 publishes a real image to a
 # sovereign registry (Boréal-hosted) and this script collapses back into
@@ -10,10 +8,57 @@
 
 set -e
 
-# Phase 1 — openclaw is bind-mounted from the WSL host at /clawpen-runtime
-# (installed once via `npm install openclaw` in /opt/clawpen-runtime). No npm
-# install runs in the container; that fights exo's seccomp filter.
-# Phase 2 replaces the bind-mount with a published image that has openclaw baked in.
+MODEL="${LLM_MODEL:-glm-5}"
+PROVIDER="${LLM_PROVIDER:-zai}"
+PROVIDER=$(echo "$PROVIDER" | tr '[:upper:]' '[:lower:]')
+PORT="${PORT:-18790}"
+
+echo "[entrypoint] Provider: $PROVIDER, Model: $MODEL, Port: $PORT"
+
+# --- Check for exo-agent (new bare-bones Rust agent) ---
+EXO_AGENT="/clawpen/exo-agent"
+if [ -f "$EXO_AGENT" ]; then
+    echo "[entrypoint] Using exo-agent (bare-bones Rust agent)"
+    
+    # Resolve API key per provider
+    API_KEY=""
+    case "$PROVIDER" in
+      zai) API_KEY="$ZAI_API_KEY" ;;
+      kimi|kimi-code|kimicode) API_KEY="${KIMI_API_KEY:-$KIMICODE_API_KEY}" ;;
+      anthropic) API_KEY="$ANTHROPIC_API_KEY" ;;
+      openai) API_KEY="$OPENAI_API_KEY" ;;
+      google|gemini) API_KEY="$GOOGLE_API_KEY" ;;
+      access) API_KEY="$ACCESS_API_KEY" ;;
+      huggingface|hf) API_KEY="$HF_TOKEN" ;;
+      *) API_KEY="${API_KEY:-${ZAI_API_KEY:-${ANTHROPIC_API_KEY:-${OPENAI_API_KEY:-}}}}" ;;
+    esac
+    
+    if [ -z "$API_KEY" ]; then
+        echo "[entrypoint] ERROR: No API key found for provider '$PROVIDER'"
+        exit 1
+    fi
+    
+    # Create a workspace directory for the agent
+    mkdir -p /agent/workspace
+    
+    # Write a simple config file for exo-agent
+    cat > /agent/config.json << CONF
+{
+    "provider": "$PROVIDER",
+    "model": "$MODEL",
+    "api_key": "$API_KEY",
+    "port": $PORT,
+    "workspace": "/agent/workspace"
+}
+CONF
+    
+    echo "[entrypoint] Starting exo-agent on port $PORT..."
+    exec "$EXO_AGENT" --config /agent/config.json
+fi
+
+# --- Fall back to OpenClaw (legacy) ---
+echo "[entrypoint] exo-agent not found, falling back to OpenClaw"
+
 OPENCLAW_ENTRY="/clawpen-runtime/node_modules/openclaw/openclaw.mjs"
 if [ ! -f "$OPENCLAW_ENTRY" ]; then
   echo "[entrypoint] FATAL: openclaw not found at $OPENCLAW_ENTRY"
@@ -24,18 +69,14 @@ if [ ! -f "$OPENCLAW_ENTRY" ]; then
 fi
 echo "[entrypoint] Using openclaw from host bind-mount"
 
-MODEL="${LLM_MODEL:-glm-5}"
-PROVIDER="${LLM_PROVIDER:-zai}"
-PROVIDER=$(echo "$PROVIDER" | tr '[:upper:]' '[:lower:]')
-PORT="${PORT:-18790}"
-
-# Force the gateway to bind on PORT — newer openclaw reads OPENCLAW_GATEWAY_PORT
-# and falls back to a default (18789) ignoring the config file's gateway.port.
-export OPENCLAW_GATEWAY_PORT="$PORT"
 GATEWAY_PASSWORD="${GATEWAY_PASSWORD:-}"
 GATEWAY_TOKEN="${GATEWAY_TOKEN:-}"
 ORCHESTRATOR_DEVICE_ID="${ORCHESTRATOR_DEVICE_ID:-}"
 ORCHESTRATOR_PUBLIC_KEY="${ORCHESTRATOR_PUBLIC_KEY:-}"
+
+# Force the gateway to bind on PORT — newer openclaw reads OPENCLAW_GATEWAY_PORT
+# and falls back to a default (18789) ignoring the config file's gateway.port.
+export OPENCLAW_GATEWAY_PORT="$PORT"
 
 # --- Resolve API key and base URL per provider ---
 BASE_URL=""
@@ -45,9 +86,6 @@ case "$PROVIDER" in
     BASE_URL="https://api.z.ai/api/coding/paas/v4"
     ;;
   kimi|kimi-code|kimicode)
-    # OpenClaw's kimi-coding plugin expects KIMI_API_KEY (no underscore in CODE).
-    # Plugin id is "kimi", provider id is "kimi", default model id is "kimi-code".
-    # Model ref written to openclaw.json is "kimi/kimi-code".
     API_KEY="${KIMI_API_KEY:-$KIMICODE_API_KEY}"
     PROVIDER="kimi"
     ;;
@@ -89,7 +127,6 @@ case "$PROVIDER" in
 esac
 
 MODEL_ID="${PROVIDER}/${MODEL}"
-echo "[entrypoint] Provider: $PROVIDER, Model: $MODEL, Port: $PORT"
 echo "[entrypoint] Model ID: $MODEL_ID"
 echo "[entrypoint] API_KEY: ${API_KEY:+set (${#API_KEY} chars)}"
 echo "[entrypoint] BASE_URL: ${BASE_URL:-default}"
@@ -160,10 +197,6 @@ else
 fi
 
 # --- Identity volume (teacher-authored system prompt) ---
-# Phase 1 NOTE: openclaw's config schema no longer accepts `systemPrompt` under
-# `agents.list[*].identity` or `agents.defaults`. The correct injection path
-# in current openclaw is TBD — see follow-up. For now we just record that the
-# identity volume is present so the bind-mount is exercised end-to-end.
 if [ -f /identity/system_prompt.md ]; then
   CHARS=$(wc -c < /identity/system_prompt.md)
   echo "[entrypoint] Identity volume present (${CHARS} chars) — injection deferred to Phase 1.5"

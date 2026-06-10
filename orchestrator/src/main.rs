@@ -229,6 +229,40 @@ async fn sync_container_states(state: &AppState) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn health_check_all_agents(state: &AppState) -> anyhow::Result<()> {
+    use crate::types::{AgentStatus, HealthStatus};
+
+    let mut containers = state.containers.write().await;
+    for agent in containers.iter_mut() {
+        if agent.status != AgentStatus::Running {
+            continue;
+        }
+
+        let gateway_reachable = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            tokio::net::TcpStream::connect(format!("127.0.0.1:{}", agent.gateway_port)),
+        )
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .is_some();
+
+        let status = HealthStatus {
+            healthy: gateway_reachable,
+            last_check: chrono::Utc::now().to_rfc3339(),
+            message: Some(if gateway_reachable {
+                format!("Agent '{}' gateway reachable on port {}", agent.name, agent.gateway_port)
+            } else {
+                format!("Agent '{}' gateway not responding on port {}", agent.name, agent.gateway_port)
+            }),
+        };
+
+        agent.health_status = Some(status);
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Check for CLI password setting mode
@@ -673,6 +707,10 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
             if let Err(e) = sync_container_states(&state_clone).await {
                 tracing::warn!("Failed to sync container states: {}", e);
+            }
+            // Periodic health check for all running agents
+            if let Err(e) = health_check_all_agents(&state_clone).await {
+                tracing::warn!("Failed to health check agents: {}", e);
             }
         }
     });

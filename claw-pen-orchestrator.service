@@ -1,0 +1,22 @@
+[Unit]
+Description=Claw Pen Orchestrator
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/.openclaw/workspace/claw-pen
+ExecStart=/root/.openclaw/workspace/claw-pen/orchestrator-bin -c /root/.openclaw/workspace/claw-pen/claw-pen.toml
+Environment="RUST_LOG=info"
+Environment="HOST=::"
+Environment="PORT=3001"
+Restart=always
+RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claw-pen
+
+[Install]
+WantedBy=multi-user.target

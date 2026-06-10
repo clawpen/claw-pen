@@ -1,0 +1,10 @@
+name = "exo-kimi-agent"
+llm = { provider = "kimi", base_url = "https://api.kimi.com/coding/v1", api_key = "sk-kimi-E4VYyVOtdfZROEkzMyFA5snl1jxrHr1KGwNT3GP0s4EYaMWO84dqBpi3X9j3fTZd", model = "kimi-k2.6" }
+memory = { enabled = true, db_path = "/tmp/exo-memory.db", max_turns = 50, max_context_tokens = 8192 }
+channel = { mode = "stdio" }
+system_prompt = "You are an exo agent. You have access to file tools, shell execution, and web fetching. Be concise and helpful."
+max_tokens = 4096
+temperature = 0.7
+tools = ["read", "write", "exec", "web_fetch", "list"]
+workdir = "/workspace"
+volumes = []

@@ -18,6 +18,18 @@ pub struct AgentContainer {
     pub config: AgentConfig,
     pub tailscale_ip: Option<String>,
     pub resource_usage: Option<ResourceUsage>,
+    pub project: Option<String>,
+    pub tags: Vec<String>,
+    pub health_status: Option<HealthStatus>,
+    pub runtime: Option<String>,
+    pub gateway_port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HealthStatus {
+    pub healthy: bool,
+    pub last_check: String,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

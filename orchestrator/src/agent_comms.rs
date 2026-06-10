@@ -121,13 +121,20 @@ pub async fn connect_to_agent_with_token(
 
     // Send signed connect request
     let connect_id = uuid::Uuid::new_v4().to_string();
+    // When gateway token (password) is provided, don't send a deviceToken
+    // The agent in password mode only needs the gateway token
+    let device_token_param = if gateway_token.is_some() {
+        None
+    } else {
+        Some(&device_token[..])
+    };
     let connect_request = build_device_connect_request(
         &connect_id,
         &nonce,
         &signing_key,
         &device_id,
         gateway_token,
-        Some(&device_token),
+        device_token_param,
     );
 
     tx.send(TungsteniteMessage::Text(connect_request.to_string()))

@@ -3,9 +3,15 @@ deployment-mode = "linux-native"
 network-backend = "local"
 runtime-socket = ""
 container-runtime = "docker"
-host = "127.0.0.1"
+host = "[::]"
 port = 3001
 static-dir = "static-site"
+
+# Secret words for user registration
+# If empty, registration is disabled. Users must provide the correct secret word at signup.
+student-secret = "student2024"
+admin-secret = "admin2024"
+
 # Tailscale authentication key for agent mesh networking
 # Set via environment variable: TAILSCALE_AUTH_KEY
 # tailscale_auth_key = 'tskey-auth-xxx'

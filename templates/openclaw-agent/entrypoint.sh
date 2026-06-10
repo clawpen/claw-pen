@@ -30,6 +30,17 @@ echo "[entrypoint] Provider: $PROVIDER, Model: $MODEL, Port: $PORT, API Key: ${A
 
 mkdir -p /root/.openclaw/agents/dev/agent
 
+if [ -n "$GATEWAY_PASSWORD" ]; then
+  AUTH_MODE='"mode": "password", "password": "'$GATEWAY_PASSWORD'"'
+  AUTH_ARG="--auth password --password $GATEWAY_PASSWORD"
+elif [ -n "$GATEWAY_TOKEN" ]; then
+  AUTH_MODE='"mode": "token", "token": "'$GATEWAY_TOKEN'"'
+  AUTH_ARG="--auth token --token $GATEWAY_TOKEN"
+else
+  AUTH_MODE='"mode": "none"'
+  AUTH_ARG="--auth none"
+fi
+
 cat > /root/.openclaw/openclaw.json << CONF
 {
   "meta": {"lastTouchedVersion": "2026.2.26"},
@@ -37,7 +48,7 @@ cat > /root/.openclaw/openclaw.json << CONF
     "defaults": {"workspace": "/root/.openclaw/workspace-dev", "skipBootstrap": true, "model": {"primary": "${PROVIDER}/${MODEL}"}},
     "list": [{"id": "dev", "default": true, "workspace": "/root/.openclaw/workspace-dev", "identity": {"name": "Agent", "emoji": "🤖"}, "model": {"primary": "${PROVIDER}/${MODEL}"}}]
   },
-  "gateway": {"mode": "local", "bind": "loopback", "auth": {"mode": "none"}, "port": ${PORT}}
+  "gateway": {"mode": "local", "bind": "lan", "auth": {$AUTH_MODE}, "port": ${PORT}}
 }
 CONF
 
@@ -53,4 +64,4 @@ AUTH
   fi
 fi
 
-exec node /usr/local/lib/node_modules/openclaw/openclaw.mjs gateway run --dev --auth none --allow-unconfigured
+exec node /usr/local/lib/node_modules/openclaw/openclaw.mjs gateway run --dev $AUTH_ARG --allow-unconfigured

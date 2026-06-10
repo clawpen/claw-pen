@@ -17,7 +17,9 @@ pub struct ChatMessage {
 #[derive(Properties, PartialEq)]
 pub struct ChatPanelProps {
     pub agent: AgentContainer,
+    pub agents: Vec<AgentContainer>,
     pub on_close: Callback<()>,
+    pub on_switch: Callback<AgentContainer>,
 }
 
 #[function_component(ChatPanel)]
@@ -114,6 +116,17 @@ pub fn chat_panel(props: &ChatPanelProps) -> Html {
         })
     };
 
+    let on_switch = {
+        let on_switch = props.on_switch.clone();
+        Callback::from(move |e: Event| {
+            let select: web_sys::HtmlSelectElement = e.target_unchecked_into();
+            let agent_id = select.value();
+            if let Some(agent) = props.agents.iter().find(|a| a.id == agent_id) {
+                on_switch.emit(agent.clone());
+            }
+        })
+    };
+
     let on_close_click = {
         let on_close = props.on_close.clone();
         Callback::from(move |_e: MouseEvent| {
@@ -124,7 +137,25 @@ pub fn chat_panel(props: &ChatPanelProps) -> Html {
     html! {
         <div class="chat-panel">
             <div class="chat-header">
-                <h3>{format!("Chat with {}", props.agent.name)}</h3>
+                <div class="chat-header-left">
+                    <h3>{format!("Chat with {}", props.agent.name)}</h3>
+                    <select class="agent-switcher" onchange={on_switch} value={props.agent.id.clone()}>
+                        {for props.agents.iter().map(|agent| {
+                            let health_emoji = match agent.health_status {
+                                Some(ref hs) if hs.healthy => "🟢",
+                                Some(_) => "🔴",
+                                None => "⚪",
+                            };
+                            let can_chat = agent.status == crate::types::AgentStatus::Running && 
+                                matches!(agent.health_status, Some(ref hs) if hs.healthy);
+                            html! {
+                                <option value={agent.id.clone()} disabled={!can_chat}>
+                                    {format!("{} {} ({})", health_emoji, agent.name, agent.status)}
+                                </option>
+                            }
+                        })}
+                    </select>
+                </div>
                 <span class={if *is_connected { "status connected" } else { "status disconnected" }}>
                     {if *is_connected { "Connected" } else { "Disconnected" }}
                 </span>
