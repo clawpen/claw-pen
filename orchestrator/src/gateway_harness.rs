@@ -31,7 +31,7 @@ use anyhow::{anyhow, Result};
 use axum::extract::ws::{WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
 use axum::response::Response;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -201,7 +201,7 @@ async fn handle_gateway_socket(
         .send(axum::extract::ws::Message::Text(welcome.to_string()))
         .await;
     
-    let mut last_activity = Instant::now();
+    let _last_activity = Instant::now();
     let mut heartbeat_interval = tokio::time::interval(HEARTBEAT_INTERVAL);
     
     // Main message loop
@@ -211,7 +211,8 @@ async fn handle_gateway_socket(
             msg = socket.next() => {
                 match msg {
                     Some(Ok(axum::extract::ws::Message::Text(text))) => {
-                        last_activity = Instant::now();
+                        // Activity timestamp for potential future use
+                        let _ = Instant::now();
                         if let Err(e) = handle_gateway_message(
                             &conn_id, &text, &state, &tx, &user_id, &role,
                         ).await
@@ -328,7 +329,7 @@ async fn handle_gateway_message(
                 name: name.clone(),
                 status: AgentStatus::Running,
                 config: crate::types::AgentConfig {
-                    llm_provider: crate::types::LlmProvider::Other,
+                    llm_provider: crate::types::LlmProvider::Custom { endpoint: "gateway".to_string() },
                     llm_model: None,
                     memory_mb: 0,
                     cpu_cores: 0.0,
@@ -447,22 +448,13 @@ async fn handle_gateway_message(
                 .unwrap_or("");
             
             let registry = state.gateway_registry.read().await;
+            // Note: Gateway messages are broadcast-only for now.
+            // Conversation persistence via append_conversation_message would need an agent name.
+            
             let sender_name = registry.connections.get(conn_id)
                 .and_then(|c| c.agent_id.clone())
                 .unwrap_or_else(|| conn_id.to_string());
             drop(registry);
-            
-            // Add to chat_db
-            if let Err(e) = state.chat_db.add_message(
-                &session_key,
-                "user",
-                &content,
-                Some(&serde_json::json!({"sender": sender_name, "gateway": true})),
-            ).await {
-                tracing::warn!("Failed to store gateway chat message: {}", e);
-            }
-            
-            // Acknowledge
             let ack = serde_json::json!({
                 "type": "ack",
                 "id": conn_id,
@@ -529,7 +521,7 @@ async fn broadcast_to_session(
     let mut sent = 0;
     
     for (conn_id, conn) in registry.connections.iter() {
-        if conn.session_subscriptions.contains(session_key) && conn.id != sender {
+        if conn.session_subscriptions.iter().any(|s| s == session_key) && conn.id != sender {
             let event = serde_json::json!({
                 "type": "event",
                 "event": "chat.message",
