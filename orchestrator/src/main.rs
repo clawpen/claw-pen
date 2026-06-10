@@ -619,10 +619,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/auth/refresh", post(auth::refresh));
 
     // Public routes (no auth required)
-        // Gateway harness
-        .route("/gateway/ws", get(gateway_harness::gateway_websocket_handler))
-        .route("/gateway/health", get(gateway_harness::gateway_health));
-
     let public_routes = Router::new()
         .route("/health", get(api::health))
         .route("/terminal", get(api::terminal_page))
@@ -635,7 +631,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/me", get(auth::me))
         // WebSocket chat routes (handle their own auth via query parameter)
         .route("/api/agents/:id/chat", get(api::chat_websocket))
-        .route("/api/teams/:id/chat", get(api::team_chat_websocket));
+        .route("/api/teams/:id/chat", get(api::team_chat_websocket))
+        // Gateway harness (public WebSocket and health)
+        .route("/gateway/ws", get(gateway_harness::gateway_websocket_handler))
+        .route("/gateway/health", get(gateway_harness::gateway_health));
     // Configure CORS to allow requests from Tauri app and development servers
     // Note: When using allow_credentials(true), we cannot use wildcard origin
     let cors = CorsLayer::new()
