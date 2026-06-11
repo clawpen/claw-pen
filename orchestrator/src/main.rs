@@ -101,8 +101,7 @@ async fn main() -> anyhow::Result<()> {
                     header::CONTENT_TYPE,
                     header::AUTHORIZATION,
                     HeaderName::from_static("x-secret-word"),
-                ])
-                .allow_credentials(true),
+                ]),
         )
         .with_state(state.clone());
 
