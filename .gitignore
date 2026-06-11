@@ -60,3 +60,12 @@ providers.yaml
 # Deploy artifacts
 deploy/
 
+
+# Large binaries - do not commit
+exo-agent
+orchestrator-bin
+*.o
+*.so
+*.a
+*.exe
+*.dll
