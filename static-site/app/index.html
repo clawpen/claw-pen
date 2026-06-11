@@ -536,15 +536,49 @@
 <body>
     <!-- Login Modal -->
     <div id="loginModal" class="modal-overlay">
-        <div class="modal">
+        <div class="modal" style="width: 420px;">
             <h2>Claw Pen</h2>
-            <p>Sign in to start chatting</p>
-            <div class="form-group">
-                <label>Password</label>
-                <input type="password" id="loginPassword" placeholder="Enter admin password" onkeypress="if(event.key==='Enter')doLogin()">
+            <p id="loginSubtitle">Sign in to start chatting</p>
+            
+            <div style="display: flex; gap: 8px; margin-bottom: 24px; border-bottom: var(--line-weight) solid var(--border);">
+                <button id="tabLogin" class="tab-btn active" onclick="switchTab('login')" style="padding: 8px 16px; background: none; border: none; font-size: 14px; font-weight: 600; cursor: pointer; color: var(--text-primary); border-bottom: 2px solid var(--accent-teal); margin-bottom: -1px;">Sign In</button>
+                <button id="tabRegister" class="tab-btn" onclick="switchTab('register')" style="padding: 8px 16px; background: none; border: none; font-size: 14px; font-weight: 600; cursor: pointer; color: var(--text-tertiary);">Register</button>
             </div>
-            <button class="btn-primary" onclick="doLogin()">Sign In</button>
-            <div id="loginError" style="color: var(--accent-rust); font-size: 13px; margin-top: 12px; text-align: center;"></div>
+            
+            <div id="loginForm">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="loginUsername" placeholder="Enter username" onkeypress="if(event.key==='Enter')doLogin()">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="loginPassword" placeholder="Enter password" onkeypress="if(event.key==='Enter')doLogin()">
+                </div>
+                <button class="btn-primary" onclick="doLogin()">Sign In</button>
+            </div>
+            
+            <div id="registerForm" class="hidden">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="regUsername" placeholder="Choose a username">
+                </div>
+                <div class="form-group">
+                    <label>Display Name</label>
+                    <input type="text" id="regDisplayName" placeholder="Your display name">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="regPassword" placeholder="Min 8 characters">
+                </div>
+                <div class="form-group">
+                    <label>Secret Word</label>
+                    <input type="password" id="regSecretWord" placeholder="Provided by your teacher">
+                </div>
+                <button class="btn-primary" onclick="doRegister()">Register</button>
+            </div>
+            
+            <div id="loginError" style="color: var(--accent-rust); font-size: 13px; margin-top: 16px; text-align: center; min-height: 20px;"></div>
+            <div id="loginSuccess" style="color: var(--accent-teal); font-size: 13px; margin-top: 16px; text-align: center; min-height: 20px;"></div>
         </div>
     </div>
 
@@ -559,9 +593,12 @@
         </button>
         <div class="conversations-list" id="conversationsList"></div>
         <div class="sidebar-footer">
-            <div class="user-pill">
-                <div class="avatar" id="userAvatar">A</div>
-                <span id="userName">Admin</span>
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+                <div class="user-pill">
+                    <div class="avatar" id="userAvatar">A</div>
+                    <span id="userName">Admin</span>
+                </div>
+                <button onclick="doLogout()" style="background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-size: 12px; padding: 4px 8px; border-radius: var(--radius);" title="Logout">Logout</button>
             </div>
         </div>
     </div>
@@ -601,8 +638,32 @@ if (token) {
 }
 
 async function doLogin() {
+    const username = document.getElementById('loginUsername').value.trim();
     const password = document.getElementById('loginPassword').value;
     if (!password) return;
+    
+    // If username provided, try user login first
+    if (username) {
+        try {
+            const res = await fetch(`${API_BASE}/auth/user/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            const data = await res.json();
+            if (res.ok && data.access_token) {
+                token = data.access_token;
+                localStorage.setItem('token', token);
+                document.getElementById('loginModal').classList.add('hidden');
+                document.getElementById('loginError').textContent = '';
+                loadConversations();
+                fetchUser();
+                return;
+            }
+        } catch (e) {}
+    }
+    
+    // Fallback: admin password login
     try {
         const res = await fetch(`${API_BASE}/auth/login`, {
             method: 'POST',
@@ -618,10 +679,70 @@ async function doLogin() {
             loadConversations();
             fetchUser();
         } else {
-            document.getElementById('loginError').textContent = data.error || 'Invalid password';
+            document.getElementById('loginError').textContent = data.error || 'Invalid credentials';
         }
     } catch (e) {
         document.getElementById('loginError').textContent = 'Connection failed';
+    }
+}
+
+async function doRegister() {
+    const username = document.getElementById('regUsername').value.trim();
+    const displayName = document.getElementById('regDisplayName').value.trim();
+    const password = document.getElementById('regPassword').value;
+    const secretWord = document.getElementById('regSecretWord').value.trim();
+    
+    if (!username || !password || !secretWord) {
+        document.getElementById('loginError').textContent = 'Username, password, and secret word are required';
+        return;
+    }
+    if (password.length < 8) {
+        document.getElementById('loginError').textContent = 'Password must be at least 8 characters';
+        return;
+    }
+    
+    try {
+        const res = await fetch(`${API_BASE}/auth/user/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                username,
+                password,
+                display_name: displayName || null,
+                secret_word: secretWord
+            })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            document.getElementById('loginError').textContent = '';
+            document.getElementById('loginSuccess').textContent = 'Registration successful! Please wait for admin approval.';
+            setTimeout(() => switchTab('login'), 2000);
+        } else {
+            document.getElementById('loginError').textContent = data.error || 'Registration failed';
+            document.getElementById('loginSuccess').textContent = '';
+        }
+    } catch (e) {
+        document.getElementById('loginError').textContent = 'Connection failed';
+    }
+}
+
+function switchTab(tab) {
+    document.getElementById('loginError').textContent = '';
+    document.getElementById('loginSuccess').textContent = '';
+    if (tab === 'login') {
+        document.getElementById('loginForm').classList.remove('hidden');
+        document.getElementById('registerForm').classList.add('hidden');
+        document.getElementById('tabLogin').style.borderBottom = '2px solid var(--accent-teal)';
+        document.getElementById('tabLogin').style.color = 'var(--text-primary)';
+        document.getElementById('tabRegister').style.borderBottom = 'none';
+        document.getElementById('tabRegister').style.color = 'var(--text-tertiary)';
+    } else {
+        document.getElementById('loginForm').classList.add('hidden');
+        document.getElementById('registerForm').classList.remove('hidden');
+        document.getElementById('tabRegister').style.borderBottom = '2px solid var(--accent-teal)';
+        document.getElementById('tabRegister').style.color = 'var(--text-primary)';
+        document.getElementById('tabLogin').style.borderBottom = 'none';
+        document.getElementById('tabLogin').style.color = 'var(--text-tertiary)';
     }
 }
 
@@ -632,8 +753,8 @@ async function fetchUser() {
         });
         if (res.ok) {
             const data = await res.json();
-            document.getElementById('userName').textContent = data.username || 'User';
-            document.getElementById('userAvatar').textContent = (data.username || 'U')[0].toUpperCase();
+            document.getElementById('userName').textContent = data.display_name || data.username || 'User';
+            document.getElementById('userAvatar').textContent = (data.display_name || data.username || 'U')[0].toUpperCase();
         }
     } catch (e) {}
 }
@@ -773,6 +894,21 @@ async function sendMessage() {
         isSending = false;
         document.getElementById('sendBtn').disabled = false;
     }
+}
+
+function doLogout() {
+    token = '';
+    localStorage.removeItem('token');
+    currentConversation = null;
+    document.getElementById('loginModal').classList.remove('hidden');
+    document.getElementById('conversationsList').innerHTML = '';
+    document.getElementById('messagesContainer').innerHTML = '';
+    document.getElementById('emptyState').classList.remove('hidden');
+    document.getElementById('chatHeader').classList.add('hidden');
+    document.getElementById('messagesContainer').classList.add('hidden');
+    document.getElementById('inputArea').classList.add('hidden');
+    document.getElementById('userName').textContent = 'Admin';
+    document.getElementById('userAvatar').textContent = 'A';
 }
 
 // Auto-resize textarea
