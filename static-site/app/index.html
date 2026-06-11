@@ -200,7 +200,7 @@
                 <span class="tab" id="tabRegister" onclick="switchTab('register')">Register</span>
             </div>
             <div id="loginForm">
-                <div class="form-group"><label>Username</label><input id="loginUsername" placeholder="username"></div>
+                <div class="form-group"><label>Username (optional for admin)</label><input id="loginUsername" placeholder="leave blank for admin"></div>
                 <div class="form-group"><label>Password</label><input id="loginPassword" type="password" placeholder="password"></div>
                 <button class="btn" onclick="doLogin()">Login</button>
             </div>
@@ -310,10 +310,18 @@ if (!token) { document.getElementById('loginModal').classList.remove('hidden'); 
 else { fetchUser(); loadConversations(); }
 
 async function doLogin() {
-    const u = document.getElementById('loginUsername').value;
+    const u = document.getElementById('loginUsername').value.trim();
     const p = document.getElementById('loginPassword').value;
+    if (!p) return;
     try {
-        const res = await fetch(`${API_BASE}/auth/token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) });
+        let res;
+        if (u) {
+            // Multi-user login
+            res = await fetch(`${API_BASE}/auth/token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) });
+        } else {
+            // Admin login (password only)
+            res = await fetch(`${API_BASE}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p }) });
+        }
         const data = await res.json();
         if (res.ok) { token = data.access_token; localStorage.setItem('token', token); document.getElementById('loginModal').classList.add('hidden'); fetchUser(); loadConversations(); }
         else { document.getElementById('loginError').textContent = data.error || 'Login failed'; }
