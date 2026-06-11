@@ -202,7 +202,6 @@
             <div id="loginForm">
                 <div class="form-group"><label>Username</label><input id="loginUsername" placeholder="username"></div>
                 <div class="form-group"><label>Password</label><input id="loginPassword" type="password" placeholder="password"></div>
-                <div class="form-group"><label>Secret Word</label><input id="loginSecret" placeholder="secret word"></div>
                 <button class="btn" onclick="doLogin()">Login</button>
             </div>
             <div id="registerForm" class="hidden">
@@ -313,9 +312,8 @@ else { fetchUser(); loadConversations(); }
 async function doLogin() {
     const u = document.getElementById('loginUsername').value;
     const p = document.getElementById('loginPassword').value;
-    const s = document.getElementById('loginSecret').value;
     try {
-        const res = await fetch(`${API_BASE}/auth/token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p, secret_word: s }) });
+        const res = await fetch(`${API_BASE}/auth/token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) });
         const data = await res.json();
         if (res.ok) { token = data.access_token; localStorage.setItem('token', token); document.getElementById('loginModal').classList.add('hidden'); fetchUser(); loadConversations(); }
         else { document.getElementById('loginError').textContent = data.error || 'Login failed'; }
