@@ -383,18 +383,37 @@ pub async fn send_message(
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Failed to parse LLM response: {}", e)))?;
 
     let assistant_content = response_json
-        .get("choices")
+        .get("content")
         .and_then(|c| c.as_array())
-        .and_then(|c| c.first())
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|c| c.as_str())
-        .unwrap_or("[No response]");
+        .and_then(|arr| {
+            arr.iter()
+                .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("")
+                .into()
+        })
+        .or_else(|| {
+            response_json
+                .get("choices")
+                .and_then(|c| c.as_array())
+                .and_then(|c| c.first())
+                .and_then(|c| c.get("message"))
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| {
+            response_json.get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("[No response]")
+                .to_string()
+        });
 
     // Store assistant message
     let assistant_msg = state
         .chat_db
-        .add_message(&id, &claims.sub, "assistant", assistant_content)
+        .add_message(&id, &claims.sub, "assistant", &assistant_content)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(assistant_msg))
@@ -476,17 +495,36 @@ pub async fn chat_stream(
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Failed to parse LLM response: {}", e)))?;
 
     let content = response_json
-        .get("choices")
+        .get("content")
         .and_then(|c| c.as_array())
-        .and_then(|c| c.first())
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|c| c.as_str())
-        .unwrap_or("[No response]");
+        .and_then(|arr| {
+            arr.iter()
+                .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("")
+                .into()
+        })
+        .or_else(|| {
+            response_json
+                .get("choices")
+                .and_then(|c| c.as_array())
+                .and_then(|c| c.first())
+                .and_then(|c| c.get("message"))
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| {
+            response_json.get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("[No response]")
+                .to_string()
+        });
 
     let assistant_msg = state
         .chat_db
-        .add_message(&req.conversation_id, &claims.sub, "assistant", content)
+        .add_message(&req.conversation_id, &claims.sub, "assistant", &content)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(assistant_msg))
