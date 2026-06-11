@@ -1,1679 +1,148 @@
-//! API handlers for Claw Pen Orchestrator
-//!
-//! # Authentication
-//!
-//! All endpoints except `/health`, `/auth/login`, `/auth/register`, and `/auth/status`
-//! require JWT authentication via the `Authorization: Bearer <token>` header.
-//!
-//! WebSocket endpoints accept the JWT token via the `?token=<jwt>` query parameter.
-//!
-//! ## Getting a Token
-//!
-//! 1. First, set an admin password using the CLI: `claw-pen-orchestrator --set-password`
-//!    OR enable registration with `ENABLE_REGISTRATION=true` and call POST /auth/register
-//!
-//! 2. Authenticate: `POST /auth/login` with `{"password": "your-password"}`
-//!
-//! 3. Use the returned `access_token` in subsequent requests:
-//!    `Authorization: Bearer <access_token>`
-//!
-//! 4. Refresh tokens with `POST /auth/refresh` when the access token expires
+//! API handlers for Claw Pen Chat Server
 
-use crate::storage;
-use crate::validation;
-use axum::extract::ws::{WebSocket, WebSocketUpgrade};
 use axum::{
-    body::Body,
-    extract::{Path, Query, State},
+    extract::{Path, Query, State, WebSocketUpgrade},
     http::StatusCode,
     response::Response,
     Json,
 };
-use serde::Serialize;
-
-// Helper to sanitize error messages before returning to clients
-fn sanitize_error(e: &str) -> String {
-    validation::sanitize_error_message(e)
-}
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::andor;
-use crate::container::ContainerRuntime;
-use crate::types::*;
 use crate::AppState;
 
-// Re-export volume attachment functions
-pub use crate::volume_attachment::{
-    list_agent_volumes, attach_volume_to_agent, detach_volume_from_agent,
-};
-
-/// Base port for agent gateways
-const BASE_AGENT_PORT: u16 = 18790;
-/// Maximum port to allocate (gives us 10 agents: 18790-18799)
-const MAX_AGENT_PORT: u16 = 18799;
-
-/// Find the next available port for a new agent
-fn allocate_port(existing_agents: &[AgentContainer]) -> u16 {
-    let used_ports: std::collections::HashSet<u16> =
-        existing_agents.iter().map(|a| a.gateway_port).collect();
-
-    for port in BASE_AGENT_PORT..=MAX_AGENT_PORT {
-        if !used_ports.contains(&port) {
-            return port;
-        }
-    }
-
-    // If all ports in range are used, extend beyond (shouldn't happen often)
-    for port in (MAX_AGENT_PORT + 1)..=(MAX_AGENT_PORT + 100) {
-        if !used_ports.contains(&port) {
-            return port;
-        }
-    }
-
-    // Fallback (should never reach here)
-    MAX_AGENT_PORT + 1
-}
+// Re-export chat types
+pub use crate::chat_db::{ChatConversation as Conversation, ChatMessage};
 
 // === Health ===
 
-pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let containers = state.containers.read().await;
-    let total = containers.len();
-    let running = containers.iter().filter(|a| a.status == AgentStatus::Running).count();
-    
-    let mut agents = Vec::new();
-    for agent in containers.iter().filter(|a| a.status == AgentStatus::Running) {
-        let port = agent.gateway_port;
-        let probe = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port)),
-        ).await;
-        let reachable = probe.ok().and_then(|r| r.ok()).is_some();
-        agents.push(serde_json::json!({
-            "id": agent.id,
-            "name": agent.name,
-            "port": port,
-            "reachable": reachable,
-            "runtime": agent.runtime,
-        }));
-    }
-    drop(containers);
-    
+pub async fn health(State(_state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "ok",
-        "orchestrator": true,
-        "agents": {
-            "total": total,
-            "running": running,
-            "details": agents,
-        }
+        "version": env!("CARGO_PKG_VERSION"),
+        "service": "claw-pen-chat"
     }))
 }
 
-/// Serve the embedded terminal HTML page
-pub async fn terminal_page() -> Response {
-    Response::builder()
-        .header("Content-Type", "text/html; charset=utf-8")
-        .body(Body::from(include_str!("../terminal.html")))
-        .unwrap()
-}
-
-// === Agents ===
-
-pub async fn list_agents(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Json<Vec<AgentContainer>> {
-    let containers = state.containers.read().await;
-
-    let filtered: Vec<_> = containers
-        .iter()
-        .filter(|c| {
-            // Filter by project
-            if let Some(project) = params.get("project") {
-                if c.project.as_deref() != Some(project.as_str()) {
-                    return false;
-                }
-            }
-            // Filter by status
-            if let Some(status) = params.get("status") {
-                if format!("{:?}", c.status).to_lowercase() != status.to_lowercase() {
-                    return false;
-                }
-            }
-            // Filter by tag
-            if let Some(tag) = params.get("tag") {
-                if !c.tags.contains(tag) {
-                    return false;
-                }
-            }
-            // Filter by runtime
-            if let Some(runtime) = params.get("runtime") {
-                if c.runtime.as_deref() != Some(runtime.as_str()) {
-                    return false;
-                }
-            }
-            true
-        })
-        .cloned()
-        .collect();
-
-    Json(filtered)
-}
-
-/// A tag with its usage count, returned by `GET /api/tags`
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct TagInfo {
-    pub tag: String,
-    pub count: u32,
-}
-
-/// List all tags in use across agents, sorted by frequency (most used first).
-/// Used by the agent-creation UI for tag autocomplete suggestions.
-pub async fn list_tags(State(state): State<Arc<AppState>>) -> Json<Vec<TagInfo>> {
-    let containers = state.containers.read().await;
-    let mut counts: HashMap<String, u32> = HashMap::new();
-    for c in containers.iter() {
-        for tag in &c.tags {
-            *counts.entry(tag.clone()).or_insert(0) += 1;
-        }
-    }
-    let mut tags: Vec<TagInfo> = counts
-        .into_iter()
-        .map(|(tag, count)| TagInfo { tag, count })
-        .collect();
-    tags.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.tag.cmp(&b.tag)));
-    Json(tags)
-}
-
-pub async fn create_agent(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateAgentRequest>,
-) -> Result<Json<AgentContainer>, (StatusCode, String)> {
-    // === Input Validation ===
-
-    // Validate agent name (container name)
-    if let Err(e) = validation::validate_container_name(&req.name) {
-        return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
-    }
-
-    // Validate project name if provided
-    if let Some(ref project) = req.project {
-        if let Err(e) = validation::validate_project_name(project) {
-            return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
-        }
-    }
-
-    // Validate tags if provided
-    for tag in &req.tags {
-        if let Err(e) = validation::validate_tag(tag) {
-            return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
-        }
-    }
-
-    // Validate runtime if provided
-    let runtime = req.runtime.as_ref().map(|r| r.to_lowercase());
-    if let Some(ref rt) = runtime {
-        if rt != "docker" && rt != "exo" && rt != "direct" {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("Invalid runtime '{}'. Must be 'docker', 'exo', or 'direct'.", rt),
-            ));
-        }
-    }
-    if let Some(ref cfg) = req.config {
-        // Validate env vars count
-        if let Some(ref env) = cfg.env_vars {
-            if env.len() > validation::MAX_ENV_VARS_COUNT {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    format!(
-                        "Too many environment variables (max {})",
-                        validation::MAX_ENV_VARS_COUNT
-                    ),
-                ));
-            }
-            // Validate each env var key/value
-            for (key, value) in env {
-                if let Err(e) = validation::validate_env_key(key) {
-                    return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
-                }
-                if let Err(e) = validation::validate_env_value(value) {
-                    return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
-                }
-            }
-        }
-
-        // Validate secrets count
-        if let Some(ref secrets) = cfg.secrets {
-            if secrets.len() > validation::MAX_SECRETS_COUNT {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    format!("Too many secrets (max {})", validation::MAX_SECRETS_COUNT),
-                ));
-            }
-            for secret in secrets {
-                if let Err(e) = validation::validate_secret_name(secret) {
-                    return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
-                }
-            }
-        }
-
-        // Validate volumes count and paths
-        if let Some(ref volumes) = cfg.volumes {
-            if volumes.len() > validation::MAX_VOLUMES_COUNT {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    format!("Too many volumes (max {})", validation::MAX_VOLUMES_COUNT),
-                ));
-            }
-            for vol in volumes {
-                // Note: Full path validation requires filesystem access, done at container creation
-                if let Err(e) = validation::validate_container_target(&vol.target) {
-                    return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
-                }
-            }
-        }
-
-        // Validate LLM model name if provided
-        if let Some(ref model) = cfg.llm_model {
-            if let Err(e) = validation::validate_llm_model(model) {
-                return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
-            }
-        }
-
-        // Validate memory and CPU if provided
-        if let Some(mem) = cfg.memory_mb {
-            if let Err(e) = validation::validate_memory_mb(mem) {
-                return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
-            }
-        }
-        if let Some(cpu) = cfg.cpu_cores {
-            if let Err(e) = validation::validate_cpu_cores(cpu) {
-                return Err((StatusCode::BAD_REQUEST, sanitize_error(&e.to_string())));
-            }
-        }
-    }
-
-    // === End Input Validation ===
-
-    // Build config from template + overrides
-    let mut config = if let Some(ref template_name) = req.template {
-        state
-            .templates
-            .get(template_name)
-            .map(|t| {
-                let mut cfg = AgentConfig::default();
-                if let Some(ref provider) = t.config.llm_provider {
-                    cfg.llm_provider = parse_provider(provider);
-                }
-                if let Some(ref model) = t.config.llm_model {
-                    cfg.llm_model = Some(model.clone());
-                }
-                cfg.memory_mb = t.config.memory_mb;
-                cfg.cpu_cores = t.config.cpu_cores;
-                cfg.env_vars = t.env.clone();
-                cfg.image = t.config.image.clone();
-
-                // Create safe volume mounts from template
-                // Host paths will be under {data_dir}/agents/{agent_name}/
-                if !t.config.volumes.is_empty() {
-                    // Get current working directory for absolute paths
-                    let cwd = std::env::current_dir()
-                        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-
-                    // Create agent-specific data directory (absolute path)
-                    let agent_data_dir = cwd
-                        .join("data")
-                        .join("agents")
-                        .join(&req.name)
-                        .join("volumes");
-
-                    // Ensure the directory exists
-                    if let Err(e) = std::fs::create_dir_all(&agent_data_dir) {
-                        tracing::warn!("Failed to create agent data directory: {}", e);
-                    } else {
-                        tracing::info!("Created agent data directory: {:?}", agent_data_dir);
-                    }
-
-                    // Convert volume paths to VolumeMounts
-                    for volume_path in &t.config.volumes {
-                        // Extract the last component as the directory name
-                        // e.g., "/agent/memory" -> "memory"
-                        let dir_name = volume_path
-                            .rsplit('/')
-                            .next()
-                            .unwrap_or(volume_path)
-                            .to_string();
-
-                        // Create host path (absolute)
-                        let host_path = agent_data_dir.join(&dir_name);
-
-                        // Create host directory
-                        if let Err(e) = std::fs::create_dir_all(&host_path) {
-                            tracing::warn!("Failed to create volume directory: {:?}: {}", host_path, e);
-                        } else {
-                            tracing::info!("Created volume directory: {:?}", host_path);
-                        }
-
-                        // Convert to absolute path string for Docker
-                        // Keep the native Windows path format (backslashes)
-                        // Docker Desktop for Windows handles this correctly
-                        let absolute_path = host_path
-                            .canonicalize()
-                            .unwrap_or(host_path)
-                            .to_string_lossy()
-                            .to_string();
-
-                        cfg.volumes.push(crate::types::VolumeMount {
-                            source: absolute_path,
-                            target: volume_path.clone(),
-                            read_only: false,
-                        });
-                    }
-                }
-
-                cfg
-            })
-            .ok_or_else(|| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    format!("Template '{}' not found", template_name),
-                )
-            })?
-    } else {
-        AgentConfig::default()
-    };
-
-    // Apply overrides
-    if let Some(ref partial) = req.config {
-        config.apply(partial);
-    }
-
-    // Inject default model from orchestrator config if not specified
-    if config.llm_model.is_none() {
-        match config.llm_provider {
-            LlmProvider::Lmstudio => {
-                if let Some(ref lm_studio) = state.config.model_servers.lm_studio {
-                    if let Some(ref default_model) = lm_studio.default_model {
-                        config.llm_model = Some(default_model.clone());
-                    }
-                }
-            }
-            LlmProvider::Ollama => {
-                if let Some(ref ollama) = state.config.model_servers.ollama {
-                    if let Some(ref default_model) = ollama.default_model {
-                        config.llm_model = Some(default_model.clone());
-                    }
-                }
-            }
-            LlmProvider::LlamaCpp => {
-                if let Some(ref llama_cpp) = state.config.model_servers.llama_cpp {
-                    if let Some(ref default_model) = llama_cpp.default_model {
-                        config.llm_model = Some(default_model.clone());
-                    }
-                }
-            }
-            LlmProvider::Vllm => {
-                if let Some(ref vllm) = state.config.model_servers.vllm {
-                    if let Some(ref default_model) = vllm.default_model {
-                        config.llm_model = Some(default_model.clone());
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // Validate provider-model combination
-    if let Some(ref model) = config.llm_model {
-        let valid = match config.llm_provider {
-            LlmProvider::Zai => ["glm-5", "glm-4"].contains(&model.as_str()),
-            LlmProvider::Anthropic => ["claude-sonnet-4-5", "claude-3-5-sonnet", "claude-3-opus", "claude-3-haiku"].contains(&model.as_str()),
-            LlmProvider::OpenAI => ["gpt-4o", "gpt-4o-mini", "o1", "o3-mini", "gpt-4.1", "gpt-4.1-mini"].contains(&model.as_str()),
-            LlmProvider::Kimi => ["kimi-k2.6", "kimi-k2.5", "moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k"].contains(&model.as_str()),
-            LlmProvider::KimiCode => ["kimi-code"].contains(&model.as_str()),
-            LlmProvider::Gemini => ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"].contains(&model.as_str()),
-            LlmProvider::Access => ["access-standard"].contains(&model.as_str()),
-            LlmProvider::Huggingface => ["meta-llama/Llama-3.3-70B-Instruct", "meta-llama/Llama-3.1-8B-Instruct", "Qwen/Qwen2.5-72B-Instruct", "deepseek-ai/DeepSeek-R1"].contains(&model.as_str()),
-            _ => true, // Unknown/local providers, skip validation
-        };
-        if !valid {
-            let provider_name = match config.llm_provider {
-                LlmProvider::Zai => "zai",
-                LlmProvider::Anthropic => "anthropic",
-                LlmProvider::OpenAI => "openai",
-                LlmProvider::Kimi => "kimi",
-                LlmProvider::KimiCode => "kimi-code",
-                LlmProvider::Gemini => "google",
-                LlmProvider::Access => "access",
-                LlmProvider::Huggingface => "huggingface",
-                _ => "unknown",
-            };
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("Invalid model '{}' for provider '{}'. Please select a valid model from the dropdown.", model, provider_name),
-            ));
-        }
-    }
-
-    // Create container
-
-    // Allocate a port for this agent
-    let containers = state.containers.read().await;
-    let gateway_port = allocate_port(&containers);
-    drop(containers); // Release lock before continuing
-
-    // Add port to environment variables
-    config
-        .env_vars
-        .insert("PORT".to_string(), gateway_port.to_string());
-
-    // Inject API key from agent config, or from global stored keys
-    let key_var = match config.llm_provider {
-        LlmProvider::Zai => "ZAI_API_KEY",
-        LlmProvider::Anthropic => "ANTHROPIC_API_KEY",
-        LlmProvider::OpenAI => "OPENAI_API_KEY",
-        LlmProvider::Kimi => "KIMI_API_KEY",
-        LlmProvider::KimiCode => "KIMI_API_KEY",
-        LlmProvider::Gemini => "GOOGLE_API_KEY",
-        LlmProvider::Access => "ACCESS_API_KEY",
-        LlmProvider::Huggingface => "HF_TOKEN",
-        _ => "API_KEY",
-    };
-
-    // First check agent-specific key, then fall back to globally stored key
-    let stored_keys = state.api_keys.read().await;
-    let provider_name = match config.llm_provider {
-        LlmProvider::Zai => "zai",
-        LlmProvider::Anthropic => "anthropic",
-        LlmProvider::OpenAI => "openai",
-        LlmProvider::Kimi => "kimi",
-        LlmProvider::KimiCode => "kimi-code",
-        LlmProvider::Gemini => "google",
-        LlmProvider::Access => "access",
-        LlmProvider::Huggingface => "huggingface",
-        _ => "unknown",
-    };
-    let global_key = stored_keys.get(provider_name).cloned();
-    drop(stored_keys); // Release lock before mutating config
-
-    let api_key = config.api_key.clone().or(global_key);
-    if let Some(key) = api_key {
-        config.env_vars.insert(key_var.to_string(), key);
-    }
-
-    // Setup persistent data volume for this agent
-    // This must be done before creating the container
-    let agent_name_for_volume = req.name.clone();
-    let starter_prompt = req.template.as_ref()
-        .and_then(|name| state.templates.get(name))
-        .and_then(|t| t.identity.as_ref())
-        .and_then(|id| id.system_prompt.clone());
-    if let Err(e) = setup_persistent_data_volume(
-        &agent_name_for_volume,
-        "",
-        &mut config,
-        starter_prompt.as_deref(),
-    ).await {
-        tracing::warn!("Failed to setup persistent data volume: {}", e);
-        // Continue anyway - this is not critical
-    }
-
-    // For openclaw-agent template, inject gateway auth env vars into config
-    // so the WebSocket proxy can authenticate when connecting to the agent
-    if req.template.as_deref() == Some("openclaw-agent") {
-        if !config.env_vars.contains_key("GATEWAY_PASSWORD") && !config.env_vars.contains_key("GATEWAY_TOKEN") {
-            config.env_vars.insert("GATEWAY_PASSWORD".to_string(), "clawpen".to_string());
-        }
-        if !config.env_vars.contains_key("BIND") {
-            config.env_vars.insert("BIND".to_string(), "lan".to_string());
-        }
-    }
-
-    // For openclaw-agent template, inject gateway auth env vars into config
-    // so the WebSocket proxy can authenticate when connecting to the agent
-    if req.template.as_deref() == Some("openclaw-agent") {
-        if !config.env_vars.contains_key("GATEWAY_PASSWORD") && !config.env_vars.contains_key("GATEWAY_TOKEN") {
-            config.env_vars.insert("GATEWAY_PASSWORD".to_string(), "clawpen".to_string());
-        }
-        if !config.env_vars.contains_key("BIND") {
-            config.env_vars.insert("BIND".to_string(), "lan".to_string());
-        }
-    }
-
-    // Determine which runtime to use
-    // Priority: per-agent runtime > global config runtime
-    let agent_runtime = runtime.or_else(|| match state.config.container_runtime {
-        crate::config::ContainerRuntimeType::Docker => Some("docker".to_string()),
-        crate::config::ContainerRuntimeType::Exo => Some("exo".to_string()),
-    });
-
-    // Get the appropriate runtime client based on agent's runtime preference
-    let id = if agent_runtime.as_deref() == Some("direct") {
-        // Direct backend has no container; the agent ID is just the name.
-        req.name.clone()
-    } else if let Some(ref rt) = agent_runtime {
-        if rt == "exo" {
-            // Use exo-specific runtime if available
-            state
-                .exo_runtime
-                .create_container(&req.name, &config)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        } else {
-            // Use default runtime (docker or containment)
-            state
-                .runtime
-                .create_container(&req.name, &config)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        }
-    } else {
-        state
-            .runtime
-            .create_container(&req.name, &config)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    };
-
-    let agent = AgentContainer {
-        id,
-        name: req.name,
-        status: AgentStatus::Stopped,
-        config,
-        tailscale_ip: None,
-        resource_usage: None,
-        project: req.project,
-        tags: req.tags,
-        restart_policy: AgentConfig::default().restart_policy,
-        health_status: None,
-        runtime: agent_runtime,
-        gateway_port,
-    };
-
-    // Register with AndOR Bridge if configured
-    if let Some(ref andor) = state.andor {
-        let should_register = state
-            .config
-            .andor_bridge
-            .as_ref()
-            .and_then(|c| c.register_on_create)
-            .unwrap_or(false);
-
-        if should_register {
-            let registration = andor::AgentRegistration {
-                agent_id: agent.id.clone(),
-                display_name: agent.name.clone(),
-                triggers: vec![agent.name.to_lowercase()],
-                emoji: None,
-            };
-            if let Err(e) = andor.register_agent(&registration).await {
-                tracing::warn!("Failed to register with AndOR Bridge: {}", e);
-            }
-        }
-    }
-
-    // Add to state
-    let mut containers = state.containers.write().await;
-    let agent_idx = containers.len();
-    containers.push(agent.clone());
-
-    // Update agent index for O(1) lookups
-    let mut agent_index = state.agent_index.write().await;
-    agent_index.insert(agent.id.clone(), agent_idx);
-    drop(agent_index);
-    drop(containers);
-
-    // Persist to storage
-    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(&agent)) {
-        tracing::warn!("Failed to persist agent: {}", e);
-    }
-
-    Ok(Json(agent))
-}
-
-pub async fn get_agent(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<AgentContainer>, (StatusCode, String)> {
-    let containers = state.containers.read().await;
-    containers
-        .iter()
-        .find(|c| c.id == id)
-        .cloned()
-        .map(Json)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))
-}
-
-pub async fn update_agent(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(req): Json<UpdateAgentRequest>,
-) -> Result<Json<AgentContainer>, (StatusCode, String)> {
-    let mut containers = state.containers.write().await;
-    let agent = containers
-        .iter_mut()
-        .find(|c| c.id == id)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
-
-    if let Some(name) = req.name {
-        agent.name = name;
-    }
-    if let Some(project) = req.project {
-        agent.project = Some(project);
-    }
-    if let Some(tags) = req.tags {
-        agent.tags = tags;
-    }
-    if let Some(ref partial) = req.config {
-        agent.config.apply(partial);
-    }
-    if let Some(image) = req.image {
-        agent.config.image = Some(image);
-    }
-
-    // Persist to storage
-    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
-        tracing::warn!("Failed to persist agent update: {}", e);
-    }
-
-    Ok(Json(agent.clone()))
-}
-
-pub async fn delete_agent(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    // First check if agent exists in our list and get its runtime
-    let (agent_exists, agent_runtime) = {
-        let containers = state.containers.read().await;
-        containers
-            .iter()
-            .find(|a| a.id == id)
-            .map(|a| (true, a.runtime.clone()))
-            .unwrap_or((false, None))
-    };
-
-    if !agent_exists {
-        return Err((StatusCode::NOT_FOUND, "Agent not found".to_string()));
-    }
-
-    // Choose the right runtime based on agent's runtime setting
-    let runtime: &dyn ContainerRuntime = if agent_runtime.as_deref() == Some("exo") {
-        &state.exo_runtime
-    } else {
-        &state.runtime
-    };
-
-    // Stop if running (ignore errors if container doesn't exist)
-    let _ = runtime.stop_container(&id).await;
-
-    // Delete container (ignore errors if container doesn't exist)
-    let _ = runtime.delete_container(&id).await;
-
-    // Unregister from AndOR Bridge
-    if let Some(ref andor) = state.andor {
-        if let Err(e) = andor.unregister_agent(&id).await {
-            tracing::warn!("Failed to unregister from AndOR Bridge: {}", e);
-        }
-    }
-
-    // Remove from state
-    let mut containers = state.containers.write().await;
-    containers.retain(|c| c.id != id && c.name != id);
-
-    // Remove from storage
-    if let Err(e) = crate::storage::remove_agent(&id) {
-        tracing::warn!("Failed to remove agent from storage: {}", e);
-    }
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
-/// Execute a command in an agent container (e.g., open a shell)
-pub async fn exec_agent(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(req): Json<ExecRequest>,
-) -> Result<Json<ExecResponse>, (StatusCode, String)> {
-    // Check if agent exists
-    let (agent_exists, agent_runtime, agent_name) = {
-        let containers = state.containers.read().await;
-        containers
-            .iter()
-            .find(|a| a.id == id || a.name == id)
-            .map(|a| (true, a.runtime.clone(), a.name.clone()))
-            .unwrap_or((false, None, String::new()))
-    };
-
-    if !agent_exists {
-        return Err((StatusCode::NOT_FOUND, "Agent not found".to_string()));
-    }
-
-    // Choose the right runtime based on agent's runtime setting
-    let runtime: &dyn ContainerRuntime = if agent_runtime.as_deref() == Some("exo") {
-        &state.exo_runtime
-    } else {
-        &state.runtime
-    };
-
-    // Build command - default to /bin/bash or /bin/sh
-    let cmd = if let Some(command) = req.command {
-        command
-    } else {
-        vec!["/bin/bash".to_string()]
-    };
-
-    // Execute command in container
-    match runtime.exec_container(&agent_name, cmd).await {
-        Ok(output) => Ok(Json(ExecResponse {
-            output,
-            container_id: id,
-            container_name: agent_name,
-        })),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Exec failed: {}", e))),
-    }
-}
-
-pub async fn start_agent(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<AgentContainer>, (StatusCode, String)> {
-    let mut containers = state.containers.write().await;
-
-    let agent = containers
-        .iter_mut()
-        .find(|a| a.id == id || a.name == id)
-        .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
-
-    // Direct backend has no container — just flip status to Running.
-    if agent.runtime.as_deref() == Some("direct") {
-        agent.status = AgentStatus::Running;
-        if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
-            tracing::warn!("Failed to persist direct agent status: {}", e);
-        }
-        return Ok(Json(agent.clone()));
-    }
-
-    // Choose the right runtime based on agent's runtime setting
-    let runtime: &dyn ContainerRuntime = if agent.runtime.as_deref() == Some("exo") {
-        &state.exo_runtime
-    } else {
-        &state.runtime
-    };
-
-    // Check if container exists (by agent name, not ID)
-    let container_exists = runtime.container_exists(&agent.name).await.unwrap_or(false);
-
-    if !container_exists {
-        // Create the container for this stored agent
-
-        // Inject API key from agent config, or from global stored keys
-        let key_var = match agent.config.llm_provider {
-            LlmProvider::Zai => "ZAI_API_KEY",
-            LlmProvider::Anthropic => "ANTHROPIC_API_KEY",
-            LlmProvider::OpenAI => "OPENAI_API_KEY",
-            LlmProvider::Kimi => "KIMI_API_KEY",
-            LlmProvider::KimiCode => "KIMI_API_KEY",
-            LlmProvider::Gemini => "GOOGLE_API_KEY",
-            LlmProvider::Access => "ACCESS_API_KEY",
-            LlmProvider::Huggingface => "HF_TOKEN",
-            _ => "API_KEY",
-        };
-
-        // First check agent-specific key, then fall back to globally stored key
-        let stored_keys = state.api_keys.read().await;
-        let provider_name = match agent.config.llm_provider {
-            LlmProvider::Zai => "zai",
-            LlmProvider::Anthropic => "anthropic",
-            LlmProvider::OpenAI => "openai",
-            LlmProvider::Kimi => "kimi",
-            LlmProvider::KimiCode => "kimi-code",
-            LlmProvider::Gemini => "google",
-            LlmProvider::Access => "access",
-            LlmProvider::Huggingface => "huggingface",
-            _ => "unknown",
-        };
-        let global_key = stored_keys.get(provider_name).cloned();
-        drop(stored_keys);
-
-        let api_key = agent.config.api_key.clone().or(global_key);
-        if let Some(key) = api_key {
-            agent.config.env_vars.insert(key_var.to_string(), key);
-        }
-
-        // Ensure the gateway port is set in env vars
-        agent
-            .config
-            .env_vars
-            .insert("PORT".to_string(), agent.gateway_port.to_string());
-
-        let docker_container_id = runtime
-            .create_container(&agent.name, &agent.config)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-        tracing::info!(
-            "Created Docker container {} for agent {}",
-            docker_container_id,
-            agent.name
-        );
-    }
-
-    // Start the container using the agent's name (Docker can find it by name)
-    runtime
-        .start_container(&agent.name)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    // Verify the container is actually responding (not just started).
-    // For both Docker and Exo, we probe the agent's known gateway port directly —
-    // container state alone doesn't tell us if the agent process inside is healthy.
-    // 30s budget: Docker is fast (~2s); Exo with plugin staging on cold start
-    // can take 20-25s the first time the runtime deps need to settle.
-    let port = agent.gateway_port;
-    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(30);
-    let mut health_ok = false;
-    while tokio::time::Instant::now() < deadline {
-        let probe = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port));
-        if let Ok(Ok(_)) = tokio::time::timeout(
-            tokio::time::Duration::from_millis(300), probe
-        ).await {
-            tracing::info!("Health probe: agent {} gateway reachable on port {}", agent.name, port);
-            health_ok = true;
-            break;
-        }
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    }
-
-    if !health_ok {
-        tracing::error!("Agent {} started but health check failed - container may have crashed", agent.name);
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Agent {} failed to start - health check failed", agent.name)));
-    }
-
-    agent.status = AgentStatus::Running;
-
-    // Persist status change
-    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
-        tracing::warn!("Failed to persist agent status: {}", e);
-    }
-
-    Ok(Json(agent.clone()))
-}
-
-pub async fn stop_agent(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<AgentContainer>, (StatusCode, String)> {
-    // Get the agent first to get its name
-    let mut containers = state.containers.write().await;
-
-    let agent_name = containers
-        .iter()
-        .find(|a| a.id == id || a.name == id)
-        .map(|a| a.name.clone())
-        .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
-
-    // Get agent to find its runtime
-    let agent_runtime = {
-        containers
-            .iter()
-            .find(|a| a.id == id || a.name == id)
-            .and_then(|a| a.runtime.clone())
-    };
-
-    // Choose the right runtime
-    let runtime: &dyn ContainerRuntime = if agent_runtime.as_deref() == Some("exo") {
-        &state.exo_runtime
-    } else {
-        &state.runtime
-    };
-
-    // Stop using the agent's name (Docker finds containers by name)
-    runtime
-        .stop_container(&agent_name)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let agent = containers
-        .iter_mut()
-        .find(|a| a.id == id)
-        .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
-
-    agent.status = AgentStatus::Stopped;
-
-    // Persist status change
-    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
-        tracing::warn!("Failed to persist agent status: {}", e);
-    }
-
-    Ok(Json(agent.clone()))
-}
-
-// === Batch Operations ===
-
-pub async fn start_all(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Json<Vec<String>> {
-    let containers = state.containers.read().await;
-    let mut started = Vec::new();
-
-    for agent in containers.iter() {
-        // Filter by project if specified
-        if let Some(project) = params.get("project") {
-            if agent.project.as_deref() != Some(project.as_str()) {
-                continue;
-            }
-        }
-
-        if agent.status != AgentStatus::Running {
-            // Choose runtime based on agent's runtime setting
-            let runtime: &dyn ContainerRuntime = if agent.runtime.as_deref() == Some("exo") {
-                &state.exo_runtime
-            } else {
-                &state.runtime
-            };
-
-            if runtime.start_container(&agent.id).await.is_ok() {
-                started.push(agent.id.clone());
-            }
-        }
-    }
-
-    Json(started)
-}
-
-pub async fn stop_all(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Json<Vec<String>> {
-    let containers = state.containers.read().await;
-    let mut stopped = Vec::new();
-
-    for agent in containers.iter() {
-        if let Some(project) = params.get("project") {
-            if agent.project.as_deref() != Some(project.as_str()) {
-                continue;
-            }
-        }
-
-        if agent.status == AgentStatus::Running {
-            // Choose runtime based on agent's runtime setting
-            let runtime: &dyn ContainerRuntime = if agent.runtime.as_deref() == Some("exo") {
-                &state.exo_runtime
-            } else {
-                &state.runtime
-            };
-
-            if runtime.stop_container(&agent.id).await.is_ok() {
-                stopped.push(agent.id.clone());
-            }
-        }
-    }
-
-    Json(stopped)
-}
-
-// === Logs ===
-
-pub async fn get_logs(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Result<Json<Vec<LogEntry>>, (StatusCode, String)> {
-    // Get agent to find its runtime
-    let agent_runtime = {
-        let containers = state.containers.read().await;
-        containers
-            .iter()
-            .find(|a| a.id == id)
-            .and_then(|a| a.runtime.clone())
-    };
-
-    // Choose the right runtime
-    let runtime: &dyn ContainerRuntime = if agent_runtime.as_deref() == Some("exo") {
-        &state.exo_runtime
-    } else {
-        &state.runtime
-    };
-
-    let tail: usize = params
-        .get("tail")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(100);
-
-    let logs = runtime
-        .get_logs(&id, tail)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(Json(logs))
-}
-
-pub async fn logs_websocket(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Query(params): Query<HashMap<String, String>>,
-    ws: WebSocketUpgrade,
-) -> Result<Response, (StatusCode, String)> {
-    // Validate JWT token from query parameter
-    let token = params.get("token").ok_or((
-        StatusCode::UNAUTHORIZED,
-        "Missing authentication token".to_string(),
-    ))?;
-
-    let auth = state.auth.read().await;
-    auth.validate_token(token)
-        .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {}", e)))?;
-    drop(auth);
-
-    // Check if agent exists
-    let containers = state.containers.read().await;
-    let _agent = containers
-        .iter()
-        .find(|c| c.id == id)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
-    drop(containers);
-
-    Ok(ws.on_upgrade(move |socket| handle_logs_stream(socket, state, id)))
-}
-
-async fn handle_logs_stream(mut socket: WebSocket, state: Arc<AppState>, id: String) {
-    use axum::extract::ws::Message;
-    use tokio_stream::StreamExt;
-
-    let mut stream = state.runtime.stream_logs(&id).await;
-
-    while let Some(log) = stream.next().await {
-        let msg = serde_json::to_string(&log).unwrap_or_default();
-        if socket.send(Message::Text(msg)).await.is_err() {
-            break;
-        }
-    }
-}
-
-// === Interactive Terminal (WebSocket exec) ===
-
-/// WebSocket-based interactive terminal for container exec.
-/// Connects a browser terminal (xterm.js) to a shell inside the container.
-///
-/// Query params: `?token=<jwt>&cmd=<shell>` (cmd defaults to /bin/sh)
-pub async fn terminal_websocket(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Query(params): Query<HashMap<String, String>>,
-    ws: WebSocketUpgrade,
-) -> Result<Response, (StatusCode, String)> {
-    // Validate JWT
-    let token = params.get("token").ok_or((
-        StatusCode::UNAUTHORIZED,
-        "Missing authentication token".to_string(),
-    ))?;
-    let auth = state.auth.read().await;
-    auth.validate_token(token)
-        .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {}", e)))?;
-    drop(auth);
-
-    // Check agent exists and is running
-    let containers = state.containers.read().await;
-    let agent = containers
-        .iter()
-        .find(|c| c.id == id || c.name == id)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
-    let container_id = agent.name.clone();
-    drop(containers);
-
-    let shell = params.get("cmd").cloned().unwrap_or_else(|| "/bin/sh".to_string());
-
-    Ok(ws.on_upgrade(move |socket| handle_terminal_stream(socket, container_id, shell)))
-}
-
-async fn handle_terminal_stream(mut socket: WebSocket, container_id: String, shell: String) {
-    use axum::extract::ws::Message;
-    use bollard::exec::{CreateExecOptions, ResizeExecOptions, StartExecResults};
-    use futures_util::StreamExt;
-    use tokio::io::AsyncWriteExt as _;
-
-    // Connect to Docker
-    let docker = match bollard::Docker::connect_with_local_defaults() {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::error!("Failed to connect to Docker for terminal: {}", e);
-            let _ = socket.send(Message::Text(format!("\r\nError: cannot connect to Docker: {}\r\n", e))).await;
-            return;
-        }
-    };
-
-    // Create exec with stdin attached and interactive TTY
-    let exec_opts = CreateExecOptions {
-        cmd: Some(vec![shell]),
-        attach_stdin: Some(true),
-        attach_stdout: Some(true),
-        attach_stderr: Some(true),
-        tty: Some(true),
-        ..Default::default()
-    };
-
-    let exec = match docker.create_exec(&container_id, exec_opts).await {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::error!("Failed to create exec: {}", e);
-            let _ = socket.send(Message::Text(format!("\r\nError: exec failed: {}\r\n", e))).await;
-            return;
-        }
-    };
-
-    let exec_result = match docker.start_exec(&exec.id, Some(bollard::exec::StartExecOptions { detach: false, ..Default::default() })).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("Failed to start exec: {}", e);
-            let _ = socket.send(Message::Text(format!("\r\nError: start exec failed: {}\r\n", e))).await;
-            return;
-        }
-    };
-
-    let (mut docker_output, mut docker_input) = match exec_result {
-        StartExecResults::Attached { output, input } => (output, input),
-        StartExecResults::Detached => {
-            tracing::error!("Exec started in detached mode");
-            return;
-        }
-    };
-
-    let exec_id = exec.id.clone();
-
-    // Single select loop: forward data both directions
-    loop {
-        tokio::select! {
-            // Docker -> WebSocket
-            docker_msg = docker_output.next() => {
-                match docker_msg {
-                    Some(Ok(output)) => {
-                        let data = output.into_bytes().to_vec();
-                        if socket.send(Message::Binary(data)).await.is_err() {
-                            break;
-                        }
-                    }
-                    Some(Err(e)) => {
-                        tracing::debug!("Docker output error: {}", e);
-                        break;
-                    }
-                    None => {
-                        // Docker stream ended (shell exited)
-                        let _ = socket.send(Message::Text("\r\n[shell exited]\r\n".into())).await;
-                        break;
-                    }
-                }
-            }
-            // WebSocket -> Docker stdin
-            ws_msg = socket.recv() => {
-                match ws_msg {
-                    Some(Ok(Message::Text(text))) => {
-                        // Check for resize control message
-                        if let Ok(ctrl) = serde_json::from_str::<serde_json::Value>(&text) {
-                            if ctrl.get("type").and_then(|t| t.as_str()) == Some("resize") {
-                                let cols = ctrl.get("cols").and_then(|c| c.as_u64()).unwrap_or(80) as u16;
-                                let rows = ctrl.get("rows").and_then(|r| r.as_u64()).unwrap_or(24) as u16;
-                                let _ = docker.resize_exec(&exec_id, ResizeExecOptions {
-                                    height: rows,
-                                    width: cols,
-                                }).await;
-                                continue;
-                            }
-                        }
-                        // Regular text input
-                        if docker_input.write_all(text.as_bytes()).await.is_err() {
-                            break;
-                        }
-                        let _ = docker_input.flush().await;
-                    }
-                    Some(Ok(Message::Binary(data))) => {
-                        if docker_input.write_all(&data).await.is_err() {
-                            break;
-                        }
-                        let _ = docker_input.flush().await;
-                    }
-                    Some(Ok(Message::Close(_))) | None => {
-                        break;
-                    }
-                    Some(Err(_)) => {
-                        break;
-                    }
-                    _ => {} // Ping/Pong handled by axum
-                }
-            }
-        }
-    }
-
-    let _ = socket.send(Message::Close(None)).await;
-}
-
-// === Metrics ===
-
-pub async fn get_metrics(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<ResourceUsage>, (StatusCode, String)> {
-    // Get agent to find its runtime
-    let agent_runtime = {
-        let containers = state.containers.read().await;
-        containers
-            .iter()
-            .find(|a| a.id == id)
-            .and_then(|a| a.runtime.clone())
-    };
-
-    // Choose the right runtime
-    let runtime: &dyn ContainerRuntime = if agent_runtime.as_deref() == Some("exo") {
-        &state.exo_runtime
-    } else {
-        &state.runtime
-    };
-
-    let usage = runtime
-        .get_stats(&id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                "Agent not found or not running".to_string(),
-            )
-        })?;
-
-    Ok(Json(usage))
-}
-
-pub async fn get_all_metrics(
-    State(state): State<Arc<AppState>>,
-) -> Json<HashMap<String, ResourceUsage>> {
-    let containers = state.containers.read().await;
-    let mut metrics = HashMap::new();
-
-    for agent in containers.iter() {
-        if agent.status == AgentStatus::Running {
-            // Choose runtime based on agent's runtime setting
-            let runtime: &dyn ContainerRuntime = if agent.runtime.as_deref() == Some("exo") {
-                &state.exo_runtime
-            } else {
-                &state.runtime
-            };
-
-            if let Ok(Some(usage)) = runtime.get_stats(&agent.id).await {
-                metrics.insert(agent.id.clone(), usage);
-            }
-        }
-    }
-
-    Json(metrics)
-}
-
-// === Health Checks ===
-
-pub async fn run_health_check(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<HealthStatus>, (StatusCode, String)> {
-    // Get agent details including runtime and gateway port
-    let (agent_runtime, gateway_port, agent_name) = {
-        let containers = state.containers.read().await;
-        containers
-            .iter()
-            .find(|a| a.id == id)
-            .map(|a| (a.runtime.clone(), a.gateway_port, a.name.clone()))
-            .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?
-    };
-
-    // Choose the right runtime
-    let runtime: &dyn ContainerRuntime = if agent_runtime.as_deref() == Some("exo") {
-        &state.exo_runtime
-    } else {
-        &state.runtime
-    };
-
-    // Step 1: Check if container exists and is running via runtime
-    let container_healthy = runtime
-        .health_check(&id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    // Step 2: Probe the agent's gateway port directly
-    // The container may be "running" but the agent process inside may have crashed
-    let gateway_reachable = tokio::time::timeout(
-        std::time::Duration::from_millis(500),
-        tokio::net::TcpStream::connect(format!("127.0.0.1:{}", gateway_port)),
-    )
-    .await
-    .ok()
-    .and_then(|r| r.ok())
-    .is_some();
-
-    let healthy = container_healthy && gateway_reachable;
-
-    let message = if !container_healthy {
-        format!("Container '{}' is not running", agent_name)
-    } else if !gateway_reachable {
-        format!("Container '{}' is running but agent gateway on port {} is not responding", agent_name, gateway_port)
-    } else {
-        format!("Agent '{}' is healthy on port {}", agent_name, gateway_port)
-    };
-
-    let status = HealthStatus {
-        healthy,
-        last_check: chrono::Utc::now().to_rfc3339(),
-        message: Some(message),
-    };
-
-    // Update agent health status in state
-    let mut containers = state.containers.write().await;
-    if let Some(agent) = containers.iter_mut().find(|c| c.id == id) {
-        agent.health_status = Some(status.clone());
-    }
-
-    Ok(Json(status))
-}
-
-// === System Stats ===
-
-#[derive(Debug, serde::Serialize)]
-pub struct SystemStats {
-    pub total_memory_mb: u64,
-    pub used_memory_mb: u64,
-    pub available_memory_mb: u64,
-    pub total_cpu_cores: f32,
-    pub cpu_usage_percent: f32,
-    pub agent_count: usize,
-    pub running_agents: usize,
-    pub agent_memory_mb: u64,
-    pub runtime: String,
-}
-
-pub async fn get_system_stats(State(state): State<Arc<AppState>>) -> Json<SystemStats> {
-    let containers = state.containers.read().await;
-
-    let running: Vec<_> = containers
-        .iter()
-        .filter(|a| a.status == AgentStatus::Running)
-        .collect();
-    let agent_memory: u64 = running.iter().map(|a| a.config.memory_mb as u64).sum();
-
-    // Get actual system memory from /proc/meminfo
-    let (total_mem, available_mem) = get_system_memory();
-    let used_mem = total_mem.saturating_sub(available_mem);
-
-    // Get CPU cores
-    let cpu_cores = num_cpus::get() as f32;
-
-    // Get CPU usage (simplified - just count running containers)
-    let cpu_usage = (running.len() as f32 / cpu_cores.max(1.0)) * 100.0;
-
-    // Determine active runtime
-    let runtime = match state.config.container_runtime {
-        crate::config::ContainerRuntimeType::Docker => "docker",
-        crate::config::ContainerRuntimeType::Exo => "exo",
-    };
-
-    Json(SystemStats {
-        total_memory_mb: total_mem / 1024,
-        used_memory_mb: used_mem / 1024,
-        available_memory_mb: available_mem / 1024,
-        total_cpu_cores: cpu_cores,
-        cpu_usage_percent: cpu_usage.min(100.0),
-        agent_count: containers.len(),
-        running_agents: running.len(),
-        agent_memory_mb: agent_memory,
-        runtime: runtime.to_string(),
-    })
-}
-
-fn get_system_memory() -> (u64, u64) {
-    use sysinfo::System;
-
-    let mut sys = System::new_all();
-    sys.refresh_all();
-
-    let total_mem = sys.total_memory();
-    let available_mem = sys.available_memory();
-
-    (total_mem, available_mem)
-}
-
-// === Templates ===
-
-pub async fn list_models(State(_state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "providers": [
-            {
-                "id": "zai",
-                "name": "Z.AI",
-                "models": [
-                    { "id": "glm-5", "name": "GLM-5" },
-                    { "id": "glm-5-flash", "name": "GLM-5 Flash" },
-                    { "id": "glm-4-plus", "name": "GLM-4 Plus" }
-                ]
-            },
-            {
-                "id": "anthropic",
-                "name": "Anthropic",
-                "models": [
-                    { "id": "claude-sonnet-4-5", "name": "Claude Sonnet 4.5" },
-                    { "id": "claude-opus-4", "name": "Claude Opus 4" },
-                    { "id": "claude-3-7-sonnet-20250219", "name": "Claude 3.7 Sonnet" },
-                    { "id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet" }
-                ]
-            },
-            {
-                "id": "openai",
-                "name": "OpenAI",
-                "models": [
-                    { "id": "gpt-4o", "name": "GPT-4o" },
-                    { "id": "gpt-4o-mini", "name": "GPT-4o Mini" },
-                    { "id": "o1", "name": "o1" },
-                    { "id": "o3-mini", "name": "o3-mini" },
-                    { "id": "gpt-4.1", "name": "GPT-4.1" },
-                    { "id": "gpt-4.1-mini", "name": "GPT-4.1 Mini" }
-                ]
-            },
-            {
-                "id": "kimi",
-                "name": "Kimi (Moonshot)",
-                "models": [
-                    { "id": "kimi-k2.6", "name": "Kimi K2.6" },
-                    { "id": "kimi-k2.5", "name": "Kimi K2.5" },
-                    { "id": "moonshot-v1-128k", "name": "Moonshot 128K" },
-                    { "id": "moonshot-v1-32k", "name": "Moonshot 32K" },
-                    { "id": "moonshot-v1-8k", "name": "Moonshot 8K" }
-                ]
-            },
-            {
-                "id": "kimi-code",
-                "name": "Kimi Code",
-                "models": [
-                    { "id": "kimi-code", "name": "Kimi Code" }
-                ]
-            },
-            {
-                "id": "google",
-                "name": "Google",
-                "models": [
-                    { "id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro" },
-                    { "id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash" },
-                    { "id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash" }
-                ]
-            },
-            {
-                "id": "access",
-                "name": "Access",
-                "models": [
-                    { "id": "access-standard", "name": "Access Standard" }
-                ]
-            },
-            {
-                "id": "huggingface",
-                "name": "Hugging Face",
-                "models": [
-                    { "id": "meta-llama/Llama-3.3-70B-Instruct", "name": "Llama 3.3 70B" },
-                    { "id": "meta-llama/Llama-3.1-8B-Instruct", "name": "Llama 3.1 8B" },
-                    { "id": "Qwen/Qwen2.5-72B-Instruct", "name": "Qwen 2.5 72B" },
-                    { "id": "deepseek-ai/DeepSeek-R1", "name": "DeepSeek R1" }
-                ]
-            },
-            {
-                "id": "ollama",
-                "name": "Ollama (Local)",
-                "models": [
-                    { "id": "llama3.2", "name": "Llama 3.2" },
-                    { "id": "llama3.1", "name": "Llama 3.1" },
-                    { "id": "qwen2.5", "name": "Qwen 2.5" },
-                    { "id": "mistral", "name": "Mistral" },
-                    { "id": "codellama", "name": "CodeLlama" }
-                ]
-            },
-            {
-                "id": "lmstudio",
-                "name": "LM Studio (Local)",
-                "models": [
-                    { "id": "", "name": "Use LM Studio default" }
-                ]
-            },
-            {
-                "id": "llamacpp",
-                "name": "llama.cpp (Local)",
-                "models": [
-                    { "id": "", "name": "Use llama.cpp default" }
-                ]
-            },
-            {
-                "id": "vllm",
-                "name": "vLLM (Local)",
-                "models": [
-                    { "id": "", "name": "Use vLLM default" }
-                ]
-            }
-        ]
-    }))
-}
-
-pub async fn list_templates(
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<(String, TemplateInfo)>> {
-    let templates: Vec<_> = state
-        .templates
-        .list()
-        .into_iter()
-        .map(|(name, t)| {
-            (
-                name.clone(),
-                TemplateInfo {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    provider: t.config.llm_provider.clone(),
-                    model: t.config.llm_model.clone(),
-                },
-            )
-        })
-        .collect();
-
-    Json(templates)
+// === Auth ===
+
+#[derive(Deserialize)]
+pub struct LoginRequest {
+    pub password: String,
 }
 
 #[derive(Serialize)]
-pub struct TemplateInfo {
-    pub name: String,
-    pub description: Option<String>,
-    pub provider: Option<String>,
-    pub model: Option<String>,
+pub struct LoginResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub role: String,
+    pub username: String,
 }
 
-// === Projects ===
-
-pub async fn list_projects(State(state): State<Arc<AppState>>) -> Json<Vec<Project>> {
-    let containers = state.containers.read().await;
-    let mut projects: HashMap<String, Project> = HashMap::new();
-
-    for agent in containers.iter() {
-        if let Some(ref project_name) = agent.project {
-            let project = projects
-                .entry(project_name.clone())
-                .or_insert_with(|| Project {
-                    id: project_name.to_lowercase().replace(' ', "-"),
-                    name: project_name.clone(),
-                    description: None,
-                    agents: Vec::new(),
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                });
-            project.agents.push(agent.id.clone());
-        }
-    }
-
-    Json(projects.into_values().collect())
-}
-
-pub async fn create_project(
-    State(_state): State<Arc<AppState>>,
-    Json(req): Json<CreateProjectRequest>,
-) -> Json<Project> {
-    let project = Project {
-        id: req.name.to_lowercase().replace(' ', "-"),
-        name: req.name,
-        description: req.description,
-        agents: Vec::new(),
-        created_at: chrono::Utc::now().to_rfc3339(),
-    };
-
-    Json(project)
-}
-
-// === Secrets ===
-
-pub async fn list_secrets(
+pub async fn login(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Json<Vec<SecretInfo>> {
-    let secrets = state.secrets.list_secrets(&id).await.unwrap_or_default();
+    Json(req): Json<LoginRequest>,
+) -> Result<Json<LoginResponse>, (StatusCode, String)> {
+    let auth = state.auth.read().await;
+    let token_response = auth
+        .login(&req.password)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    let username = auth
+        .validate_token(&token_response.access_token)
+        .map(|c| c.sub.clone())
+        .unwrap_or_else(|_| "admin".to_string());
+    drop(auth);
 
-    Json(secrets)
+    Ok(Json(LoginResponse {
+        access_token: token_response.access_token,
+        refresh_token: token_response.refresh_token,
+        role: "admin".to_string(),
+        username,
+    }))
 }
 
-pub async fn set_secret(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(req): Json<SetSecretRequest>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    state
-        .secrets
-        .set_secret(&id, &req.name, &req.value)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(StatusCode::CREATED)
+#[derive(Deserialize)]
+pub struct RegisterRequest {
+    pub username: String,
+    pub password: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub secret_word: Option<String>,
 }
 
-pub async fn delete_secret(
+pub async fn register(
     State(state): State<Arc<AppState>>,
-    Path((id, name)): Path<(String, String)>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    state
-        .secrets
-        .delete_secret(&id, &name)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Json(req): Json<RegisterRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let mut auth = state.auth.write().await;
+    let _result = auth
+        .register(&req.password)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    drop(auth);
 
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "username": req.username,
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct RefreshRequest {
+    pub refresh_token: String,
+}
+
+pub async fn refresh_token(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RefreshRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let auth = state.auth.read().await;
+    let access_token = auth
+        .refresh(&req.refresh_token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    drop(auth);
+
+    Ok(Json(serde_json::json!({
+        "access_token": access_token,
+    })))
+}
+
+pub async fn me(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let token = extract_token(&headers)?;
+    let auth = state.auth.read().await;
+    let claims = auth
+        .validate_token(&token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    drop(auth);
+
+    Ok(Json(serde_json::json!({
+        "username": claims.sub,
+        "role": claims.role.unwrap_or_else(|| "user".to_string()),
+    })))
+}
+
+fn extract_token(headers: &axum::http::HeaderMap) -> Result<String, (StatusCode, String)> {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|t| t.to_string())
+        .ok_or((StatusCode::UNAUTHORIZED, "Missing authorization header".to_string()))
 }
 
 // === API Keys ===
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Deserialize)]
 pub struct SetApiKeyRequest {
     pub provider: String,
     pub key: String,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Serialize)]
 pub struct ApiKeyInfo {
     pub provider: String,
     pub has_key: bool,
@@ -1681,16 +150,7 @@ pub struct ApiKeyInfo {
 
 pub async fn list_api_keys(State(state): State<Arc<AppState>>) -> Json<Vec<ApiKeyInfo>> {
     let keys = state.api_keys.read().await;
-    let providers = [
-        "zai",
-        "anthropic",
-        "openai",
-        "kimi",
-        "google",
-        "kimi-code",
-        "access",
-        "huggingface",
-    ];
+    let providers = ["zai", "anthropic", "openai", "kimi", "google"];
 
     Json(
         providers
@@ -1710,7 +170,6 @@ pub async fn set_api_key(
     let mut keys = state.api_keys.write().await;
     keys.insert(req.provider.clone(), req.key);
 
-    // Persist to disk
     let keys_path = state.data_dir.join("api_keys.json");
     if let Ok(json) = serde_json::to_string_pretty(&*keys) {
         let _ = std::fs::write(&keys_path, json);
@@ -1726,7 +185,6 @@ pub async fn delete_api_key(
     let mut keys = state.api_keys.write().await;
     keys.remove(&provider);
 
-    // Persist to disk
     let keys_path = state.data_dir.join("api_keys.json");
     if let Ok(json) = serde_json::to_string_pretty(&*keys) {
         let _ = std::fs::write(&keys_path, json);
@@ -1735,2603 +193,525 @@ pub async fn delete_api_key(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// === Snapshots ===
+// === Conversations ===
 
-pub async fn list_snapshots(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Json<Vec<SnapshotInfo>> {
-    let snapshots = state
-        .snapshots
-        .list_snapshots(&id)
-        .await
-        .unwrap_or_default();
-
-    Json(snapshots)
+#[derive(Deserialize)]
+pub struct CreateConversationRequest {
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
-pub async fn create_snapshot(
+pub async fn list_conversations(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<SnapshotInfo>, (StatusCode, String)> {
-    let snapshot = state
-        .snapshots
-        .create_snapshot(&id)
-        .await
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Vec<Conversation>>, (StatusCode, String)> {
+    let token = extract_token(&headers)?;
+    let auth = state.auth.read().await;
+    let claims = auth
+        .validate_token(&token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    drop(auth);
+
+    let convs = state
+        .chat_db
+        .list_conversations(&claims.sub)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(snapshot))
+    Ok(Json(convs))
 }
 
-pub async fn restore_snapshot(
+pub async fn create_conversation(
     State(state): State<Arc<AppState>>,
-    Path((id, snapshot_id)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<CreateConversationRequest>,
+) -> Result<Json<Conversation>, (StatusCode, String)> {
+    let token = extract_token(&headers)?;
+    let auth = state.auth.read().await;
+    let claims = auth
+        .validate_token(&token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    drop(auth);
+
+    let conv = state
+        .chat_db
+        .create_conversation(&claims.sub, req.title.as_deref().unwrap_or("New Chat"))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(conv))
+}
+
+pub async fn get_conversation(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Conversation>, (StatusCode, String)> {
+    let token = extract_token(&headers)?;
+    let auth = state.auth.read().await;
+    let claims = auth
+        .validate_token(&token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    drop(auth);
+
+    let conv = state
+        .chat_db
+        .get_conversation(&id, &claims.sub)
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+
+    Ok(Json(conv))
+}
+
+pub async fn delete_conversation(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let token = extract_token(&headers)?;
+    let auth = state.auth.read().await;
+    let claims = auth
+        .validate_token(&token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    drop(auth);
+
     state
-        .snapshots
-        .restore_snapshot(&id, &snapshot_id)
+        .chat_db
+        .delete_conversation(&id, &claims.sub)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// === Messages ===
+
+pub async fn get_messages(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<ChatMessage>>, (StatusCode, String)> {
+    let token = extract_token(&headers)?;
+    let auth = state.auth.read().await;
+    let claims = auth
+        .validate_token(&token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    drop(auth);
+
+    let messages = state
+        .chat_db
+        .get_messages(&id, &claims.sub)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(messages))
+}
+
+#[derive(Deserialize)]
+pub struct SendMessageRequest {
+    pub content: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+}
+
+pub async fn send_message(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<SendMessageRequest>,
+) -> Result<Json<ChatMessage>, (StatusCode, String)> {
+    let token = extract_token(&headers)?;
+    let auth = state.auth.read().await;
+    let claims = auth
+        .validate_token(&token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    drop(auth);
+
+    // Store user message
+    let user_msg = state
+        .chat_db
+        .add_message(&id, &claims.sub, "user", &req.content)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Get conversation history for context
+    let history = state
+        .chat_db
+        .get_messages(&id, &claims.sub)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Build messages for LLM
+    let llm_messages: Vec<serde_json::Value> = history
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "role": m.role,
+                "content": m.content,
+            })
+        })
+        .collect();
+
+    // Determine provider and model
+    let provider = req.provider.unwrap_or_else(|| "kimi".to_string());
+    let model = req
+        .model
+        .unwrap_or_else(|| "kimi-k2.6".to_string());
+
+    // Get API key
+    let keys = state.api_keys.read().await;
+    let api_key = keys
+        .get(&provider)
+        .cloned()
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("No API key for provider: {}", provider)))?;
+    drop(keys);
+
+    // Call Kimi API (or other provider)
+    let client = reqwest::Client::new();
+    let response = client
+        .post("https://api.kimi.com/coding/v1/messages")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "model": model,
+            "messages": llm_messages,
+            "stream": false,
+            "max_tokens": 4096,
+        }))
+        .send()
         .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("LLM request failed: {}", e)))?;
+
+    let response_json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Failed to parse LLM response: {}", e)))?;
+
+    let assistant_content = response_json
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|c| c.first())
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("[No response]");
+
+    // Store assistant message
+    let assistant_msg = state
+        .chat_db
+        .add_message(&id, &claims.sub, "assistant", assistant_content)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(assistant_msg))
+}
+
+// === Streaming Chat ===
+
+#[derive(Deserialize)]
+pub struct ChatStreamRequest {
+    pub conversation_id: String,
+    pub content: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+}
+
+pub async fn chat_stream(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<ChatStreamRequest>,
+) -> Result<Json<ChatMessage>, (StatusCode, String)> {
+    // For now, non-streaming. Store user message and return assistant response.
+    let token = extract_token(&headers)?;
+    let auth = state.auth.read().await;
+    let claims = auth
+        .validate_token(&token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    drop(auth);
+
+    let _user_msg = state
+        .chat_db
+        .add_message(&req.conversation_id, &claims.sub, "user", &req.content)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let history = state
+        .chat_db
+        .get_messages(&req.conversation_id, &claims.sub)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let llm_messages: Vec<serde_json::Value> = history
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "role": m.role,
+                "content": m.content,
+            })
+        })
+        .collect();
+
+    let provider = req.provider.unwrap_or_else(|| "kimi".to_string());
+    let model = req.model.unwrap_or_else(|| "kimi-k2.6".to_string());
+
+    let keys = state.api_keys.read().await;
+    let api_key = keys
+        .get(&provider)
+        .cloned()
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("No API key for provider: {}", provider)))?;
+    drop(keys);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post("https://api.kimi.com/coding/v1/messages")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "model": model,
+            "messages": llm_messages,
+            "stream": false,
+            "max_tokens": 4096,
+        }))
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("LLM request failed: {}", e)))?;
+
+    let response_json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Failed to parse LLM response: {}", e)))?;
+
+    let content = response_json
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|c| c.first())
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("[No response]");
+
+    let assistant_msg = state
+        .chat_db
+        .add_message(&req.conversation_id, &claims.sub, "assistant", content)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(assistant_msg))
+}
+
+// === WebSocket Chat ===
+
+pub async fn chat_websocket(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, (StatusCode, String)> {
+    let token = params
+        .get("token")
+        .ok_or((StatusCode::UNAUTHORIZED, "Missing token".to_string()))?;
+
+    let auth = state.auth.read().await;
+    let claims = auth
+        .validate_token(token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    drop(auth);
+
+    let user_id = claims.sub.clone();
+    let state = state.clone();
+
+    Ok(ws.on_upgrade(move |socket| handle_chat_ws(socket, state, user_id)))
+}
+
+async fn handle_chat_ws(
+    mut socket: axum::extract::ws::WebSocket,
+    state: Arc<AppState>,
+    user_id: String,
+) {
+    use axum::extract::ws::Message;
+
+    while let Some(msg) = socket.recv().await {
+        match msg {
+            Ok(Message::Text(text)) => {
+                if let Ok(req) = serde_json::from_str::<ChatStreamRequest>(&text) {
+                    // Store user message
+                    let _ = state.chat_db.add_message(
+                        &req.conversation_id,
+                        &user_id,
+                        "user",
+                        &req.content,
+                    );
+
+                    // Get history
+                    let history = match state.chat_db.get_messages(&req.conversation_id, &user_id) {
+                        Ok(h) => h,
+                        Err(_) => continue,
+                    };
+
+                    let llm_messages: Vec<serde_json::Value> = history
+                        .iter()
+                        .map(|m| {
+                            serde_json::json!({
+                                "role": m.role,
+                                "content": m.content,
+                            })
+                        })
+                        .collect();
+
+                    let provider = req.provider.unwrap_or_else(|| "kimi".to_string());
+                    let model = req.model.unwrap_or_else(|| "kimi-k2.6".to_string());
+
+                    let keys = state.api_keys.read().await;
+                    let api_key = match keys.get(&provider) {
+                        Some(k) => k.clone(),
+                        None => continue,
+                    };
+                    drop(keys);
+
+                    // Non-streaming for WebSocket simplicity
+                    let client = reqwest::Client::new();
+                    if let Ok(response) = client
+                        .post("https://api.kimi.com/coding/v1/messages")
+                        .header("Authorization", format!("Bearer {}", api_key))
+                        .header("Content-Type", "application/json")
+                        .json(&serde_json::json!({
+                            "model": model,
+                            "messages": llm_messages,
+                            "stream": false,
+                            "max_tokens": 4096,
+                        }))
+                        .send()
+                        .await
+                    {
+                        if let Ok(response_json) = response.json::<serde_json::Value>().await {
+                            let content = response_json
+                                .get("choices")
+                                .and_then(|c| c.as_array())
+                                .and_then(|c| c.first())
+                                .and_then(|c| c.get("message"))
+                                .and_then(|m| m.get("content"))
+                                .and_then(|c| c.as_str())
+                                .unwrap_or("[No response]");
+
+                            // Store assistant message
+                            let _ = state.chat_db.add_message(
+                                &req.conversation_id,
+                                &user_id,
+                                "assistant",
+                                content,
+                            );
+
+                            let _ = socket
+                                .send(Message::Text(
+                                    serde_json::json!({
+                                        "role": "assistant",
+                                        "content": content,
+                                        "conversation_id": req.conversation_id,
+                                    })
+                                    .to_string(),
+                                ))
+                                .await;
+                        }
+                    }
+                }
+            }
+            Ok(Message::Close(_)) | Err(_) => break,
+            _ => {}
+        }
+    }
+}
+
+// === Teams ===
+
+pub async fn list_teams(State(state): State<Arc<AppState>>) -> Json<Vec<serde_json::Value>> {
+    let teams = state.teams.list_teams();
+    Json(teams)
+}
+
+pub async fn list_team_roles(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Json<Vec<serde_json::Value>> {
+    let roles = state.teams.list_roles(&id);
+    Json(roles)
+}
+
+// === Admin ===
+
+pub async fn list_users(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    let token = extract_token(&headers)?;
+    let auth = state.auth.read().await;
+    let claims = auth
+        .validate_token(&token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+
+    if claims.role.as_deref() != Some("admin") && claims.role.as_deref() != Some("teacher") {
+        return Err((StatusCode::FORBIDDEN, "Admin access required".to_string()));
+    }
+    drop(auth);
+
+    let users = state.chat_db.list_all_users()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let json_users: Vec<serde_json::Value> = users.into_iter().map(|u| {
+        serde_json::json!({
+            "id": u.id,
+            "username": u.username,
+            "display_name": u.display_name,
+            "role": u.role.as_str(),
+            "approval_status": u.approval_status.as_str(),
+            "created_at": u.created_at,
+        })
+    }).collect();
+
+    Ok(Json(json_users))
+}
+
+#[derive(Deserialize)]
+pub struct ApproveUserRequest {
+    pub username: String,
+}
+
+pub async fn approve_user(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<ApproveUserRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let token = extract_token(&headers)?;
+    let auth = state.auth.read().await;
+    let claims = auth
+        .validate_token(&token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+
+    if claims.role.as_deref() != Some("admin") && claims.role.as_deref() != Some("teacher") {
+        return Err((StatusCode::FORBIDDEN, "Admin access required".to_string()));
+    }
+    drop(auth);
+
+    // Find user by username
+    let user = state.chat_db.get_user_by_username(&req.username)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
+
+    state.chat_db.update_user_status(&user.id, crate::chat_db::ApprovalStatus::Approved)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(StatusCode::OK)
 }
 
-pub async fn delete_snapshot(
+pub async fn delete_user(
     State(state): State<Arc<AppState>>,
-    Path((id, snapshot_id)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    state
-        .snapshots
-        .delete_snapshot(&id, &snapshot_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
-// === Export/Import ===
-
-pub async fn export_agent(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Response, (StatusCode, String)> {
-    let config = state
-        .snapshots
-        .export_agent(&id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "application/json")
-        .header(
-            "Content-Disposition",
-            format!("attachment; filename=\"agent-{}.json\"", id),
-        )
-        .body(Body::from(config))
-        .unwrap())
-}
-
-pub async fn import_agent(
-    State(state): State<Arc<AppState>>,
-    Json(mut agent): Json<AgentContainer>,
-) -> Result<Json<AgentContainer>, (StatusCode, String)> {
-    // Choose runtime based on imported agent's runtime setting
-    let runtime: &dyn ContainerRuntime = if agent.runtime.as_deref() == Some("exo") {
-        &state.exo_runtime
-    } else {
-        &state.runtime
-    };
-
-    // Ensure gateway port is set in env vars
-    agent
-        .config
-        .env_vars
-        .insert("PORT".to_string(), agent.gateway_port.to_string());
-
-    // Create the container
-    let id = runtime
-        .create_container(&agent.name, &agent.config)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    agent.id = id;
-
-    // Add to state
-    let mut containers = state.containers.write().await;
-    containers.push(agent.clone());
-
-    Ok(Json(agent))
-}
-
-// === Runtime Status ===
-
-pub async fn runtime_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let runtime_name = match state.config.container_runtime {
-        crate::config::ContainerRuntimeType::Docker => "docker",
-        crate::config::ContainerRuntimeType::Exo => "exo",
-    };
-
-    Json(serde_json::json!({
-        "runtime": runtime_name,
-        "version": env!("CARGO_PKG_VERSION"),
-        "agents": {
-            "total": state.containers.read().await.len(),
-            "running": state.containers.read().await.iter().filter(|c| c.status == AgentStatus::Running).count(),
-        }
-    }))
-}
-
-// === Native Inference Service ===
-
-/// Get the status of the native inference service
-pub async fn inference_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let Some(inference) = &state.inference else {
-        return Json(serde_json::json!({
-            "enabled": false,
-            "status": "not_configured"
-        }));
-    };
-
-    let is_healthy = inference.health_check().await.unwrap_or(false);
-
-    Json(serde_json::json!({
-        "enabled": true,
-        "status": if is_healthy { "running" } else { "unhealthy" },
-        "endpoint": inference.endpoint(),
-        "model": inference.model_name(),
-    }))
-}
-
-/// Start the native inference service
-pub async fn inference_start(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let Some(inference) = &state.inference else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            "Native inference not configured".to_string(),
-        ));
-    };
-
-    inference.start().await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to start inference service: {}", e),
-        )
-    })?;
-
-    Ok(Json(serde_json::json!({
-        "status": "started",
-        "endpoint": inference.endpoint(),
-    })))
-}
-
-/// Stop the native inference service
-pub async fn inference_stop(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let Some(inference) = &state.inference else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            "Native inference not configured".to_string(),
-        ));
-    };
-
-    inference.stop().await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to stop inference service: {}", e),
-        )
-    })?;
-
-    Ok(Json(serde_json::json!({
-        "status": "stopped",
-    })))
-}
-
-// === Helpers ===
-
-fn parse_provider(s: &str) -> LlmProvider {
-    match s.to_lowercase().as_str() {
-        "openai" => LlmProvider::OpenAI,
-        "anthropic" => LlmProvider::Anthropic,
-        "gemini" => LlmProvider::Gemini,
-        "kimi" => LlmProvider::Kimi,
-        "zai" => LlmProvider::Zai,
-        "huggingface" => LlmProvider::Huggingface,
-        "ollama" => LlmProvider::Ollama,
-        "llamacpp" => LlmProvider::LlamaCpp,
-        "vllm" => LlmProvider::Vllm,
-        "lmstudio" => LlmProvider::Lmstudio,
-        _ => LlmProvider::OpenAI,
-    }
-}
-
-// === Chat WebSocket ===
-
-/// WebSocket endpoint for agent chat
-///
-/// Authentication: Pass JWT token via `?token=<jwt>` query parameter
-///
-/// Example: `ws://localhost:8081/api/agents/{id}/chat?token=eyJhbGciOiJIUzI1NiIs...`
-pub async fn chat_websocket(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Query(params): Query<HashMap<String, String>>,
-    ws: WebSocketUpgrade,
-) -> Result<Response, (StatusCode, String)> {
-    // Log the connection attempt
-    tracing::info!("WebSocket connection request for agent: {}", id);
-
-    // Validate JWT token from query parameter
-    tracing::info!("Validating token...");
-    let token = params.get("token").ok_or((
-        StatusCode::UNAUTHORIZED,
-        "Missing authentication token".to_string(),
-    ))?;
-
+    let token = extract_token(&headers)?;
     let auth = state.auth.read().await;
     let claims = auth
-        .validate_token(token)
-        .map_err(|e| {
-            tracing::warn!("Token validation failed: {}", e);
-            (StatusCode::UNAUTHORIZED, format!("Invalid token: {}", e))
-        })?;
-    drop(auth);
-    tracing::info!("Token validated successfully");
+        .validate_token(&token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
 
-    let caller_role = claims.role.as_deref().unwrap_or("admin"); // legacy = admin
-    let caller_user_id = claims.sub.clone();
-
-    // Check if agent exists and is running
-    // First try direct ID lookup, then fallback to name search for convenience
-    tracing::info!("Looking up agent '{}'...", id);
-
-    let (agent_id, agent_name, gateway_port, runtime) = {
-        let index = state.agent_index.read().await;
-        let containers = state.containers.read().await;
-
-        // Try indexed lookup first, but fall back to scan if the index is
-        // stale (delete_agent doesn't currently rebuild it).
-        let indexed = index.get(&id).copied().and_then(|idx| {
-            // Verify the index still points at this id (off-by-one after delete)
-            containers.get(idx).filter(|c| c.id == id || c.name == id)
-        });
-
-        let agent = if let Some(a) = indexed {
-            tracing::info!("Found agent via index");
-            a
-        } else if let Some(a) = containers.iter().find(|c| c.id == id) {
-            tracing::info!("Found agent by ID scan: {}", a.name);
-            a
-        } else {
-            // Fallback: search by name for convenience
-            tracing::info!("ID not found, searching by name...");
-            if let Some(a) = containers.iter().find(|a| a.name == id) {
-                tracing::info!("Found agent by name '{}', ID: {}", a.name, &a.id[..16]);
-                a
-            } else {
-                tracing::warn!("Agent not found by ID or name: {}", id);
-                return Err((StatusCode::NOT_FOUND, format!("Agent '{}' not found. Use the agent's ID or name.", id)));
-            }
-        };
-
-        tracing::info!("Agent found: {} (status: {:?})", agent.name, agent.status);
-
-        // Don't gate on cached status — the reconciler can flip Exo agents to
-        // Error based on `exo ps` while the gateway is actually alive (rootless
-        // WSL cgroup tracking is unreliable). Stopped is the only definitive
-        // negative; anything else, attempt the connection and let the gateway
-        // probe in connect_to_agent decide.
-        if agent.status == AgentStatus::Stopped {
-            tracing::warn!("Agent {} is stopped — start it first", id);
-            return Err((StatusCode::BAD_REQUEST, "Agent is stopped".to_string()));
-        }
-
-        (agent.id.clone(), agent.name.clone(), agent.gateway_port, agent.runtime.clone())
-    };
-
-    // RBAC: admin (and legacy tokens with no role claim) bypass.
-    // Otherwise require an assignment that permits chat. Agents with no
-    // assignments configured are admin-only by default — backward compat
-    // for the single-user era.
-    if caller_role != "admin" {
-        let unassigned = state
-            .chat_db
-            .agent_is_unassigned(&agent_id)
-            .unwrap_or(true);
-        if unassigned {
-            tracing::warn!(
-                "User {} blocked from {}: agent has no assignments (admin-only)",
-                caller_user_id, agent_id
-            );
-            return Err((
-                StatusCode::FORBIDDEN,
-                "Agent is admin-only (no assignments configured)".to_string(),
-            ));
-        }
-        let assignment = state
-            .chat_db
-            .get_assignment(&agent_id, &caller_user_id)
-            .unwrap_or(None);
-        match assignment {
-            Some(role) if role.can_chat() => {
-                tracing::info!(
-                    "User {} authorized for agent {} as {}",
-                    caller_user_id, agent_id, role.as_str()
-                );
-            }
-            _ => {
-                tracing::warn!(
-                    "User {} not authorized to chat with agent {}",
-                    caller_user_id, agent_id
-                );
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    "Not authorized for this agent".to_string(),
-                ));
-            }
-        }
+    if claims.role.as_deref() != Some("admin") {
+        return Err((StatusCode::FORBIDDEN, "Admin access required".to_string()));
     }
-
-    // Session ID: explicit `?session=` from client wins, otherwise default to
-    // a stable per-agent session so reconnects continue the same conversation.
-    // Tauri client doesn't currently send the param, which is what we want —
-    // the agent "remembers" you across browser closes / restarts.
-    let session_id = params.get("session").cloned()
-        .unwrap_or_else(|| format!("default-{}", agent_id));
-
-    tracing::info!(
-        "Upgrading WebSocket connection for agent '{}' (ID: {}, port: {}, session: {}, runtime: {:?})",
-        agent_name, id, gateway_port, session_id, runtime
-    );
-
-    // Direct backend bypasses openclaw entirely.
-    if runtime.as_deref() == Some("direct") {
-        let response = ws.on_upgrade(move |socket| {
-            crate::direct_llm::handle_direct_chat(socket, state, agent_id, agent_name, session_id)
-        });
-        return Ok(response);
-    }
-
-    let response = ws.on_upgrade(move |socket| handle_chat_stream(socket, state, agent_id, agent_name, gateway_port, session_id));
-
-    Ok(response)
-}
-
-/// Get the IP address of a container from Docker with caching for scalability
-#[allow(dead_code)]
-async fn get_container_ip(state: &Arc<AppState>, container_id: &str) -> anyhow::Result<String> {
-    // Check cache first - O(1) lookup (critical for scalability with thousands of agents)
-    {
-        let cache = state.container_ips.read().await;
-        if let Some(ip) = cache.get(container_id) {
-            return Ok(ip.clone());
-        }
-    }
-
-    // Cache miss - fetch from Docker and cache it
-    use bollard::container::InspectContainerOptions;
-    use bollard::Docker;
-    use bollard::API_DEFAULT_VERSION;
-
-    // Create a new Docker connection
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| anyhow::anyhow!("Failed to connect to Docker: {}", e))?;
-
-    let inspect = docker
-        .inspect_container(container_id, None)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to inspect container: {}", e))?;
-
-    // Get the IP from the bridge network
-    if let Some(networks) = inspect.network_settings.and_then(|n| n.networks) {
-        for (_name, network) in networks {
-            if let Some(ip) = network.ip_address {
-                let ip_string: String = ip.to_string();
-
-                // Cache the IP for future requests (avoids repeated Docker inspect calls)
-                let mut cache = state.container_ips.write().await;
-                cache.insert(container_id.to_string(), ip_string.clone());
-
-                return Ok(ip_string);
-            }
-        }
-    }
-
-    Err(anyhow::anyhow!("No IP address found for container"))
-}
-
-/// Load or create Ed25519 device keys for OpenClaw device pairing.
-/// Keys are stored in ~/.openclaw/claw-pen-orchestrator-device.json
-pub fn load_or_create_device_keys() -> anyhow::Result<(ed25519_dalek::SigningKey, String)> {
-    use base64::Engine;
-    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let path = home.join(".openclaw").join("claw-pen-orchestrator-device.json");
-
-    if path.exists() {
-        let data = std::fs::read_to_string(&path)?;
-        let keys: serde_json::Value = serde_json::from_str(&data)?;
-        let private_key_b64 = keys["privateKey"].as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing privateKey"))?;
-        let private_key_bytes = base64::engine::general_purpose::STANDARD.decode(private_key_b64)?;
-        let bytes: [u8; 32] = private_key_bytes.try_into()
-            .map_err(|_| anyhow::anyhow!("Invalid key length"))?;
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&bytes);
-        let device_id = keys["deviceId"].as_str().unwrap_or("unknown").to_string();
-        return Ok((signing_key, device_id));
-    }
-
-    let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
-    let verifying_key = signing_key.verifying_key();
-    let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
-    sha2::Digest::update(&mut hasher, verifying_key.to_bytes());
-    let device_id = hex::encode(sha2::Digest::finalize(hasher));
-
-    let keys_json = serde_json::json!({
-        "privateKey": base64::engine::general_purpose::STANDARD.encode(signing_key.to_bytes()),
-        "publicKey": base64::engine::general_purpose::STANDARD.encode(verifying_key.to_bytes()),
-        "deviceId": device_id
-    });
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, serde_json::to_string_pretty(&keys_json)?)?;
-    tracing::info!("Created new device identity: {}", &device_id[..16]);
-
-    Ok((signing_key, device_id))
-}
-
-/// Build an OpenClaw connect request with Ed25519 device identity
-pub fn build_device_connect_request(req_id: &str, nonce: &str, signing_key: &ed25519_dalek::SigningKey, device_id: &str, gateway_token: Option<&str>, device_token: Option<&str>) -> serde_json::Value {
-    use ed25519_dalek::Signer;
-    use base64::Engine;
-
-    let signed_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-
-    // OpenClaw normalizes scopes server-side: when "operator.admin" is present
-    // it implicitly adds "operator.read" and "operator.write", then sorts the
-    // resulting set lexicographically. The signature payload must use the same
-    // post-normalization scope list, otherwise verification fails.
-    // (see: openclaw normalizeDeviceAuthScopes in shared/device-auth.ts)
-    let scopes_array = [
-        "operator.admin",
-        "operator.approvals",
-        "operator.pairing",
-        "operator.read",
-        "operator.write",
-    ];
-    let scopes = scopes_array.join(",");
-    // OpenClaw's resolveSignatureToken: auth.token ?? auth.deviceToken ?? auth.bootstrapToken.
-    // The signature payload's `token` field MUST be whichever of those is
-    // present, in that priority. 
-    // IMPORTANT: auth.password is NOT part of the signature payload. The
-    // password is verified separately by the gateway. The device signature
-    // proves device identity only, using auth.token/deviceToken/bootstrapToken.
-    // When we send auth.password (gateway password mode), token_str must be "".
-    let token_str = device_token.unwrap_or("");
-
-    // OpenClaw tries v3 first, then falls back to v2. Use v3 to match the
-    // current verifier's preferred path. v3 includes platform + deviceFamily,
-    // both lowercased ASCII (per normalizeDeviceMetadataForAuth).
-    let platform = "rust";       // already lowercase
-    let device_family = "desktop"; // signed lowercase per the normalization
-    let message = format!(
-        "v3|{}|cli|cli|operator|{}|{}|{}|{}|{}|{}",
-        device_id, scopes, signed_at, token_str, nonce, platform, device_family
-    );
-
-    println!("[device-auth] Signing message (v3): {}", &message);
-
-    let signature = signing_key.sign(message.as_bytes());
-    // OpenClaw expects base64url encoding (no padding)
-    let b64url = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    let signature_b64 = b64url.encode(signature.to_bytes());
-    let public_key_b64 = b64url.encode(signing_key.verifying_key().to_bytes());
-
-    let mut params = serde_json::json!({
-        "minProtocol": 4,
-        "maxProtocol": 4,
-        "client": {
-            "id": "cli",
-            "version": env!("CARGO_PKG_VERSION"),
-            "platform": "rust",
-            "mode": "cli",
-            "deviceFamily": "desktop"
-        },
-        "role": "operator",
-        "scopes": scopes_array,
-        "device": {
-            "id": device_id,
-            "publicKey": public_key_b64,
-            "signature": signature_b64,
-            "signedAt": signed_at,
-            "nonce": nonce
-        },
-        "caps": [],
-        "commands": []
-    });
-
-    // Include auth credentials
-    // The agent gateway in password mode expects auth.password
-    let mut auth = serde_json::Map::new();
-    if let Some(token) = gateway_token {
-        auth.insert("password".to_string(), serde_json::json!(token));
-    }
-    if let Some(dt) = device_token {
-        auth.insert("deviceToken".to_string(), serde_json::json!(dt));
-    }
-    if !auth.is_empty() {
-        params["auth"] = serde_json::Value::Object(auth);
-    }
-
-    serde_json::json!({
-        "type": "req",
-        "id": req_id,
-        "method": "connect",
-        "params": params
-    })
-}
-
-async fn handle_chat_stream(socket: WebSocket, state: Arc<AppState>, agent_id: String, agent_name: String, gateway_port: u16, session_id: String) {
-    use axum::extract::ws::Message;
-    use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
-
-    println!("[handle_chat_stream] Starting for agent {} on port {}", agent_id, gateway_port);
-    let (mut client_tx, mut client_rx) = socket.split();
-
-    // Resolve gateway token from agent config
-    let gateway_token = {
-        let containers = state.containers.read().await;
-        if let Some(agent) = containers.iter().find(|a| a.id == agent_id) {
-            agent.config.env_vars.get("GATEWAY_TOKEN")
-                .or_else(|| agent.config.env_vars.get("OPENCLAW_GATEWAY_TOKEN"))
-                .or_else(|| agent.config.env_vars.get("GATEWAY_PASSWORD"))
-                .or_else(|| agent.config.env_vars.get("OPENCLAW_GATEWAY_PASSWORD"))
-                .cloned()
-        } else {
-            tracing::error!("Agent {} not found", agent_id);
-            let error_msg = serde_json::json!({
-                "role": "system",
-                "error": "Agent not found",
-                "content": format!("Agent {} not found in orchestrator", agent_id),
-                "timestamp": chrono::Utc::now().timestamp()
-            });
-            let _ = client_tx.send(Message::Text(error_msg.to_string())).await;
-            return;
-        }
-    };
-
-    // Connect and authenticate via reusable agent_comms module
-    let conn = match crate::agent_comms::connect_to_agent_with_token(
-        gateway_port,
-        gateway_token.as_deref(),
-    ).await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to connect to agent: {}", e);
-            let error_msg = serde_json::json!({
-                "role": "system",
-                "error": "Could not connect to agent",
-                "content": format!("{}", e),
-                "timestamp": chrono::Utc::now().timestamp()
-            });
-            let _ = client_tx.send(Message::Text(error_msg.to_string())).await;
-            return;
-        }
-    };
-    let (mut agent_tx, mut agent_rx) = (conn.tx, conn.rx);
-
-    tracing::info!("Connected to agent gateway, starting message proxy");
-
-    // Send immediate acknowledgment to browser to complete WebSocket handshake
-    let connect_ack = serde_json::json!({
-        "role": "system",
-        "content": "Connected to agent",
-        "type": "event",
-        "event": "connection.established",
-        "timestamp": chrono::Utc::now().timestamp()
-    });
-    if let Err(e) = client_tx.send(Message::Text(connect_ack.to_string())).await {
-        tracing::error!("Failed to send connection acknowledgment: {}", e);
-        return;
-    }
-    tracing::info!("Sent connection acknowledgment to browser");
-
-    // Spawn a task to forward messages from agent to client (with conversation persistence)
-    let persist_session_id = session_id.clone();
-    let persist_agent_id = agent_id.clone();
-    let persist_agent_name = agent_name.clone();
-    let agent_to_client = tokio::spawn(async move {
-        while let Some(msg_result) = agent_rx.next().await {
-            match msg_result {
-                Ok(TungsteniteMessage::Text(text)) => {
-                    // Stream telemetry: tag each agent→client event so we can
-                    // measure streaming vs buffered. Costs one JSON parse,
-                    // matches the parse we'd do for persistence below.
-                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(&text) {
-                        let evt_kind = event.get("event").and_then(|e| e.as_str()).unwrap_or("?");
-                        let state = event.get("payload")
-                            .and_then(|p| p.get("state"))
-                            .and_then(|s| s.as_str())
-                            .unwrap_or("");
-                        let stream = event.get("payload")
-                            .and_then(|p| p.get("stream"))
-                            .and_then(|s| s.as_str())
-                            .unwrap_or("");
-                        if !matches!(evt_kind, "health" | "tick" | "?") {
-                            tracing::info!(
-                                "[agent→client] event={} state={} stream={} bytes={}",
-                                evt_kind, state, stream, text.len()
-                            );
-                        }
-                        if event.get("event").and_then(|e| e.as_str()) == Some("chat") {
-                            if let Some(payload) = event.get("payload") {
-                                if payload.get("state").and_then(|s| s.as_str()) == Some("final") {
-                                    if let Some(content_arr) = payload.get("message")
-                                        .and_then(|m| m.get("content"))
-                                        .and_then(|c| c.as_array())
-                                    {
-                                        let texts: Vec<&str> = content_arr.iter()
-                                            .filter_map(|c| {
-                                                if c.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                                    c.get("text").and_then(|t| t.as_str())
-                                                } else {
-                                                    None
-                                                }
-                                            })
-                                            .collect();
-                                        if !texts.is_empty() {
-                                            let msg = crate::types::ConversationMessage {
-                                                id: uuid::Uuid::new_v4().to_string(),
-                                                session_id: persist_session_id.clone(),
-                                                role: "assistant".to_string(),
-                                                content: texts.join("\n"),
-                                                agent_id: persist_agent_id.clone(),
-                                                timestamp: chrono::Utc::now().to_rfc3339(),
-                                                metadata: Default::default(),
-                                            };
-                                            if let Err(e) = append_conversation_message(&persist_agent_name, &msg).await {
-                                                tracing::warn!("Failed to persist assistant message: {}", e);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if client_tx.send(Message::Text(text)).await.is_err() {
-                        break;
-                    }
-                }
-                Ok(TungsteniteMessage::Close(_)) => {
-                    break;
-                }
-                Err(_) => {
-                    break;
-                }
-                _ => {}
-            }
-        }
-    });
-
-    // Forward messages from client to agent with OpenClaw protocol translation
-    let mut request_id_counter = 0u64;
-    while let Some(msg_result) = client_rx.next().await {
-        match msg_result {
-            Ok(Message::Text(text)) => {
-                tracing::info!("Received from GUI: {}", text);
-
-                // Parse the client message
-                if let Ok(mut client_msg) = serde_json::from_str::<serde_json::Value>(&text) {
-                    // Check if this is already in OpenClaw format (has "method" field)
-                    if let Some(method) = client_msg.get("method").and_then(|m| m.as_str()) {
-                        // Check if it's a chat.send message that needs fixing
-                        if method == "chat.send" {
-                            // Fix sessionKey if it's in the short format
-                            if let Some(params) = client_msg.get_mut("params") {
-                                if let Some(session_key) = params.get("sessionKey").and_then(|k| k.as_str()) {
-                                    if session_key == "main" || session_key == "dev" {
-                                        params["sessionKey"] = serde_json::json!("agent:dev:main");
-                                    }
-                                }
-
-                                // Add idempotencyKey if missing
-                                if params.get("idempotencyKey").is_none() {
-                                    request_id_counter += 1;
-                                    let idempotency_key = format!("idem-{}-{}", chrono::Utc::now().timestamp(), request_id_counter);
-                                    params["idempotencyKey"] = serde_json::json!(idempotency_key);
-                                }
-
-                                // Remove "deliver" field if present (not an OpenClaw param)
-                                if let Some(_deliver) = params.get("deliver") {
-                                    let mut params_obj = params.as_object().unwrap().clone();
-                                    params_obj.remove("deliver");
-                                    client_msg["params"] = serde_json::json!(params_obj);
-                                }
-                            }
-
-                            let fixed_msg = client_msg.to_string();
-                            tracing::info!("Fixed chat.send message: {}", fixed_msg);
-                            if agent_tx.send(TungsteniteMessage::Text(fixed_msg)).await.is_err() {
-                                break;
-                            }
-                        } else {
-                            // Other OpenClaw methods - forward as-is
-                            tracing::debug!("Forwarding OpenClaw message: {}", text);
-                            if agent_tx.send(TungsteniteMessage::Text(text)).await.is_err() {
-                                break;
-                            }
-                        }
-                    } else {
-                        // Check if this is a client format message with "content"
-                        let content = client_msg.get("content")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-
-                        // Only translate messages that have actual content to send
-                        if !content.is_empty() {
-                            // Persist user message
-                            let user_msg = crate::types::ConversationMessage {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                session_id: session_id.clone(),
-                                role: "user".to_string(),
-                                content: content.to_string(),
-                                agent_id: agent_id.clone(),
-                                timestamp: chrono::Utc::now().to_rfc3339(),
-                                metadata: Default::default(),
-                            };
-                            if let Err(e) = append_conversation_message(&agent_name, &user_msg).await {
-                                tracing::warn!("Failed to persist user message: {}", e);
-                            }
-
-                            let session = client_msg.get("session")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("main");
-
-                            // Generate unique IDs
-                            request_id_counter += 1;
-                            let req_id = format!("req-{}", request_id_counter);
-                            let idempotency_key = format!("idem-{}-{}", chrono::Utc::now().timestamp(), request_id_counter);
-
-                            // Translate to OpenClaw chat.send format
-                            let openclaw_msg = serde_json::json!({
-                                "type": "req",
-                                "id": req_id,
-                                "method": "chat.send",
-                                "params": {
-                                    "sessionKey": format!("agent:dev:{}", session),
-                                    "message": content,
-                                    "idempotencyKey": idempotency_key
-                                }
-                            });
-
-                            tracing::info!("Translated client message to OpenClaw format: {}", openclaw_msg.to_string());
-
-                            if agent_tx.send(TungsteniteMessage::Text(openclaw_msg.to_string())).await.is_err() {
-                                break;
-                            }
-                        } else {
-                            // Skip control messages or empty messages
-                            let msg_type = client_msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                            tracing::debug!("Skipping non-chat message: type='{}', content='{}'", msg_type, content);
-                        }
-                    }
-                } else {
-                    // If parsing fails, forward as-is (might already be OpenClaw format)
-                    tracing::warn!("Failed to parse client message, forwarding as-is: {}", text);
-                    if agent_tx.send(TungsteniteMessage::Text(text)).await.is_err() {
-                        break;
-                    }
-                }
-            }
-            Ok(Message::Close(_)) => {
-                let _ = agent_tx.send(TungsteniteMessage::Close(None)).await;
-                break;
-            }
-            Err(_) => {
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    // Clean up
-    agent_to_client.abort();
-}
-
-// === Teams ===
-
-pub async fn list_teams(State(state): State<Arc<AppState>>) -> Json<Vec<crate::types::Team>> {
-    Json(state.teams.list().await)
-}
-
-pub async fn get_team(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<crate::types::Team>, (StatusCode, String)> {
-    state
-        .teams
-        .get(&id)
-        .await
-        .map(Json)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Team not found".to_string()))
-}
-
-/// Classify a message to determine which agent should handle it
-pub async fn classify_message(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(req): Json<ClassifyRequest>,
-) -> Result<Json<ClassificationResult>, (StatusCode, String)> {
-    let team = state
-        .teams
-        .get(&id)
-        .await
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    let router = crate::teams::Router::new(team);
-    let result = router.classify(&req.message);
-
-    Ok(Json(result))
-}
-
-#[derive(Debug, serde::Deserialize)]
-pub struct ClassifyRequest {
-    pub message: String,
-}
-
-// === Conversation Persistence (JSONL) ===
-
-/// Get the path to a session's JSONL file
-fn get_session_file(agent_name: &str, session_id: &str) -> std::path::PathBuf {
-    std::path::PathBuf::from(format!(
-        "./data/agents/{}/conversations/{}.jsonl",
-        agent_name, session_id
-    ))
-}
-
-/// Append a conversation message to the session's JSONL file
-pub async fn append_conversation_message(
-    agent_name: &str,
-    msg: &crate::types::ConversationMessage,
-) -> anyhow::Result<()> {
-    use std::io::Write;
-    let path = get_session_file(agent_name, &msg.session_id);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
-    let line = serde_json::to_string(msg)?;
-    writeln!(file, "{}", line)?;
-    Ok(())
-}
-
-/// Load all messages from a session's JSONL file
-pub fn load_conversation_messages(
-    agent_name: &str,
-    session_id: &str,
-) -> anyhow::Result<Vec<crate::types::ConversationMessage>> {
-    use std::io::BufRead;
-    let path = get_session_file(agent_name, session_id);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let file = std::fs::File::open(&path)?;
-    let reader = std::io::BufReader::new(file);
-    let mut messages = Vec::new();
-    for line in reader.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<crate::types::ConversationMessage>(&line) {
-            Ok(msg) => messages.push(msg),
-            Err(e) => tracing::warn!("Skipping malformed JSONL line: {}", e),
-        }
-    }
-    Ok(messages)
-}
-
-/// List all conversation sessions for an agent
-fn list_sessions(agent_name: &str) -> anyhow::Result<Vec<crate::types::ConversationSession>> {
-    use std::io::BufRead;
-    let dir = std::path::PathBuf::from(format!("./data/agents/{}/conversations", agent_name));
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut sessions = Vec::new();
-    for entry in std::fs::read_dir(&dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
-            let session_id = path
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let file = std::fs::File::open(&path)?;
-            let reader = std::io::BufReader::new(file);
-            let mut first_ts = String::new();
-            let mut last_ts = String::new();
-            let mut agent_id = String::new();
-            let mut count = 0u64;
-            for line in reader.lines() {
-                let line = line?;
-                if line.trim().is_empty() {
-                    continue;
-                }
-                if let Ok(msg) = serde_json::from_str::<crate::types::ConversationMessage>(&line) {
-                    if count == 0 {
-                        first_ts = msg.timestamp.clone();
-                        agent_id = msg.agent_id.clone();
-                    }
-                    last_ts = msg.timestamp.clone();
-                    count += 1;
-                }
-            }
-            if count > 0 {
-                sessions.push(crate::types::ConversationSession {
-                    id: session_id,
-                    agent_id,
-                    created_at: first_ts,
-                    last_message_at: last_ts,
-                    message_count: count,
-                });
-            }
-        }
-    }
-    sessions.sort_by(|a, b| b.last_message_at.cmp(&a.last_message_at));
-    Ok(sessions)
-}
-
-// === Persistent Data Volume Setup ===
-
-/// Setup persistent data volume for an agent
-/// Creates host directories and adds /data volume mount to agent config
-async fn setup_persistent_data_volume(
-    agent_name: &str,
-    agent_id: &str,
-    config: &mut crate::types::AgentConfig,
-    starter_system_prompt: Option<&str>,
-) -> anyhow::Result<()> {
-    use tokio::fs as async_fs;
-
-    // Get current working directory for host path
-    let cwd = std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-
-    // Create agent-specific data directory
-    let agent_data_dir = cwd
-        .join("data")
-        .join("agents")
-        .join(agent_name);
-
-    // Convert to forward slashes for Docker
-    let agent_data_dir_str = agent_data_dir.display().to_string().replace('\\', "/");
-
-    // Create subdirectories
-    let conversations_dir = agent_data_dir.join("conversations");
-    let memory_dir = agent_data_dir.join("memory");
-    let knowledge_dir = agent_data_dir.join("knowledge");
-    let cache_dir = agent_data_dir.join("cache");
-    let identity_dir = agent_data_dir.join("identity");
-
-    async_fs::create_dir_all(&conversations_dir).await
-        .map_err(|e| anyhow::anyhow!("Failed to create conversations directory: {}", e))?;
-    async_fs::create_dir_all(&memory_dir).await
-        .map_err(|e| anyhow::anyhow!("Failed to create memory directory: {}", e))?;
-    async_fs::create_dir_all(&knowledge_dir).await
-        .map_err(|e| anyhow::anyhow!("Failed to create knowledge directory: {}", e))?;
-    async_fs::create_dir_all(&cache_dir).await
-        .map_err(|e| anyhow::anyhow!("Failed to create cache directory: {}", e))?;
-    async_fs::create_dir_all(&identity_dir).await
-        .map_err(|e| anyhow::anyhow!("Failed to create identity directory: {}", e))?;
-
-    // Seed system_prompt.md from template if not already present.
-    // The teacher edits this file directly to change the agent's voice.
-    let system_prompt_path = identity_dir.join("system_prompt.md");
-    if !system_prompt_path.exists() {
-        let starter = starter_system_prompt
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                format!(
-                    "# Identité de l'agent\n\n\
-                    Tu es {}, un assistant utile.\n\n\
-                    Modifiez ce fichier pour personnaliser le comportement, le ton et l'expertise de l'agent.\n\
-                    Les changements prennent effet au prochain redémarrage du conteneur.\n",
-                    agent_name
-                )
-            });
-        async_fs::write(&system_prompt_path, starter).await
-            .map_err(|e| anyhow::anyhow!("Failed to seed system_prompt.md: {}", e))?;
-    }
-
-    // Write a small README explaining the identity convention
-    let identity_readme = identity_dir.join("README.md");
-    if !identity_readme.exists() {
-        let readme = "# Identity Volume\n\n\
-            This folder is mounted **read-only** at `/identity` inside the agent container.\n\
-            The teacher (or whoever owns this agent) edits these files to shape the agent's voice.\n\n\
-            ## Convention\n\n\
-            - `system_prompt.md` — required. The agent's core instructions.\n\
-            - `examples.md` — optional. Few-shot examples.\n\
-            - `boundaries.md` — optional. Refusal rules / topic limits.\n\
-            - `knowledge/` — optional. Files for retrieval (future).\n\n\
-            Changes take effect when the agent container restarts.\n";
-        async_fs::write(&identity_readme, readme).await.ok();
-    }
-
-    // Create README in data directory
-    let readme_content = format!(
-        "# Agent Data Directory\n\n\
-        Agent: {}\n\
-        Agent ID: {}\n\n\
-        ## Directory Structure\n\
-        - `/conversations` - Chat history with users\n\
-        - `/memory` - Agent's working memory and state\n\
-        - `/knowledge` - Learned information over time\n\
-        - `/cache` - Temporary but reusable data\n\n\
-        This data persists across container restarts and role changes.\n",
-        agent_name, agent_id
-    );
-
-    async_fs::write(
-        agent_data_dir.join("README.md"),
-        readme_content
-    ).await
-        .map_err(|e| anyhow::anyhow!("Failed to create README: {}", e))?;
-
-    // Check if agent already has a /data volume mount
-    let has_data_volume = config.volumes.iter().any(|v| v.target == "/data");
-
-    if !has_data_volume {
-        // Add /data volume mount to agent config
-        config.volumes.push(crate::types::VolumeMount {
-            source: agent_data_dir_str.clone(),
-            target: "/data".to_string(),
-            read_only: false,
-        });
-
-        tracing::info!(
-            "Added persistent /data volume to agent {} (mounted from {})",
-            agent_name,
-            agent_data_dir_str
-        );
-    } else {
-        tracing::info!(
-            "Agent {} already has /data volume mounted",
-            agent_name
-        );
-    }
-
-    // Mount identity folder read-only at /identity. The agent reads this on
-    // startup; teachers edit the files directly via shared folder / Syncthing.
-    let identity_dir_str = identity_dir.display().to_string().replace('\\', "/");
-    let has_identity_volume = config.volumes.iter().any(|v| v.target == "/identity");
-    if !has_identity_volume {
-        config.volumes.push(crate::types::VolumeMount {
-            source: identity_dir_str.clone(),
-            target: "/identity".to_string(),
-            read_only: true,
-        });
-        tracing::info!(
-            "Added read-only /identity volume to agent {} (mounted from {})",
-            agent_name,
-            identity_dir_str
-        );
-    }
-
-    Ok(())
-}
-
-// === Team Role Assignments ===
-
-/// Setup role-specific volume mount for an agent
-async fn setup_role_volume(
-    state: &Arc<AppState>,
-    team_id: &str,
-    intent: &str,
-    agent_id: &str,
-) -> anyhow::Result<()> {
-    use tokio::fs as async_fs;
-
-    // Get team and role information
-    let team = state.teams.get_team(team_id).await
-        .ok_or_else(|| anyhow::anyhow!("Team not found: {}", team_id))?;
-
-    let role_info = team.agents.get(intent)
-        .ok_or_else(|| anyhow::anyhow!("Role not found: {}", intent))?;
-
-    // Extract role name from description (e.g., "Design Assistant - ..." -> "Design Assistant")
-    let role_name = role_info.description
-        .split(" - ")
-        .next()
-        .unwrap_or(intent);
-
-    // Create volume directory structure using current directory for Docker host mount
-    let cwd = std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let base_path = cwd.join("teams");
-    let role_path = base_path.join(team_id).join("roles").join(intent);
-
-    // Create directories
-    async_fs::create_dir_all(&role_path).await?;
-    async_fs::create_dir_all(role_path.join("skills")).await?;
-    async_fs::create_dir_all(role_path.join("knowledge")).await?;
-
-    // Create whoami.md
-    let whoami_content = format!(
-        "# Who Am I?\n\n\
-         You are **{}**\n\
-         Team: **{}**\n\
-         Role ID: `{}`\n\
-         Team ID: `{}`\n\n\
-         ## Your Purpose\n\
-         {}\n\n\
-         ## Your Context\n\
-         You are part of a specialized team. Work collaboratively with other team members \
-         to achieve the team's goals. Each team member has a specific role - focus on yours \
-         while being aware of the bigger picture.\n\n\
-         Your agent ID is: `{}`\n",
-        role_name,
-        team.name,
-        intent,
-        team_id,
-        role_info.description,
-        agent_id
-    );
-
-    async_fs::write(
-        role_path.join("whoami.md"),
-        whoami_content
-    ).await?;
-
-    // Create instructions.md
-    let instructions_content = format!(
-        "# Role Instructions: {}\n\n\
-         ## Overview\n\
-         {}\n\n\
-         ## Key Responsibilities\n\
-         - Focus on your area of expertise\n\
-         - Collaborate with other team members\n\
-         - Ask for clarification when needed\n\
-         - Stay within your scope - don't try to do others' jobs\n\n\
-         ## How to Work with This Team\n\
-         1. **Be proactive** - Anticipate needs in your area\n\
-         2. **Communicate clearly** - Explain your reasoning\n\
-         3. **Ask for help** - When something is outside your expertise\n\
-         4. **Stay focused** - Don't get distracted by other team members' tasks\n\n\
-         ## Example Tasks\n\
-         When given a request, first determine if it's in your area. If yes, handle it. \
-         If not, suggest which team member would be better suited.\n",
-        role_name,
-        role_info.description
-    );
-
-    async_fs::write(
-        role_path.join("instructions.md"),
-        instructions_content
-    ).await?;
-
-    tracing::info!(
-        "Role volume created at {} for agent {} (team: {}, role: {})",
-        role_path.display(),
-        agent_id,
-        team_id,
-        intent
-    );
-
-    // Now update the agent's configuration to include the role volume mount
-    // and restart the container to pick up the new mount
-    let mut containers = state.containers.write().await;
-
-    let agent = containers
-        .iter_mut()
-        .find(|a| a.id == agent_id)
-        .ok_or_else(|| anyhow::anyhow!("Agent not found: {}", agent_id))?;
-
-    // Add or update role volume to agent's config
-    // Convert path to use forward slashes for Docker (Windows uses backslashes)
-    let role_volume_source = role_path.display().to_string().replace('\\', "/");
-    let role_volume_str = format!("{}:/role", role_volume_source);
-
-    // Check if this volume is already in the config
-    let existing_role_volume = agent.config.volumes.iter().position(|v| v.target == "/role");
-
-    if let Some(pos) = existing_role_volume {
-        // Update existing role volume mount to point to new role directory
-        let old_source = agent.config.volumes[pos].source.clone();
-        agent.config.volumes[pos].source = role_volume_source.clone();
-
-        // Persist the updated agent config
-        if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
-            tracing::warn!("Failed to persist agent volume config: {}", e);
-        }
-
-        tracing::info!(
-            "Updated role volume mount for agent {}: {} -> {} (team: {}, role: {})",
-            agent_id,
-            old_source,
-            role_volume_str,
-            team_id,
-            intent
-        );
-    } else {
-        // Add new role volume mount
-        agent.config.volumes.push(crate::types::VolumeMount {
-            source: role_volume_source.clone(),
-            target: "/role".to_string(),
-            read_only: false,
-        });
-
-        // Persist the updated agent config
-        if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
-            tracing::warn!("Failed to persist agent volume config: {}", e);
-        }
-
-        tracing::info!(
-            "Added role volume mount to agent {} config: {} (team: {}, role: {})",
-            agent_id,
-            role_volume_str,
-            team_id,
-            intent
-        );
-    }
-
-    // Check if container is currently running
-    let was_running = agent.status == crate::types::AgentStatus::Running;
-
-    // Choose the right runtime based on agent's runtime setting
-    let runtime: &dyn crate::container::ContainerRuntime = if agent.runtime.as_deref() == Some("exo") {
-        &state.exo_runtime
-    } else {
-        &state.runtime
-    };
-
-    // Stop the container if it's running
-    if was_running {
-        // Check if container exists
-        let container_exists = runtime.container_exists(&agent.name).await.unwrap_or(false);
-
-        if container_exists {
-            tracing::info!("Stopping agent {} to apply role volume mount", agent_id);
-
-            // Stop the container
-            if let Err(e) = runtime.stop_container(&agent.name).await {
-                tracing::warn!("Failed to stop container {}: {}", agent.name, e);
-            } else {
-                agent.status = crate::types::AgentStatus::Stopped;
-
-                // Delete the old container so it can be recreated with new volume mounts
-                if let Err(e) = runtime.delete_container(&agent.name).await {
-                    tracing::warn!("Failed to delete container {}: {}", agent.name, e);
-                }
-            }
-        }
-    }
-
-    // Start the agent again (will create container with new volume mounts)
-    tracing::info!("Starting agent {} with role volume mount", agent_id);
-
-    // The container will be created with the updated config that includes the role volume
-    let container_exists = runtime.container_exists(&agent.name).await.unwrap_or(false);
-
-    if !container_exists {
-        // Create the container with updated config
-        let new_id = runtime
-            .create_container(&agent.name, &agent.config)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to create container: {}", e))?;
-
-        tracing::info!("Created container {} with role volume mount", new_id);
-    }
-
-    // Start the container
-    runtime
-        .start_container(&agent.name)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to start container: {}", e))?;
-
-    agent.status = crate::types::AgentStatus::Running;
-
-    // Persist status change
-    if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
-        tracing::warn!("Failed to persist agent status: {}", e);
-    }
-
-    tracing::info!(
-        "Successfully restarted agent {} with role volume mounted at /role",
-        agent_id
-    );
-
-    Ok(())
-}
-
-/// Assign an agent to a team role
-pub async fn assign_team_role(
-    State(state): State<Arc<AppState>>,
-    Path((team_id, intent)): Path<(String, String)>,
-    Json(req): Json<crate::types::AssignRoleRequest>,
-) -> Result<Json<crate::types::TeamRoleAssignment>, (StatusCode, String)> {
-    // First, assign the role
-    let assignment = state
-        .teams
-        .assign_role(&team_id, &intent, &req.agent_id, &req.assigned_by)
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-
-    // Then, set up role-specific volume mount
-    if let Err(e) = setup_role_volume(&state, &team_id, &intent, &req.agent_id).await {
-        tracing::warn!("Failed to setup role volume for {}: {}", req.agent_id, e);
-        // Don't fail the assignment if volume setup fails
-    }
-
-    Ok(Json(assignment))
-}
-
-/// Remove an agent from a team role
-pub async fn remove_team_role(
-    State(state): State<Arc<AppState>>,
-    Path((team_id, intent)): Path<(String, String)>,
-) -> Result<Json<crate::types::TeamRoleAssignment>, (StatusCode, String)> {
-    // Get the current assignment before removing
-    let assignment = state
-        .teams
-        .get_role_assignment(&team_id, &intent)
-        .await
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Role assignment not found".to_string()))?;
-
-    let agent_id = assignment.agent_id.clone();
-
-    // Remove the role assignment
-    state.teams.remove_role(&team_id, &intent).await;
-
-    // Remove the role volume mount from the agent's config
-    let mut containers = state.containers.write().await;
-
-    let agent = containers
-        .iter_mut()
-        .find(|a| a.id == agent_id)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Agent not found: {}", agent_id)))?;
-
-    // Remove the role volume mount (find by target path "/role")
-    let original_count = agent.config.volumes.len();
-    agent.config.volumes.retain(|v| v.target != "/role");
-    let removed_count = original_count - agent.config.volumes.len();
-
-    if removed_count > 0 {
-        // Persist the updated agent config
-        if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
-            tracing::warn!("Failed to persist agent volume config: {}", e);
-        }
-
-        tracing::info!(
-            "Removed role volume mount from agent {} config",
-            agent_id
-        );
-
-        // Restart the agent to apply the changes
-        let was_running = agent.status == crate::types::AgentStatus::Running;
-
-        // Choose the right runtime based on agent's runtime setting
-        let runtime: &dyn crate::container::ContainerRuntime = if agent.runtime.as_deref() == Some("exo") {
-            &state.exo_runtime
-        } else {
-            &state.runtime
-        };
-
-        // Stop the container if it's running
-        if was_running {
-            let container_exists = runtime.container_exists(&agent_id).await.unwrap_or(false);
-
-            if container_exists {
-                tracing::info!("Stopping agent {} to remove role volume mount", agent_id);
-
-                if let Err(e) = runtime.stop_container(&agent_id).await {
-                    tracing::warn!("Failed to stop container {}: {}", agent_id, e);
-                } else {
-                    agent.status = crate::types::AgentStatus::Stopped;
-
-                    // Delete the old container so it can be recreated without the volume mount
-                    if let Err(e) = runtime.delete_container(&agent_id).await {
-                        tracing::warn!("Failed to delete container {}: {}", agent_id, e);
-                    }
-                }
-            }
-        }
-
-        // Start the agent again (will create container without the role volume mount)
-        tracing::info!("Starting agent {} without role volume mount", agent_id);
-
-        // Create the container with updated config
-        runtime
-            .create_container(&agent.name, &agent.config)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create container: {}", e)))?;
-
-        // Start the container
-        runtime
-            .start_container(&agent_id)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to start container: {}", e)))?;
-
-        agent.status = crate::types::AgentStatus::Running;
-
-        // Persist status change
-        if let Err(e) = crate::storage::upsert_agent(&crate::storage::to_stored_agent(agent)) {
-            tracing::warn!("Failed to persist agent status: {}", e);
-        }
-
-        tracing::info!(
-            "Successfully restarted agent {} without role volume mount",
-            agent_id
-        );
-    }
-
-    Ok(Json(assignment))
-}
-
-/// Get the current assignment for a specific role
-pub async fn get_team_role(
-    State(state): State<Arc<AppState>>,
-    Path((team_id, intent)): Path<(String, String)>,
-) -> Result<Json<crate::types::TeamRoleAssignment>, (StatusCode, String)> {
-    state
-        .teams
-        .get_role_assignment(&team_id, &intent)
-        .await
-        .map(Json)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Role assignment not found".to_string()))
-}
-
-/// List all role assignments for a team
-pub async fn list_team_roles(
-    State(state): State<Arc<AppState>>,
-    Path(team_id): Path<String>,
-) -> Json<Vec<crate::types::TeamRoleAssignment>> {
-    Json(state.teams.list_team_assignments(&team_id).await)
-}
-
-/// Resolve the actual agent ID for a team role
-pub async fn resolve_team_role(
-    State(state): State<Arc<AppState>>,
-    Path((team_id, intent)): Path<(String, String)>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let agent_id = state
-        .teams
-        .resolve_agent(&team_id, &intent)
-        .await
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Role not found".to_string()))?;
-
-    Ok(Json(serde_json::json!({
-        "team_id": team_id,
-        "intent": intent,
-        "agent_id": agent_id
-    })))
-}
-
-/// WebSocket endpoint for team chat with routing
-///
-/// Authentication: Pass JWT token via `?token=<jwt>` query parameter
-pub async fn team_chat_websocket(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Query(params): Query<HashMap<String, String>>,
-    ws: WebSocketUpgrade,
-) -> Result<Response, (StatusCode, String)> {
-    // Validate JWT token from query parameter
-    let token = params.get("token").ok_or((
-        StatusCode::UNAUTHORIZED,
-        "Missing authentication token".to_string(),
-    ))?;
-
-    let auth = state.auth.read().await;
-    auth.validate_token(token)
-        .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {}", e)))?;
     drop(auth);
 
-    // Check if team exists
-    let team = state
-        .teams
-        .get(&id)
-        .await
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    let team_id = team.id.clone();
-    let team_name = team.name.clone();
-
-    Ok(ws.on_upgrade(move |socket| handle_team_chat_stream(socket, state, team_id, team_name)))
-}
-
-async fn handle_team_chat_stream(
-    socket: WebSocket,
-    state: Arc<AppState>,
-    team_id: String,
-    team_name: String,
-) {
-    use axum::extract::ws::Message;
-    use futures_util::{SinkExt, StreamExt};
-
-    let (mut tx, mut rx) = socket.split();
-
-    // Send welcome message
-    let welcome = serde_json::json!({
-        "role": "system",
-        "content": format!("Connected to {} team. I'll route your message to the right specialist.", team_name),
-        "timestamp": chrono::Utc::now().timestamp()
-    });
-
-    if tx.send(Message::Text(welcome.to_string())).await.is_err() {
-        return;
-    }
-
-    // Handle incoming messages
-    while let Some(msg_result) = rx.next().await {
-        match msg_result {
-            Ok(Message::Text(text)) => {
-                if let Ok(msg_data) = serde_json::from_str::<serde_json::Value>(&text) {
-                    let user_content = msg_data
-                        .get("content")
-                        .and_then(|c| c.as_str())
-                        .unwrap_or(&text);
-
-                    // Get team and classify message
-                    let response = if let Some(team) = state.teams.get(&team_id).await {
-                        let router = crate::teams::Router::new(team.clone());
-                        let classification = router.classify(user_content);
-
-                        if classification.needs_clarification {
-                            // Ask for clarification
-                            let clarification = router.generate_clarification();
-                            serde_json::json!({
-                                "role": "assistant",
-                                "content": clarification,
-                                "classification": classification,
-                                "timestamp": chrono::Utc::now().timestamp()
-                            })
-                        } else if let Some(agent) = router.get_target_agent(&classification) {
-                            // Route to agent
-                            let ack = router.get_routing_ack(&agent.description);
-
-                            // Send routing acknowledgment
-                            let ack_msg = serde_json::json!({
-                                "role": "assistant",
-                                "content": ack,
-                                "classification": classification.clone(),
-                                "routing_to": agent.agent,
-                                "timestamp": chrono::Utc::now().timestamp()
-                            });
-
-                            if tx.send(Message::Text(ack_msg.to_string())).await.is_err() {
-                                break;
-                            }
-
-                            // Look up agent's gateway port and token
-                            let agent_info = {
-                                let containers = state.containers.read().await;
-                                containers.iter()
-                                    .find(|a| a.id == agent.agent || a.name == agent.agent)
-                                    .filter(|a| a.status == crate::types::AgentStatus::Running)
-                                    .map(|a| {
-                                        let token = a.config.env_vars.get("GATEWAY_TOKEN")
-                                            .or_else(|| a.config.env_vars.get("OPENCLAW_GATEWAY_TOKEN"))
-                                            .cloned();
-                                        (a.gateway_port, token, a.name.clone())
-                                    })
-                            };
-
-                            if let Some((port, token, agent_name)) = agent_info {
-                                match crate::agent_comms::send_message_to_agent(
-                                    port,
-                                    token.as_deref(),
-                                    user_content,
-                                    60,
-                                ).await {
-                                    Ok(response_text) => {
-                                        // Persist to team conversation log
-                                        let session_id = format!("team-{}-{}", team_id, agent_name);
-                                        let user_msg = crate::types::ConversationMessage {
-                                            id: uuid::Uuid::new_v4().to_string(),
-                                            session_id: session_id.clone(),
-                                            role: "user".to_string(),
-                                            content: user_content.to_string(),
-                                            agent_id: agent_name.clone(),
-                                            timestamp: chrono::Utc::now().to_rfc3339(),
-                                            metadata: Default::default(),
-                                        };
-                                        let _ = append_conversation_message(&agent_name, &user_msg).await;
-
-                                        let assistant_msg = crate::types::ConversationMessage {
-                                            id: uuid::Uuid::new_v4().to_string(),
-                                            session_id,
-                                            role: "assistant".to_string(),
-                                            content: response_text.clone(),
-                                            agent_id: agent_name.clone(),
-                                            timestamp: chrono::Utc::now().to_rfc3339(),
-                                            metadata: Default::default(),
-                                        };
-                                        let _ = append_conversation_message(&agent_name, &assistant_msg).await;
-
-                                        serde_json::json!({
-                                            "role": "assistant",
-                                            "content": response_text,
-                                            "from_agent": agent.agent,
-                                            "classification": classification,
-                                            "timestamp": chrono::Utc::now().timestamp()
-                                        })
-                                    }
-                                    Err(e) => {
-                                        serde_json::json!({
-                                            "role": "assistant",
-                                            "content": format!("Failed to get response from {}: {}", agent.description, e),
-                                            "from_agent": agent.agent,
-                                            "error": true,
-                                            "timestamp": chrono::Utc::now().timestamp()
-                                        })
-                                    }
-                                }
-                            } else {
-                                serde_json::json!({
-                                    "role": "assistant",
-                                    "content": format!("Agent {} is not running. Please start it first.", agent.agent),
-                                    "from_agent": agent.agent,
-                                    "error": true,
-                                    "timestamp": chrono::Utc::now().timestamp()
-                                })
-                            }
-                        } else {
-                            // No matching agent found
-                            serde_json::json!({
-                                "role": "assistant",
-                                "content": "I couldn't determine which specialist to route your message to. Please try rephrasing.",
-                                "classification": classification,
-                                "timestamp": chrono::Utc::now().timestamp()
-                            })
-                        }
-                    } else {
-                        serde_json::json!({
-                            "role": "assistant",
-                            "content": "Team configuration not found.",
-                            "timestamp": chrono::Utc::now().timestamp()
-                        })
-                    };
-
-                    if tx.send(Message::Text(response.to_string())).await.is_err() {
-                        break;
-                    }
-                }
-            }
-            Ok(Message::Close(_)) => {
-                break;
-            }
-            Err(_) => {
-                break;
-            }
-            _ => {}
-        }
-    }
-}
-
-// === Volume Management ===
-
-pub async fn list_volumes(State(state): State<Arc<AppState>>) -> Json<Vec<Volume>> {
-    let volumes = state.volumes.read().await;
-    Json(volumes.clone())
-}
-
-pub async fn get_volume(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<Volume>, (StatusCode, String)> {
-    let volumes = state.volumes.read().await;
-    volumes
-        .iter()
-        .find(|v| v.id == id)
-        .map(|v| Json(v.clone()))
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Volume not found".to_string()))
-}
-
-pub async fn create_volume(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateVolumeRequest>,
-) -> Result<Json<Volume>, (StatusCode, String)> {
-    // Validate name
-    if let Err(e) = validation::validate_container_name(&req.name) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!("Invalid volume name: {}", e),
-        ));
-    }
-
-    let mut volumes = state.volumes.write().await;
-
-    // Check for duplicate name
-    if volumes.iter().any(|v| v.name == req.name) {
-        return Err((
-            StatusCode::CONFLICT,
-            "Volume with this name already exists".to_string(),
-        ));
-    }
-
-    // Generate ID
-    let id = format!("vol-{}", uuid::Uuid::new_v4());
-
-    // Determine host path
-    let host_path = if let Some(ref path) = req.host_path {
-        // Validate the path exists
-        if !std::path::Path::new(path).exists() {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("Host path does not exist: {}", path),
-            ));
-        }
-        Some(path.clone())
-    } else {
-        // Create managed volume directory
-        let vol_dir = state.data_dir.join("volumes").join(&id);
-        if let Err(e) = std::fs::create_dir_all(&vol_dir) {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to create volume directory: {}", e),
-            ));
-        }
-        Some(vol_dir.to_string_lossy().to_string())
-    };
-
-    let volume = Volume {
-        id: id.clone(),
-        name: req.name,
-        description: req.description,
-        host_path,
-        default_target: req.default_target,
-        read_only: req.read_only,
-        size_mb: req.size_mb,
-        tags: req.tags,
-        created_at: chrono::Utc::now().to_rfc3339(),
-        attached_agents: vec![],
-    };
-
-    volumes.push(volume.clone());
-    crate::save_volumes(&state.data_dir, &volumes);
-
-    tracing::info!("Created volume {} ({})", volume.name, volume.id);
-    Ok(Json(volume))
-}
-
-pub async fn update_volume(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(req): Json<UpdateVolumeRequest>,
-) -> Result<Json<Volume>, (StatusCode, String)> {
-    let mut volumes = state.volumes.write().await;
-
-    // Check for duplicate name first if name is being updated
-    if let Some(ref name) = req.name {
-        if volumes.iter().any(|v| v.id != id && v.name == *name) {
-            return Err((
-                StatusCode::CONFLICT,
-                "Volume with this name already exists".to_string(),
-            ));
-        }
-        if let Err(e) = validation::validate_container_name(name) {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("Invalid volume name: {}", e),
-            ));
-        }
-    }
-
-    let volume = volumes
-        .iter_mut()
-        .find(|v| v.id == id)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Volume not found".to_string()))?;
-
-    if let Some(name) = req.name {
-        volume.name = name;
-    }
-    if let Some(desc) = req.description {
-        volume.description = Some(desc);
-    }
-    if let Some(target) = req.default_target {
-        volume.default_target = target;
-    }
-    if let Some(ro) = req.read_only {
-        volume.read_only = ro;
-    }
-    if let Some(tags) = req.tags {
-        volume.tags = tags;
-    }
-
-    let updated = volume.clone();
-    crate::save_volumes(&state.data_dir, &volumes);
-
-    Ok(Json(updated))
-}
-
-pub async fn delete_volume(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    let mut volumes = state.volumes.write().await;
-
-    let volume = volumes
-        .iter()
-        .find(|v| v.id == id)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Volume not found".to_string()))?;
-
-    // Check if volume is attached to any agents
-    if !volume.attached_agents.is_empty() {
-        return Err((
-            StatusCode::CONFLICT,
-            format!("Volume is attached to agents: {:?}", volume.attached_agents),
-        ));
-    }
-
-    let idx = volumes.iter().position(|v| v.id == id).unwrap();
-    let removed = volumes.remove(idx);
-
-    crate::save_volumes(&state.data_dir, &volumes);
-
-    // Optionally delete managed volume directory
-    if let Some(ref path) = removed.host_path {
-        if path.starts_with(&state.data_dir.to_string_lossy().to_string()) {
-            // This is a managed volume, delete the directory
-            if let Err(e) = std::fs::remove_dir_all(path) {
-                tracing::warn!("Failed to delete volume directory: {}", e);
-            }
-        }
-    }
-
-    tracing::info!("Deleted volume {}", id);
-    Ok(StatusCode::NO_CONTENT)
-}
-
-// ============================================================================
-// SERVICE DISCOVERY & TAILSCALE IP MANAGEMENT
-// ============================================================================
-
-/// Get an agent's Tailscale IP address
-pub async fn get_agent_tailscale_ip(
-    Path(id): Path<String>,
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Option<String>>, (StatusCode, String)> {
-    let containers = state.containers.read().await;
-
-    let agent = containers
-        .iter()
-        .find(|a| a.id == id)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
-
-    Ok(Json(agent.tailscale_ip.clone()))
-}
-
-/// Update an agent's Tailscale IP address
-/// Called automatically when an agent connects to Tailscale
-pub async fn update_agent_tailscale_ip(
-    Path(id): Path<String>,
-    State(state): State<Arc<AppState>>,
-    Json(ip): Json<String>,
-) -> Result<Json<Option<String>>, (StatusCode, String)> {
-    let mut containers = state.containers.write().await;
-
-    let agent = containers
-        .iter_mut()
-        .find(|a| a.id == id)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
-
-    agent.tailscale_ip = Some(ip.clone());
-
-    // Convert to StoredAgent format and persist
-    let _status = format!("{:?}", agent.status);
-    let _config = agent.config.clone();
-    let _runtime = agent.runtime.clone();
-    let _gateway_port = agent.gateway_port;
-
-    // Need to drop the mutable borrow before creating the stored_agents vector
-    let agent_id = agent.id.clone();
-    let _agent_name = agent.name.clone();
-    let agent_tailscale_ip = agent.tailscale_ip.clone();
-
-    // Now convert all containers to StoredAgent format
-    let stored_agents: Vec<storage::StoredAgent> = containers
-        .iter()
-        .map(|c| storage::StoredAgent {
-            id: c.id.clone(),
-            name: c.name.clone(),
-            status: format!("{:?}", c.status),
-            config: c.config.clone(),
-            created_at: chrono::Utc::now().to_rfc3339(),
-            updated_at: chrono::Utc::now().to_rfc3339(),
-            runtime: c.runtime.clone(),
-            gateway_port: Some(c.gateway_port),
-            tailscale_ip: c.tailscale_ip.clone(),
-        })
-        .collect();
-
-    if let Err(e) = storage::save_agents(&stored_agents) {
-        tracing::error!("Failed to save agents: {}", e);
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save agent data: {}", e)));
-    }
-
-    tracing::info!("Updated agent {} Tailscale IP to {}", agent_id, ip);
-    Ok(Json(agent_tailscale_ip))
-}
-
-/// List all agents with their Tailscale IPs (for service discovery)
-pub async fn list_agents_with_tailscale(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<TailscaleQueryParams>,
-) -> Result<Json<Vec<AgentContainer>>, (StatusCode, String)> {
-    let containers = state.containers.read().await;
-
-    let agents: Vec<AgentContainer> = if params.only_with_tailscale.unwrap_or(false) {
-        containers
-            .iter()
-            .filter(|a| a.tailscale_ip.is_some())
-            .cloned()
-            .collect()
-    } else {
-        containers.clone()
-    };
-
-    Ok(Json(agents))
-}
-
-/// Query parameters for Tailscale agent listing
-#[derive(Debug, serde::Deserialize)]
-pub struct TailscaleQueryParams {
-    /// Only return agents that have Tailscale IPs
-    only_with_tailscale: Option<bool>,
-}
-
-/// Extract Tailscale IP from a running container's logs
-pub async fn extract_tailscale_ip_from_container(
-    state: &Arc<AppState>,
-    container_name: &str,
-) -> anyhow::Result<Option<String>> {
-    use crate::container::ContainerRuntime;
-
-    // Get container logs and search for Tailscale IP
-    let logs = state.runtime.container_logs(container_name, 100).await?;
-
-    // Look for the Tailscale connection line
-    for line in logs.lines() {
-        if line.contains("=== Tailscale connected ===") {
-            // Next line should have the IP
-            continue;
-        }
-        if line.chars().all(|c| c.is_numeric() || c == '.') {
-            // This looks like an IP address
-            if line.starts_with("100.") || line.starts_with("fd") {
-                // Tailscale IPs start with 100. or fd
-                return Ok(Some(line.trim().to_string()));
-            }
-        }
-    }
-
-    Ok(None)
-}
-
-/// Automatically discover and register Tailscale IPs for all running agents
-/// This should be called periodically or triggered by container start events
-pub async fn discover_tailscale_ips(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<DiscoveredAgents>, (StatusCode, String)> {
-    let containers = state.containers.read().await;
-    let mut discovered = Vec::new();
-
-    // Collect agents that need Tailscale IP discovery
-    let agents_to_update: Vec<_> = containers
-        .iter()
-        .filter(|a| a.status == AgentStatus::Running && a.tailscale_ip.is_none())
-        .map(|a| (a.id.clone(), a.name.clone()))
-        .collect();
-
-    // Release the lock before doing expensive operations
-    drop(containers);
-
-    // Process each agent
-    for (agent_id, agent_name) in agents_to_update {
-        // Try to extract Tailscale IP from the container
-        if let Ok(Some(ip)) = extract_tailscale_ip_from_container(&state, &agent_name).await {
-            tracing::info!("Discovered Tailscale IP {} for agent {}", ip, agent_name);
-
-            // Use the update function to persist the IP
-            let _ = update_agent_tailscale_ip(
-                Path(agent_id.clone()),
-                State(state.clone()),
-                Json(ip.clone()),
-            ).await;
-
-            discovered.push(DiscoveredAgent {
-                agent_id,
-                agent_name,
-                tailscale_ip: ip,
-            });
-        }
-    }
-
-    Ok(Json(DiscoveredAgents { agents: discovered }))
-}
-
-/// Response format for Tailscale IP discovery
-#[derive(Debug, serde::Serialize)]
-pub struct DiscoveredAgents {
-    pub agents: Vec<DiscoveredAgent>,
-}
-
-/// A discovered agent with its Tailscale IP
-#[derive(Debug, serde::Serialize)]
-pub struct DiscoveredAgent {
-    pub agent_id: String,
-    pub agent_name: String,
-    pub tailscale_ip: String,
-}
-
-/// Trigger Tailscale IP discovery for all running agents
-pub async fn trigger_discovery(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<DiscoveredAgents>, (StatusCode, String)> {
-    discover_tailscale_ips(State(state.clone())).await
-}
-
-/// Get service registry - all agents that can communicate via Tailscale
-pub async fn get_service_registry(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<ServiceRegistry>, (StatusCode, String)> {
-    let containers = state.containers.read().await;
-
-    let services: Vec<AgentService> = containers
-        .iter()
-        .filter(|a| a.status == AgentStatus::Running && a.tailscale_ip.is_some())
-        .map(|agent| {
-            let ip = agent.tailscale_ip.as_ref().unwrap();
-            AgentService {
-                id: agent.id.clone(),
-                name: agent.name.clone(),
-                tailscale_ip: ip.clone(),
-                gateway_url: format!("ws://{}:{}", ip, agent.gateway_port),
-                status: format!("{:?}", agent.status),
-                capabilities: vec!["chat".to_string(), "rpc".to_string(), "workflow".to_string()], // TODO: Make this dynamic
-            }
-        })
-        .collect();
-
-    Ok(Json(ServiceRegistry { agents: services }))
-}
-
-/// Service registry response
-#[derive(Debug, serde::Serialize)]
-pub struct ServiceRegistry {
-    pub agents: Vec<AgentService>,
-}
-
-/// An agent in the service registry
-#[derive(Debug, serde::Serialize)]
-pub struct AgentService {
-    pub id: String,
-    pub name: String,
-    pub tailscale_ip: String,
-    pub gateway_url: String,
-    pub status: String,
-    pub capabilities: Vec<String>,
-}
-
-// ============================================================================
-// AGENT-TO-AGENT MESSAGE ROUTING
-// ============================================================================
-
-/// Send a message from one agent to another
-pub async fn send_message(
-    Path(from_id): Path<String>,
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<SendMessageRequest>,
-) -> Result<Json<SendMessageResponse>, (StatusCode, String)> {
-    use crate::types::MessageStatus;
-    use uuid::Uuid;
-
-    let message_id = Uuid::new_v4().to_string();
-
-    // Look up sender and recipient
-    let (sender_name, recipient_name, recipient_port, gateway_token) = {
-        let containers = state.containers.read().await;
-
-        let sender = containers
-            .iter()
-            .find(|a| a.id == from_id)
-            .ok_or_else(|| (StatusCode::NOT_FOUND, "Sender agent not found".to_string()))?;
-
-        if sender.status != crate::types::AgentStatus::Running {
-            return Err((StatusCode::BAD_REQUEST, "Sender agent is not running".to_string()));
-        }
-        let sender_name = sender.name.clone();
-
-        let recipient = containers
-            .iter()
-            .find(|a| a.id == request.to || a.name == request.to)
-            .ok_or_else(|| (StatusCode::NOT_FOUND, "Recipient agent not found".to_string()))?;
-
-        if recipient.status != crate::types::AgentStatus::Running {
-            return Err((StatusCode::BAD_REQUEST, "Recipient agent is not running".to_string()));
-        }
-
-        let token = recipient.config.env_vars.get("GATEWAY_TOKEN")
-            .or_else(|| recipient.config.env_vars.get("OPENCLAW_GATEWAY_TOKEN"))
-            .cloned();
-
-        (sender_name, recipient.name.clone(), recipient.gateway_port, token)
-    };
-
-    let timeout = request.timeout.unwrap_or(60);
-
-    // Send message via OpenClaw WebSocket (Docker-local, no Tailscale needed)
-    match crate::agent_comms::send_message_to_agent(
-        recipient_port,
-        gateway_token.as_deref(),
-        &request.content,
-        timeout,
-    ).await {
-        Ok(response_text) => {
-            tracing::info!("Message {} delivered from {} to {}", message_id, from_id, recipient_name);
-
-            // Persist both sides to inter-agent conversation log
-            let session_id = format!("inter-agent-{}-{}", sender_name, recipient_name);
-            let user_msg = crate::types::ConversationMessage {
-                id: Uuid::new_v4().to_string(),
-                session_id: session_id.clone(),
-                role: "user".to_string(),
-                content: request.content.clone(),
-                agent_id: from_id.clone(),
-                timestamp: chrono::Utc::now().to_rfc3339(),
-                metadata: Default::default(),
-            };
-            let _ = append_conversation_message(&recipient_name, &user_msg).await;
-
-            let assistant_msg = crate::types::ConversationMessage {
-                id: Uuid::new_v4().to_string(),
-                session_id,
-                role: "assistant".to_string(),
-                content: response_text.clone(),
-                agent_id: recipient_name.clone(),
-                timestamp: chrono::Utc::now().to_rfc3339(),
-                metadata: Default::default(),
-            };
-            let _ = append_conversation_message(&recipient_name, &assistant_msg).await;
-
-            Ok(Json(SendMessageResponse {
-                message_id,
-                status: MessageStatus::Delivered,
-                response: Some(response_text),
-                error: None,
-            }))
-        }
-        Err(e) => {
-            tracing::error!("Failed to send message {}: {}", message_id, e);
-            Ok(Json(SendMessageResponse {
-                message_id,
-                status: MessageStatus::Failed,
-                response: None,
-                error: Some(e.to_string()),
-            }))
-        }
-    }
-}
-
-/// Get messages for an agent
-pub async fn get_agent_messages(
-    Path(id): Path<String>,
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Result<Json<Vec<crate::types::ConversationMessage>>, (StatusCode, String)> {
-    let containers = state.containers.read().await;
-    let agent = containers
-        .iter()
-        .find(|a| a.id == id || a.name == id)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
-    let agent_name = agent.name.clone();
-    drop(containers);
-
-    if let Some(session_id) = params.get("session") {
-        load_conversation_messages(&agent_name, session_id)
-            .map(Json)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-    } else {
-        // Return messages from the most recent session
-        let sessions = list_sessions(&agent_name)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        if let Some(latest) = sessions.first() {
-            load_conversation_messages(&agent_name, &latest.id)
-                .map(Json)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-        } else {
-            Ok(Json(vec![]))
-        }
-    }
-}
-
-/// List conversation sessions for an agent
-pub async fn list_agent_sessions(
-    Path(id): Path<String>,
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<crate::types::ConversationSession>>, (StatusCode, String)> {
-    let containers = state.containers.read().await;
-    let agent = containers
-        .iter()
-        .find(|a| a.id == id || a.name == id)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
-    let agent_name = agent.name.clone();
-    drop(containers);
-
-    list_sessions(&agent_name)
-        .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-}
-
-/// Get messages for a specific session
-pub async fn get_session_messages(
-    Path((id, session_id)): Path<(String, String)>,
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<crate::types::ConversationMessage>>, (StatusCode, String)> {
-    let containers = state.containers.read().await;
-    let agent = containers
-        .iter()
-        .find(|a| a.id == id || a.name == id)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
-    let agent_name = agent.name.clone();
-    drop(containers);
-
-    load_conversation_messages(&agent_name, &session_id)
-        .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-}
-
-// ============================================================================
-// AGENT RBAC ASSIGNMENT ENDPOINTS
-// ============================================================================
-
-#[derive(serde::Deserialize)]
-pub struct AssignAgentRequest {
-    pub user_id: String,
-    pub role: String, // "owner" | "chat_user" | "observer"
-}
-
-async fn require_admin_or_teacher(
-    state: &Arc<AppState>,
-    headers: &axum::http::HeaderMap,
-) -> Result<crate::auth::Claims, (StatusCode, String)> {
-    let token = headers
-        .get("authorization")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .ok_or((StatusCode::UNAUTHORIZED, "Missing token".to_string()))?;
-    let auth = state.auth.read().await;
-    let claims = auth
-        .validate_token(token)
-        .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {}", e)))?;
-    drop(auth);
-    let role = claims.role.as_deref().unwrap_or("admin"); // legacy = admin
-    if !matches!(role, "admin" | "teacher") {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "admin or teacher required".to_string(),
-        ));
-    }
-    Ok(claims)
-}
-
-/// POST /api/agents/:id/assignments — assign a user to an agent.
-/// Admin or teacher only. Body: { user_id, role }.
-pub async fn assign_agent_user(
-    Path(id): Path<String>,
-    State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
-    Json(req): Json<AssignAgentRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_admin_or_teacher(&state, &headers).await?;
-
-    // Resolve agent id (accept name too, mirrors chat_websocket).
-    let containers = state.containers.read().await;
-    let agent = containers
-        .iter()
-        .find(|a| a.id == id || a.name == id)
-        .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
-    let agent_id = agent.id.clone();
-    drop(containers);
-
-    let role = crate::chat_db::AgentRole::parse(&req.role);
-    state
-        .chat_db
-        .assign_agent(&agent_id, &req.user_id, role)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(Json(serde_json::json!({
-        "agent_id": agent_id,
-        "user_id": req.user_id,
-        "role": role.as_str(),
-    })))
-}
-
-/// DELETE /api/agents/:id/assignments/:user_id — remove an assignment.
-pub async fn unassign_agent_user(
-    Path((id, user_id)): Path<(String, String)>,
-    State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
-) -> Result<StatusCode, (StatusCode, String)> {
-    require_admin_or_teacher(&state, &headers).await?;
-
-    let containers = state.containers.read().await;
-    let agent = containers
-        .iter()
-        .find(|a| a.id == id || a.name == id)
-        .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
-    let agent_id = agent.id.clone();
-    drop(containers);
-
-    state
-        .chat_db
-        .unassign_agent(&agent_id, &user_id)
+    state.chat_db.delete_user(&id)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(StatusCode::NO_CONTENT)
-}
-
-/// GET /api/agents/:id/assignments — list users assigned to an agent.
-pub async fn list_agent_assignments(
-    Path(id): Path<String>,
-    State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
-) -> Result<Json<Vec<crate::chat_db::AgentAssignment>>, (StatusCode, String)> {
-    require_admin_or_teacher(&state, &headers).await?;
-
-    let containers = state.containers.read().await;
-    let agent = containers
-        .iter()
-        .find(|a| a.id == id || a.name == id)
-        .ok_or((StatusCode::NOT_FOUND, "Agent not found".to_string()))?;
-    let agent_id = agent.id.clone();
-    drop(containers);
-
-    state
-        .chat_db
-        .list_assignments_for_agent(&agent_id)
-        .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-}
-
-// ============================================================================
-// WEBSOCKET PROXY FOR AGENT-TO-AGENT COMMUNICATION
-// ============================================================================
-
-/// WebSocket proxy for agent-to-agent communication
-/// Route: GET /api/agents/:id/ws/:target_id
-/// This endpoint upgrades the connection to WebSocket and proxies to the target agent
-pub async fn websocket_proxy(
-    Path((from_id, target_id)): Path<(String, String)>,
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> Response {
-    ws.on_upgrade(move |socket| handle_websocket_proxy(socket, from_id, target_id, state))
-}
-
-/// Handle the WebSocket proxy connection
-async fn handle_websocket_proxy(
-    client_socket: WebSocket,
-    from_id: String,
-    target_id: String,
-    state: Arc<AppState>,
-) {
-    use axum::extract::ws::Message as AxumMessage;
-    use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
-
-    // Look up both agents and resolve target's gateway info
-    let (from_name, target_name, target_port, gateway_token) = {
-        let containers = state.containers.read().await;
-
-        let from_agent = match containers.iter().find(|a| a.id == from_id) {
-            Some(agent) => agent,
-            None => {
-                tracing::error!("Source agent {} not found", from_id);
-                return;
-            }
-        };
-
-        let target_agent = match containers.iter().find(|a| a.id == target_id || a.name == target_id) {
-            Some(agent) => agent,
-            None => {
-                tracing::error!("Target agent {} not found", target_id);
-                return;
-            }
-        };
-
-        if target_agent.status != crate::types::AgentStatus::Running {
-            tracing::error!("Target agent {} is not running", target_id);
-            return;
-        }
-
-        let token = target_agent.config.env_vars.get("GATEWAY_TOKEN")
-            .or_else(|| target_agent.config.env_vars.get("OPENCLAW_GATEWAY_TOKEN"))
-            .or_else(|| target_agent.config.env_vars.get("GATEWAY_PASSWORD"))
-            .or_else(|| target_agent.config.env_vars.get("OPENCLAW_GATEWAY_PASSWORD"))
-            .cloned();
-
-        (from_agent.name.clone(), target_agent.name.clone(), target_agent.gateway_port, token)
-    };
-
-    tracing::info!("Proxying WebSocket: {} -> {} (port {})", from_name, target_name, target_port);
-
-    // Connect and authenticate via agent_comms
-    let conn = match crate::agent_comms::connect_to_agent_with_token(
-        target_port,
-        gateway_token.as_deref(),
-    ).await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to connect to target agent {}: {}", target_id, e);
-            return;
-        }
-    };
-
-    let (mut client_sender, mut client_receiver) = client_socket.split();
-    let (mut target_sender, mut target_receiver) = (conn.tx, conn.rx);
-
-    // Spawn task to forward messages from client to target
-    let client_to_target = tokio::spawn(async move {
-        while let Some(result) = client_receiver.next().await {
-            match result {
-                Ok(AxumMessage::Text(text)) => {
-                    tracing::debug!("Client -> Target: {}", text);
-                    if let Err(e) = target_sender.send(TungsteniteMessage::Text(text)).await {
-                        tracing::error!("Failed to send to target: {}", e);
-                        break;
-                    }
-                }
-                Ok(AxumMessage::Close(_)) => {
-                    tracing::info!("Client closed connection");
-                    let _ = target_sender.send(TungsteniteMessage::Close(None)).await;
-                    break;
-                }
-                Err(e) => {
-                    tracing::error!("Error receiving from client: {}", e);
-                    break;
-                }
-                _ => {}
-            }
-        }
-    });
-
-    // Spawn task to forward messages from target to client
-    let target_to_client = tokio::spawn(async move {
-        while let Some(result) = target_receiver.next().await {
-            match result {
-                Ok(TungsteniteMessage::Text(text)) => {
-                    tracing::debug!("Target -> Client: {}", text);
-                    if let Err(e) = client_sender.send(AxumMessage::Text(text)).await {
-                        tracing::error!("Failed to send to client: {}", e);
-                        break;
-                    }
-                }
-                Ok(TungsteniteMessage::Close(_)) => {
-                    tracing::info!("Target closed connection");
-                    let _ = client_sender.send(AxumMessage::Close(None)).await;
-                    break;
-                }
-                Err(e) => {
-                    tracing::error!("Error receiving from target: {}", e);
-                    break;
-                }
-                _ => {}
-            }
-        }
-    });
-
-    // Wait for either direction to complete
-    tokio::select! {
-        _ = client_to_target => {
-            tracing::info!("Client to target forwarding completed");
-        }
-        _ = target_to_client => {
-            tracing::info!("Target to client forwarding completed");
-        }
-    }
-
-    tracing::info!("WebSocket proxy session ended: {} -> {}", from_id, target_id);
-}
-
-// === Workflows ===
-
-/// Create a new workflow
-pub async fn create_workflow(
-    State(state): State<Arc<AppState>>,
-    Json(workflow): Json<crate::workflow::Workflow>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let mut workflows = state.workflows.write().await;
-
-    workflows.register_workflow(workflow.clone())
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-
-    tracing::info!("Created workflow: {}", workflow.id);
-
-    Ok(Json(serde_json::json!({
-        "id": workflow.id,
-        "name": workflow.name,
-        "status": "created"
-    })))
-}
-
-/// List all workflows
-pub async fn list_workflows(
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<crate::workflow::Workflow>> {
-    let workflows = state.workflows.read().await;
-    Json(workflows.list_workflows().into_iter().cloned().collect())
-}
-
-/// Get a workflow by ID
-pub async fn get_workflow(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<crate::workflow::Workflow>, (StatusCode, String)> {
-    let workflows = state.workflows.read().await;
-    
-    let workflow = workflows.get_workflow(&id)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Workflow not found".to_string()))?;
-    
-    Ok(Json(workflow.clone()))
-}
-
-/// Execute a workflow
-pub async fn execute_workflow(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(params): Json<Option<serde_json::Value>>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let request = crate::workflow::WorkflowExecutionRequest {
-        workflow_id: id,
-        parameters: params.map(|p| serde_json::from_value(p).unwrap_or_default()).unwrap_or_default(),
-        strategy: None,
-    };
-    
-    let execution_id = state.executor.execute_workflow(request).await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to execute workflow: {}", e)))?;
-    
-    tracing::info!("Started workflow execution: {}", execution_id);
-    
-    Ok(Json(serde_json::json!({
-        "execution_id": execution_id,
-        "status": "started"
-    })))
-}
-
-/// Get workflow execution status
-pub async fn get_workflow_execution(
-    State(state): State<Arc<AppState>>,
-    Path(execution_id): Path<String>,
-) -> Result<Json<crate::workflow::WorkflowExecution>, (StatusCode, String)> {
-    let workflows = state.workflows.read().await;
-
-    let execution = workflows.get_execution(&execution_id)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Execution not found".to_string()))?;
-
-    Ok(Json(execution.clone()))
-}
-
-/// List workflow executions
-pub async fn list_workflow_executions(
-    State(state): State<Arc<AppState>>,
-    Path(workflow_id): Path<String>,
-) -> Json<Vec<crate::workflow::WorkflowExecution>> {
-    let workflows = state.workflows.read().await;
-    
-    let executions: Vec<_> = workflows.executions.values()
-        .filter(|e| e.workflow_id == workflow_id)
-        .cloned()
-        .collect();
-    
-    Json(executions)
 }

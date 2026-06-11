@@ -82,6 +82,24 @@ impl ChatDb {
             tracing::info!("Migrated schema v2: added users.approval_status");
         }
 
+        // Migration: add title to conversations if not exists (schema v3)
+        let has_title: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('conversations') WHERE name = 'title'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_title == 0 {
+            conn.execute(
+                "ALTER TABLE conversations ADD COLUMN title TEXT DEFAULT 'New Chat'",
+                [],
+            )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO schema_version (version) VALUES (3)",
+                [],
+            )?;
+            tracing::info!("Migrated schema v3: added conversations.title");
+        }
+
         Ok(())
     }
 
@@ -661,6 +679,164 @@ CREATE TABLE IF NOT EXISTS agent_assignments (
     PRIMARY KEY (agent_id, user_id),
     FOREIGN KEY(user_id) REFERENCES users(id)
 );
-CREATE INDEX IF NOT EXISTS idx_agent_assignments_user ON agent_assignments(user_id);
-CREATE INDEX IF NOT EXISTS idx_agent_assignments_agent ON agent_assignments(agent_id);
+-- Messages table (added for simple chat proxy)
+CREATE TABLE IF NOT EXISTS messages (
+    id              TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    role            TEXT NOT NULL,
+    content         TEXT NOT NULL,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(conversation_id) REFERENCES conversations(id)
+);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);
+
 "#;
+
+// ─── Simple Chat Types (Phase One refactor) ─────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChatConversation {
+    pub id: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub message_count: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChatMessage {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+    pub created_at: String,
+}
+
+// ─── Simple Chat API (Phase One refactor) ───────────────────────────────
+
+impl ChatDb {
+    pub fn list_conversations(&self, user_id: &str) -> Result<Vec<ChatConversation>> {
+    let conn = self.conn.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT id, COALESCE(title, 'New Chat'), created_at, last_message_at,
+                (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) as msg_count
+         FROM conversations c
+         WHERE user_id = ?1
+         ORDER BY COALESCE(last_message_at, created_at) DESC",
+    )?;
+    let rows = stmt
+        .query_map(params![user_id], |row| {
+            Ok(ChatConversation {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                created_at: row.get(2)?,
+                updated_at: row.get(3).unwrap_or_default(),
+                message_count: row.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+pub fn create_conversation(&self, user_id: &str, title: &str) -> Result<ChatConversation> {
+    let conn = self.conn.lock().unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO conversations (id, user_id, agent_id, title, created_at, last_message_at)
+         VALUES (?1, ?2, 'chat', ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        params![id, user_id, title],
+    )?;
+    Ok(ChatConversation {
+        id,
+        title: title.to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        updated_at: chrono::Utc::now().to_rfc3339(),
+        message_count: 0,
+    })
+}
+
+pub fn get_conversation(&self, id: &str, user_id: &str) -> Result<ChatConversation> {
+    let conn = self.conn.lock().unwrap();
+    let row = conn.query_row(
+        "SELECT id, COALESCE(title, 'New Chat'), created_at, last_message_at,
+                (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) as msg_count
+         FROM conversations c
+         WHERE id = ?1 AND user_id = ?2",
+        params![id, user_id],
+        |row| {
+            Ok(ChatConversation {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                created_at: row.get(2)?,
+                updated_at: row.get(3).unwrap_or_default(),
+                message_count: row.get(4)?,
+            })
+        },
+    )?;
+    Ok(row)
+}
+
+pub fn delete_conversation(&self, id: &str, user_id: &str) -> Result<()> {
+    let conn = self.conn.lock().unwrap();
+    conn.execute(
+        "DELETE FROM messages WHERE conversation_id = ?1",
+        params![id],
+    )?;
+    conn.execute(
+        "DELETE FROM conversations WHERE id = ?1 AND user_id = ?2",
+        params![id, user_id],
+    )?;
+    Ok(())
+}
+
+pub fn get_messages(
+    &self,
+    conversation_id: &str,
+    user_id: &str,
+) -> Result<Vec<ChatMessage>> {
+    let conn = self.conn.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT m.id, m.role, m.content, m.created_at
+         FROM messages m
+         JOIN conversations c ON c.id = m.conversation_id
+         WHERE m.conversation_id = ?1 AND c.user_id = ?2
+         ORDER BY m.created_at ASC",
+    )?;
+    let rows = stmt
+        .query_map(params![conversation_id, user_id], |row| {
+            Ok(ChatMessage {
+                id: row.get(0)?,
+                role: row.get(1)?,
+                content: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+pub fn add_message(
+    &self,
+    conversation_id: &str,
+    user_id: &str,
+    role: &str,
+    content: &str,
+) -> Result<ChatMessage> {
+    let conn = self.conn.lock().unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO messages (id, conversation_id, role, content, created_at)
+         VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP)",
+        params![id, conversation_id, role, content],
+    )?;
+    conn.execute(
+        "UPDATE conversations SET last_message_at = CURRENT_TIMESTAMP WHERE id = ?1 AND user_id = ?2",
+        params![conversation_id, user_id],
+    )?;
+    Ok(ChatMessage {
+        id,
+        role: role.to_string(),
+        content: content.to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    })
+}
+}
