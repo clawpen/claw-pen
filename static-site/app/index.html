@@ -132,8 +132,37 @@
         .action-btn.approve { border-color: var(--accent-teal); color: var(--accent-teal); }
         .action-btn.reject { border-color: var(--accent-rust); color: var(--accent-rust); }
 
+/* Roadmap Styles */
+        .roadmap-card { border: var(--line-weight) solid var(--border); padding: 20px; margin-bottom: 16px; border-radius: var(--radius); background: white; }
+        .roadmap-card h3 { font-size: 16px; margin-bottom: 4px; }
+        .roadmap-card p { font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; }
+        .roadmap-card .badge { display: inline-block; padding: 2px 8px; font-size: 11px; border-radius: var(--radius); font-weight: 600; margin-right: 8px; }
+        .roadmap-card .badge.active { background: var(--accent-surface); color: var(--accent-teal); border: var(--line-weight) solid var(--accent-teal); }
+        .roadmap-card .badge.inactive { background: var(--bg-secondary); color: var(--text-tertiary); border: var(--line-weight) solid var(--border); }
+        .topic-block { border-left: 3px solid var(--accent-teal); padding-left: 12px; margin: 12px 0; }
+        .topic-block h4 { font-size: 14px; margin-bottom: 4px; }
+        .lesson-list { margin: 8px 0 8px 16px; }
+        .lesson-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 13px; border-bottom: 1px solid var(--bg-secondary); }
+        .lesson-item:last-child { border-bottom: none; }
+        .metric-card { border: var(--line-weight) solid var(--border); padding: 16px; border-radius: var(--radius); background: white; display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .metric-card .metric-value { font-size: 24px; font-weight: 700; color: var(--accent-teal); }
+        .metric-card .metric-label { font-size: 12px; color: var(--text-tertiary); }
+        .form-inline { display: flex; gap: 8px; margin-bottom: 12px; }
+        .form-inline input { flex: 1; padding: 8px 10px; border: var(--line-weight) solid var(--border); border-radius: var(--radius); font-size: 14px; }
+        .form-inline textarea { flex: 1; padding: 8px 10px; border: var(--line-weight) solid var(--border); border-radius: var(--radius); font-size: 14px; min-height: 60px; font-family: inherit; }
+        .btn-small { padding: 8px 14px; font-size: 13px; background: var(--accent-teal); border: var(--line-weight) solid var(--accent-teal); border-radius: var(--radius); color: white; font-weight: 600; cursor: pointer; }
+        .btn-small:hover { background: #1f6b6b; }
+        .btn-small.secondary { background: white; color: var(--text-primary); border-color: var(--border); }
+        .btn-small.secondary:hover { background: var(--bg-secondary); }
+        .btn-small.danger { background: white; color: var(--accent-rust); border-color: var(--accent-rust); }
+        .btn-small.danger:hover { background: var(--accent-rust); color: white; }
+        .progress-bar { height: 6px; background: var(--bg-secondary); border-radius: 3px; overflow: hidden; margin-top: 8px; }
+        .progress-bar-fill { height: 100%; background: var(--accent-teal); border-radius: 3px; transition: width 0.3s; }
+
         /* Scrollbar */
         ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
     </style>
@@ -806,15 +835,200 @@ function backToUserChats() {
 }
 
 async function loadAdminSystemPrompts() {
-    document.getElementById('adminPrompts').innerHTML = '<p style="color:var(--text-tertiary)">System prompts management coming soon</p>';
+    const container = document.getElementById('adminPrompts');
+    container.innerHTML = `
+        <h3 style="margin-bottom:16px;font-size:16px;">System Prompts</h3>
+        <p style="color:var(--text-secondary);margin-bottom:20px;font-size:13px;">
+            The current system prompt is embedded in the backend configuration. 
+            To update it, edit <code>SYSTEM_PROMPT.md</code> or the server configuration and restart.
+        </p>
+        <div style="border:var(--line-weight) solid var(--border);border-radius:var(--radius);padding:16px;background:var(--bg-secondary);font-size:13px;">
+            <strong>Current prompt preview:</strong>
+            <pre style="margin-top:8px;white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--text-secondary);font-family:monospace;">Guardian-type, chuunibyou, worrywart, hot-blooded anime second lead. First-person "I". Catchphrase: "Don't worry. Even if the world forgets, I'll remember for you."</pre>
+        </div>
+    `;
 }
 
 async function loadRoadmaps() {
-    document.getElementById('adminRoadmaps').innerHTML = '<p style="color:var(--text-tertiary)">Roadmaps coming soon</p>';
+    const container = document.getElementById('adminRoadmaps');
+    try {
+        const res = await fetch(`${API_BASE}/api/roadmaps`, { headers: { 'Authorization': `Bearer ${token}` } });
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        const roadmaps = data.roadmaps || [];
+        let html = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <h3 style="font-size:16px;">Roadmaps</h3>
+                <button class="btn-small" onclick="showCreateRoadmap()">+ New Roadmap</button>
+            </div>
+            <div id="createRoadmapForm" class="hidden" style="border:var(--line-weight) solid var(--border);padding:16px;border-radius:var(--radius);margin-bottom:16px;background:white;">
+                <div class="form-group"><label style="font-size:13px;font-weight:600;margin-bottom:6px;display:block;">Name</label><input id="roadmapName" placeholder="e.g. Introduction to Python" style="width:100%;padding:8px 10px;border:var(--line-weight) solid var(--border);border-radius:var(--radius);font-size:14px;"></div>
+                <div class="form-group"><label style="font-size:13px;font-weight:600;margin-bottom:6px;display:block;">Description</label><textarea id="roadmapDesc" placeholder="What students will learn..." rows="2" style="width:100%;padding:8px 10px;border:var(--line-weight) solid var(--border);border-radius:var(--radius);font-size:14px;font-family:inherit;"></textarea></div>
+                <div style="display:flex;gap:8px;">
+                    <button class="btn-small" onclick="createRoadmap()">Create</button>
+                    <button class="btn-small secondary" onclick="document.getElementById('createRoadmapForm').classList.add('hidden')">Cancel</button>
+                </div>
+            </div>
+        `;
+        if (roadmaps.length === 0) {
+            html += '<p style="color:var(--text-tertiary)">No roadmaps yet. Create one to start tracking student progress.</p>';
+        } else {
+            html += roadmaps.map(r => `
+                <div class="roadmap-card">
+                    <div style="display:flex;justify-content:space-between;align-items:start;">
+                        <div>
+                            <h3>${escapeHtml(r.name)}</h3>
+                            <p>${escapeHtml(r.description || '')}</p>
+                        </div>
+                        <div style="display:flex;gap:8px;">
+                            ${r.is_active ? '<span class="badge active">Active</span>' : '<button class="btn-small secondary" onclick="activateRoadmap(\'' + r.id + '\')">Set Active</button>'}
+                            <button class="btn-small danger" onclick="deleteRoadmap('\'' + r.id + '\')">Delete</button>
+                        </div>
+                    </div>
+                    <div style="margin-top:12px;">
+                        <button class="btn-small secondary" onclick="showAddTopic('${r.id}')">+ Add Topic</button>
+                        <div id="topicForm-${r.id}" class="hidden" style="margin-top:8px;padding:12px;background:var(--bg-secondary);border-radius:var(--radius);">
+                            <div class="form-inline"><input id="topicTitle-${r.id}" placeholder="Topic title" style="flex:1;"><input id="topicOrder-${r.id}" type="number" value="0" placeholder="Order" style="width:60px;"></div>
+                            <div style="display:flex;gap:8px;">
+                                <button class="btn-small" onclick="createTopic('${r.id}')">Add Topic</button>
+                                <button class="btn-small secondary" onclick="document.getElementById('topicForm-${r.id}').classList.add('hidden')">Cancel</button>
+                            </div>
+                        </div>
+                    </div>
+                    ${r.topics && r.topics.length > 0 ? r.topics.map((t, ti) => `
+                        <div class="topic-block">
+                            <h4>${escapeHtml(t.title)}</h4>
+                            <p style="font-size:12px;color:var(--text-tertiary);">${escapeHtml(t.description || '')}</p>
+                            <button class="btn-small secondary" style="font-size:11px;padding:4px 8px;" onclick="showAddLesson('${t.id}')">+ Add Lesson</button>
+                            <div id="lessonForm-${t.id}" class="hidden" style="margin-top:8px;padding:10px;background:var(--bg-primary);border-radius:var(--radius);">
+                                <div class="form-inline"><input id="lessonTitle-${t.id}" placeholder="Lesson title" style="flex:1;"><input id="lessonOrder-${t.id}" type="number" value="${ti}" placeholder="Order" style="width:60px;"></div>
+                                <div class="form-inline"><textarea id="lessonDesc-${t.id}" placeholder="Description" rows="1" style="flex:1;font-family:inherit;"></textarea></div>
+                                <div class="form-inline"><textarea id="lessonCriteria-${t.id}" placeholder="Completion criteria" rows="1" style="flex:1;font-family:inherit;"></textarea></div>
+                                <div style="display:flex;gap:8px;">
+                                    <button class="btn-small" style="font-size:11px;padding:4px 8px;" onclick="createLesson('${t.id}')">Add Lesson</button>
+                                    <button class="btn-small secondary" style="font-size:11px;padding:4px 8px;" onclick="document.getElementById('lessonForm-${t.id}').classList.add('hidden')">Cancel</button>
+                                </div>
+                            </div>
+                            <div class="lesson-list">
+                                ${t.lessons && t.lessons.length > 0 ? t.lessons.map(l => `
+                                    <div class="lesson-item">
+                                        <span style="font-size:11px;color:var(--text-tertiary);">${l.order_index}.</span>
+                                        <span style="flex:1;">${escapeHtml(l.title)}</span>
+                                        <span style="font-size:11px;color:var(--text-tertiary);">${escapeHtml(l.description || '').slice(0, 40)}</span>
+                                    </div>
+                                `).join('') : '<p style="font-size:12px;color:var(--text-tertiary);padding:4px 0;">No lessons yet</p>'}
+                            </div>
+                        </div>
+                    `).join('') : '<p style="font-size:13px;color:var(--text-tertiary);margin-top:8px;">No topics yet</p>'}
+                </div>
+            `).join('');
+        }
+        container.innerHTML = html;
+    } catch (e) { container.innerHTML = '<p class="error">Failed to load roadmaps</p>'; }
+}
+
+function showCreateRoadmap() { document.getElementById('createRoadmapForm').classList.remove('hidden'); }
+
+async function createRoadmap() {
+    const name = document.getElementById('roadmapName').value.trim();
+    const desc = document.getElementById('roadmapDesc').value.trim() || null;
+    if (!name) return;
+    try {
+        await fetch(`${API_BASE}/api/roadmaps`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, description: desc }) });
+        document.getElementById('roadmapName').value = '';
+        document.getElementById('roadmapDesc').value = '';
+        loadRoadmaps();
+    } catch (e) {}
+}
+
+async function activateRoadmap(id) {
+    try { await fetch(`${API_BASE}/api/roadmaps/${id}/activate`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }); loadRoadmaps(); } catch (e) {}
+}
+
+async function deleteRoadmap(id) {
+    if (!confirm('Delete this roadmap? This will also remove all topics and lessons.')) return;
+    try { await fetch(`${API_BASE}/api/roadmaps/${id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } }); loadRoadmaps(); } catch (e) {}
+}
+
+function showAddTopic(roadmapId) { document.getElementById(`topicForm-${roadmapId}`).classList.remove('hidden'); }
+
+async function createTopic(roadmapId) {
+    const title = document.getElementById(`topicTitle-${roadmapId}`).value.trim();
+    const order = parseInt(document.getElementById(`topicOrder-${roadmapId}`).value) || 0;
+    if (!title) return;
+    try {
+        await fetch(`${API_BASE}/api/roadmaps/${roadmapId}/topics`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ title, order_index: order }) });
+        document.getElementById(`topicTitle-${roadmapId}`).value = '';
+        loadRoadmaps();
+    } catch (e) {}
+}
+
+function showAddLesson(topicId) { document.getElementById(`lessonForm-${topicId}`).classList.remove('hidden'); }
+
+async function createLesson(topicId) {
+    const title = document.getElementById(`lessonTitle-${topicId}`).value.trim();
+    const order = parseInt(document.getElementById(`lessonOrder-${topicId}`).value) || 0;
+    const desc = document.getElementById(`lessonDesc-${topicId}`).value.trim() || null;
+    const criteria = document.getElementById(`lessonCriteria-${topicId}`).value.trim() || null;
+    if (!title) return;
+    try {
+        await fetch(`${API_BASE}/api/topics/${topicId}/lessons`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ title, order_index: order, description: desc, completion_criteria: criteria }) });
+        document.getElementById(`lessonTitle-${topicId}`).value = '';
+        document.getElementById(`lessonDesc-${topicId}`).value = '';
+        document.getElementById(`lessonCriteria-${topicId}`).value = '';
+        loadRoadmaps();
+    } catch (e) {}
 }
 
 async function loadMetrics() {
-    document.getElementById('adminMetrics').innerHTML = '<p style="color:var(--text-tertiary)">Metrics coming soon</p>';
+    const container = document.getElementById('adminMetrics');
+    try {
+        const [metricsRes, usersRes] = await Promise.all([
+            fetch(`${API_BASE}/api/metrics`, { headers: { 'Authorization': `Bearer ${token}` } }),
+            fetch(`${API_BASE}/api/admin/users`, { headers: { 'Authorization': `Bearer ${token}` } })
+        ]);
+        if (!metricsRes.ok || !usersRes.ok) throw new Error();
+        const metricsData = await metricsRes.json();
+        const usersData = await usersRes.json();
+        const metrics = metricsData.metrics || [];
+        const users = usersData.users || [];
+        const totalStudents = users.filter(u => u.role === 'student').length;
+        const totalTeachers = users.filter(u => u.role === 'teacher').length;
+        const totalMessages = metrics.reduce((s, m) => s + (m.total_messages || 0), 0);
+        const activeToday = metrics.filter(m => (m.messages_today || 0) > 0).length;
+        let html = '<h3 style="margin-bottom:16px;font-size:16px;">Metrics Dashboard</h3>';
+        html += `
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:24px;">
+                <div class="metric-card"><div><div class="metric-label">Total Students</div><div class="metric-value">${totalStudents}</div></div></div>
+                <div class="metric-card"><div><div class="metric-label">Total Teachers</div><div class="metric-value">${totalTeachers}</div></div></div>
+                <div class="metric-card"><div><div class="metric-label">Total Messages</div><div class="metric-value">${totalMessages}</div></div></div>
+                <div class="metric-card"><div><div class="metric-label">Active Today</div><div class="metric-value">${activeToday}</div></div></div>
+            </div>
+            <h4 style="font-size:14px;margin-bottom:12px;">Student Activity</h4>
+        `;
+        if (metrics.length === 0) {
+            html += '<p style="color:var(--text-tertiary)">No activity data yet. Students need to send messages for metrics to appear.</p>';
+        } else {
+            html += metrics.map(m => {
+                const user = users.find(u => u.id === m.user_id) || {};
+                const pct = Math.round((m.total_messages || 0) / (totalMessages || 1) * 100);
+                return `
+                    <div class="metric-card" style="display:block;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <div>
+                                <div style="font-size:14px;font-weight:600;">${escapeHtml(user.display_name || user.username || m.user_id)}</div>
+                                <div class="metric-label">${m.total_messages || 0} messages total • ${m.messages_today || 0} today</div>
+                            </div>
+                            <div class="metric-value" style="font-size:18px;">${pct}%</div>
+                        </div>
+                        <div class="progress-bar"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
+                        ${m.last_active ? `<div class="metric-label" style="margin-top:4px;">Last active: ${new Date(m.last_active).toLocaleString()}</div>` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+        container.innerHTML = html;
+    } catch (e) { container.innerHTML = '<p class="error">Failed to load metrics</p>'; }
 }
 
 // ─── Init ───
