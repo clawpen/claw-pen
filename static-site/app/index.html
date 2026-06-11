@@ -760,11 +760,20 @@ async function fetchUser() {
 }
 
 async function loadConversations() {
+    if (!token) return;
     try {
         const res = await fetch(`${API_BASE}/api/conversations`, {
             headers: { 'Authorization': `Bearer ${token}` }
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+            console.error('Failed to load conversations:', res.status);
+            if (res.status === 401) {
+                token = '';
+                localStorage.removeItem('token');
+                document.getElementById('loginModal').classList.remove('hidden');
+            }
+            return;
+        }
         const conversations = await res.json();
         const list = document.getElementById('conversationsList');
         list.innerHTML = '';
@@ -781,10 +790,16 @@ async function loadConversations() {
             `;
             list.appendChild(div);
         });
-    } catch (e) {}
+    } catch (e) {
+        console.error('Error loading conversations:', e);
+    }
 }
 
 async function createNewChat() {
+    if (!token) {
+        document.getElementById('loginModal').classList.remove('hidden');
+        return;
+    }
     try {
         const res = await fetch(`${API_BASE}/api/conversations`, {
             method: 'POST',
@@ -794,24 +809,46 @@ async function createNewChat() {
             },
             body: JSON.stringify({ title: 'New Chat' })
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+            const errorText = await res.text();
+            console.error('Failed to create chat:', res.status, errorText);
+            alert('Failed to create chat: ' + (res.status === 401 ? 'Please log in again' : errorText));
+            if (res.status === 401) {
+                token = '';
+                localStorage.removeItem('token');
+                document.getElementById('loginModal').classList.remove('hidden');
+            }
+            return;
+        }
         const conv = await res.json();
         currentConversation = conv.id;
         await loadConversations();
         showChat();
         document.getElementById('chatTitle').textContent = conv.title;
         document.getElementById('messagesContainer').innerHTML = '';
-    } catch (e) {}
+    } catch (e) {
+        console.error('Error creating chat:', e);
+        alert('Error creating chat. Please check your connection.');
+    }
 }
 
 async function loadConversation(id) {
+    if (!token) return;
     currentConversation = id;
     try {
         const [convRes, msgRes] = await Promise.all([
             fetch(`${API_BASE}/api/conversations/${id}`, { headers: { 'Authorization': `Bearer ${token}` } }),
             fetch(`${API_BASE}/api/conversations/${id}/messages`, { headers: { 'Authorization': `Bearer ${token}` } })
         ]);
-        if (!convRes.ok || !msgRes.ok) return;
+        if (!convRes.ok || !msgRes.ok) {
+            console.error('Failed to load conversation:', convRes.status, msgRes.status);
+            if (convRes.status === 401 || msgRes.status === 401) {
+                token = '';
+                localStorage.removeItem('token');
+                document.getElementById('loginModal').classList.remove('hidden');
+            }
+            return;
+        }
         const conv = await convRes.json();
         const messages = await msgRes.json();
         document.getElementById('chatTitle').textContent = conv.title;
@@ -820,7 +857,9 @@ async function loadConversation(id) {
         container.innerHTML = '';
         messages.forEach(msg => appendMessage(msg.role, msg.content));
         loadConversations();
-    } catch (e) {}
+    } catch (e) {
+        console.error('Error loading conversation:', e);
+    }
 }
 
 function showChat() {
@@ -866,6 +905,10 @@ function escapeHtml(text) {
 
 async function sendMessage() {
     if (isSending || !currentConversation) return;
+    if (!token) {
+        document.getElementById('loginModal').classList.remove('hidden');
+        return;
+    }
     const input = document.getElementById('messageInput');
     const content = input.value.trim();
     if (!content) return;
@@ -885,11 +928,22 @@ async function sendMessage() {
             },
             body: JSON.stringify({ content, model: 'kimi-k2.6', provider: 'kimi' })
         });
-        if (!res.ok) throw new Error('Failed');
+        if (!res.ok) {
+            const errorText = await res.text();
+            console.error('Failed to send message:', res.status, errorText);
+            appendMessage('assistant', 'Error: ' + (res.status === 401 ? 'Session expired. Please log in again.' : errorText));
+            if (res.status === 401) {
+                token = '';
+                localStorage.removeItem('token');
+                document.getElementById('loginModal').classList.remove('hidden');
+            }
+            return;
+        }
         const data = await res.json();
         appendMessage('assistant', data.content || data.message || 'No response');
     } catch (e) {
-        appendMessage('assistant', 'Error: Could not get response. Please check your API key.');
+        console.error('Error sending message:', e);
+        appendMessage('assistant', 'Error: Could not connect to server. Please check your connection.');
     } finally {
         isSending = false;
         document.getElementById('sendBtn').disabled = false;

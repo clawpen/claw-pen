@@ -214,6 +214,14 @@ pub async fn list_conversations(
         .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
     drop(auth);
 
+    // Ensure user exists in chat_db (legacy admin tokens don't have a user record)
+    let role = claims.role.as_deref().unwrap_or("admin");
+    let user_role = crate::chat_db::UserRole::parse(role);
+    state
+        .chat_db
+        .get_or_create_user_from_claims(&claims.sub, None, user_role)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
     let convs = state
         .chat_db
         .list_conversations(&claims.sub)
@@ -233,6 +241,14 @@ pub async fn create_conversation(
         .validate_token(&token)
         .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
     drop(auth);
+
+    // Ensure the user exists in chat_db (legacy admin tokens don't have a user record)
+    let role = claims.role.as_deref().unwrap_or("admin");
+    let user_role = crate::chat_db::UserRole::parse(role);
+    state
+        .chat_db
+        .get_or_create_user_from_claims(&claims.sub, None, user_role)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let conv = state
         .chat_db
@@ -254,6 +270,14 @@ pub async fn get_conversation(
         .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
     drop(auth);
 
+    // Ensure user exists in chat_db (legacy admin tokens don't have a user record)
+    let role = claims.role.as_deref().unwrap_or("admin");
+    let user_role = crate::chat_db::UserRole::parse(role);
+    state
+        .chat_db
+        .get_or_create_user_from_claims(&claims.sub, None, user_role)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
     let conv = state
         .chat_db
         .get_conversation(&id, &claims.sub)
@@ -273,6 +297,14 @@ pub async fn delete_conversation(
         .validate_token(&token)
         .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
     drop(auth);
+
+    // Ensure user exists in chat_db (legacy admin tokens don't have a user record)
+    let role = claims.role.as_deref().unwrap_or("admin");
+    let user_role = crate::chat_db::UserRole::parse(role);
+    state
+        .chat_db
+        .get_or_create_user_from_claims(&claims.sub, None, user_role)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     state
         .chat_db
@@ -295,6 +327,14 @@ pub async fn get_messages(
         .validate_token(&token)
         .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
     drop(auth);
+
+    // Ensure user exists in chat_db (legacy admin tokens don't have a user record)
+    let role = claims.role.as_deref().unwrap_or("admin");
+    let user_role = crate::chat_db::UserRole::parse(role);
+    state
+        .chat_db
+        .get_or_create_user_from_claims(&claims.sub, None, user_role)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let messages = state
         .chat_db
@@ -325,6 +365,14 @@ pub async fn send_message(
         .validate_token(&token)
         .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
     drop(auth);
+
+    // Ensure user exists in chat_db (legacy admin tokens don't have a user record)
+    let role = claims.role.as_deref().unwrap_or("admin");
+    let user_role = crate::chat_db::UserRole::parse(role);
+    state
+        .chat_db
+        .get_or_create_user_from_claims(&claims.sub, None, user_role)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Store user message
     let user_msg = state

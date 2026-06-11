@@ -145,6 +145,24 @@ impl ChatDb {
         .context("get_user_by_lti")
     }
 
+    pub fn get_or_create_user_from_claims(&self, user_id: &str, username: Option<&str>, role: UserRole) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM users WHERE id = ?1",
+            params![user_id],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            conn.execute(
+                "INSERT INTO users (id, username, display_name, password_hash, role, approval_status, lti_subject, lti_issuer)
+                 VALUES (?1, ?2, ?2, NULL, ?3, 'approved', NULL, NULL)",
+                params![user_id, username.unwrap_or(user_id), role.as_str()],
+            )?;
+            tracing::info!("Created synthetic user for {} (role: {})", user_id, role.as_str());
+        }
+        Ok(())
+    }
+
     pub fn get_user(&self, id: &str) -> Result<Option<User>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
