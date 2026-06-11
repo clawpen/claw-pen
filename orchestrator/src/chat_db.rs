@@ -21,11 +21,13 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 use std::sync::Mutex;
 
+pub use crate::roadmap::{Roadmap, RoadmapTopic, RoadmapLesson, StudentProgress, ProgressStatus, UserMetrics};
+
 /// Single-process Mutex wrapper. SQLite handles its own internal locking; the
 /// Mutex prevents Rust borrow conflicts only. For multi-thread workloads this
 /// is fine — SQLite's WAL mode lets readers proceed without blocking.
 pub struct ChatDb {
-    conn: Mutex<Connection>,
+    pub(crate) conn: Mutex<Connection>,
 }
 
 impl ChatDb {
@@ -82,6 +84,24 @@ impl ChatDb {
             tracing::info!("Migrated schema v2: added users.approval_status");
         }
 
+        // Migration: add color to conversations if not exists (schema v7)
+        let has_color: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('conversations') WHERE name = 'color'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_color == 0 {
+            conn.execute(
+                "ALTER TABLE conversations ADD COLUMN color TEXT DEFAULT '#2a7f7f'",
+                [],
+            )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO schema_version (version) VALUES (7)",
+                [],
+            )?;
+            tracing::info!("Migrated schema v7: added conversations.color");
+        }
+
         // Migration: add title to conversations if not exists (schema v3)
         let has_title: i64 = conn.query_row(
             "SELECT COUNT(*) FROM pragma_table_info('conversations') WHERE name = 'title'",
@@ -98,6 +118,71 @@ impl ChatDb {
                 [],
             )?;
             tracing::info!("Migrated schema v3: added conversations.title");
+        }
+
+        // Migration: add system_prompts table (schema v4)
+        let has_system_prompts: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='system_prompts'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_system_prompts == 0 {
+            conn.execute_batch(SCHEMA_SYSTEM_PROMPTS)?;
+            conn.execute(
+                "INSERT OR REPLACE INTO schema_version (version) VALUES (4)",
+                [],
+            )?;
+            tracing::info!("Migrated schema v4: added system_prompts table");
+        }
+
+        // Migration: add system_prompt column to conversations (schema v6)
+        let has_conv_prompt: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('conversations') WHERE name = 'system_prompt'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_conv_prompt == 0 {
+            conn.execute(
+                "ALTER TABLE conversations ADD COLUMN system_prompt TEXT",
+                [],
+            )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO schema_version (version) VALUES (6)",
+                [],
+            )?;
+            tracing::info!("Migrated schema v6: added conversations.system_prompt");
+        }
+        let has_user_prompt: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'system_prompt'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_user_prompt == 0 {
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN system_prompt TEXT",
+                [],
+            )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO schema_version (version) VALUES (5)",
+                [],
+            )?;
+            tracing::info!("Migrated schema v5: added users.system_prompt");
+        }
+
+        // Migration: add roadmaps schema (schema v6)
+        let has_roadmaps: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='roadmaps'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_roadmaps == 0 {
+            use crate::roadmap::SCHEMA_ROADMAPS;
+            conn.execute_batch(SCHEMA_ROADMAPS)?;
+            conn.execute(
+                "INSERT OR REPLACE INTO schema_version (version) VALUES (6)",
+                [],
+            )?;
+            tracing::info!("Migrated schema v6: added roadmaps, topics, lessons, progress, metrics tables");
         }
 
         Ok(())
@@ -123,7 +208,7 @@ impl ChatDb {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             "SELECT id, username, display_name, password_hash, role, approval_status,
-                    lti_subject, lti_issuer, created_at
+                    lti_subject, lti_issuer, created_at, system_prompt
              FROM users WHERE username = ?1",
             params![username],
             row_to_user,
@@ -136,7 +221,7 @@ impl ChatDb {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             "SELECT id, username, display_name, password_hash, role, approval_status,
-                    lti_subject, lti_issuer, created_at
+                    lti_subject, lti_issuer, created_at, system_prompt
              FROM users WHERE lti_issuer = ?1 AND lti_subject = ?2",
             params![issuer, subject],
             row_to_user,
@@ -167,7 +252,7 @@ impl ChatDb {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             "SELECT id, username, display_name, password_hash, role, approval_status,
-                    lti_subject, lti_issuer, created_at
+                    lti_subject, lti_issuer, created_at, system_prompt
              FROM users WHERE id = ?1",
             params![id],
             row_to_user,
@@ -378,7 +463,7 @@ impl ChatDb {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, username, display_name, password_hash, role, approval_status,
-                    lti_subject, lti_issuer, created_at
+                    lti_subject, lti_issuer, created_at, system_prompt
              FROM users WHERE approval_status = 'pending' ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map([], row_to_user)?
@@ -390,7 +475,7 @@ impl ChatDb {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, username, display_name, password_hash, role, approval_status,
-                    lti_subject, lti_issuer, created_at
+                    lti_subject, lti_issuer, created_at, system_prompt
              FROM users ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map([], row_to_user)?
@@ -557,6 +642,7 @@ pub struct User {
     pub lti_subject: Option<String>,
     pub lti_issuer: Option<String>,
     pub created_at: String,
+    pub system_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -593,6 +679,7 @@ fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<User> {
         lti_subject: row.get(6)?,
         lti_issuer: row.get(7)?,
         created_at: row.get(8)?,
+        system_prompt: row.get(9).ok(),
     })
 }
 
@@ -620,6 +707,17 @@ fn row_to_conversation(row: &rusqlite::Row) -> rusqlite::Result<ConversationRow>
 }
 
 // ─── Schema ────────────────────────────────────────────────────────────────
+
+const SCHEMA_SYSTEM_PROMPTS: &str = r#"
+CREATE TABLE IF NOT EXISTS system_prompts (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    is_active   INTEGER NOT NULL DEFAULT 0,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+"#;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS users (
@@ -667,6 +765,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     user_id             TEXT NOT NULL,
     agent_id            TEXT NOT NULL,
     class_id            TEXT,                   -- NULL for teacher's own agent
+    title               TEXT DEFAULT 'New Chat',
+    system_prompt       TEXT,                   -- per-conversation system prompt override
     created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
     last_message_at     DATETIME,
     FOREIGN KEY(user_id)  REFERENCES users(id),
@@ -716,6 +816,8 @@ CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id
 pub struct ChatConversation {
     pub id: String,
     pub title: String,
+    pub system_prompt: Option<String>,
+    pub color: String,
     pub created_at: String,
     pub updated_at: String,
     pub message_count: i64,
@@ -729,13 +831,23 @@ pub struct ChatMessage {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SystemPrompt {
+    pub id: String,
+    pub name: String,
+    pub content: String,
+    pub is_active: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 // ─── Simple Chat API (Phase One refactor) ───────────────────────────────
 
 impl ChatDb {
     pub fn list_conversations(&self, user_id: &str) -> Result<Vec<ChatConversation>> {
     let conn = self.conn.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT id, COALESCE(title, 'New Chat'), created_at, last_message_at,
+        "SELECT id, COALESCE(title, 'New Chat'), system_prompt, COALESCE(color, '#2a7f7f'), created_at, last_message_at,
                 (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) as msg_count
          FROM conversations c
          WHERE user_id = ?1
@@ -746,9 +858,11 @@ impl ChatDb {
             Ok(ChatConversation {
                 id: row.get(0)?,
                 title: row.get(1)?,
-                created_at: row.get(2)?,
-                updated_at: row.get(3).unwrap_or_default(),
-                message_count: row.get(4)?,
+                system_prompt: row.get(2).ok(),
+                color: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5).unwrap_or_default(),
+                message_count: row.get(6)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -756,16 +870,20 @@ impl ChatDb {
 }
 
 pub fn create_conversation(&self, user_id: &str, title: &str) -> Result<ChatConversation> {
+    let colors = ["#2a7f7f", "#b85c38", "#d4a843", "#5a7a5a", "#8a6a8a"];
+    let color = colors[uuid::Uuid::new_v4().as_u128() as usize % colors.len()];
     let conn = self.conn.lock().unwrap();
     let id = uuid::Uuid::new_v4().to_string();
     conn.execute(
-        "INSERT INTO conversations (id, user_id, agent_id, title, created_at, last_message_at)
-         VALUES (?1, ?2, 'chat', ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-        params![id, user_id, title],
+        "INSERT INTO conversations (id, user_id, agent_id, title, color, created_at, last_message_at)
+         VALUES (?1, ?2, 'chat', ?3, ?4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        params![id, user_id, title, color],
     )?;
     Ok(ChatConversation {
         id,
         title: title.to_string(),
+        system_prompt: None,
+        color: color.to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
         updated_at: chrono::Utc::now().to_rfc3339(),
         message_count: 0,
@@ -775,7 +893,7 @@ pub fn create_conversation(&self, user_id: &str, title: &str) -> Result<ChatConv
 pub fn get_conversation(&self, id: &str, user_id: &str) -> Result<ChatConversation> {
     let conn = self.conn.lock().unwrap();
     let row = conn.query_row(
-        "SELECT id, COALESCE(title, 'New Chat'), created_at, last_message_at,
+        "SELECT id, COALESCE(title, 'New Chat'), system_prompt, COALESCE(color, '#2a7f7f'), created_at, last_message_at,
                 (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) as msg_count
          FROM conversations c
          WHERE id = ?1 AND user_id = ?2",
@@ -784,9 +902,11 @@ pub fn get_conversation(&self, id: &str, user_id: &str) -> Result<ChatConversati
             Ok(ChatConversation {
                 id: row.get(0)?,
                 title: row.get(1)?,
-                created_at: row.get(2)?,
-                updated_at: row.get(3).unwrap_or_default(),
-                message_count: row.get(4)?,
+                system_prompt: row.get(2).ok(),
+                color: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5).unwrap_or_default(),
+                message_count: row.get(6)?,
             })
         },
     )?;
@@ -806,6 +926,35 @@ pub fn delete_conversation(&self, id: &str, user_id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn clear_messages(&self, conversation_id: &str, user_id: &str) -> Result<()> {
+    let conn = self.conn.lock().unwrap();
+    conn.execute(
+        "DELETE FROM messages WHERE conversation_id = ?1 AND conversation_id IN (
+            SELECT id FROM conversations WHERE user_id = ?2
+        )",
+        params![conversation_id, user_id],
+    )?;
+    Ok(())
+}
+
+pub fn update_conversation_title(&self, id: &str, user_id: &str, title: &str) -> Result<()> {
+    let conn = self.conn.lock().unwrap();
+    conn.execute(
+        "UPDATE conversations SET title = ?1 WHERE id = ?2 AND user_id = ?3",
+        params![title, id, user_id],
+    )?;
+    Ok(())
+}
+
+pub fn update_conversation_color(&self, id: &str, user_id: &str, color: &str) -> Result<()> {
+    let conn = self.conn.lock().unwrap();
+    conn.execute(
+        "UPDATE conversations SET color = ?1 WHERE id = ?2 AND user_id = ?3",
+        params![color, id, user_id],
+    )?;
+    Ok(())
+}
+
 pub fn get_messages(
     &self,
     conversation_id: &str,
@@ -821,6 +970,35 @@ pub fn get_messages(
     )?;
     let rows = stmt
         .query_map(params![conversation_id, user_id], |row| {
+            Ok(ChatMessage {
+                id: row.get(0)?,
+                role: row.get(1)?,
+                content: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+pub fn get_messages_paginated(
+    &self,
+    conversation_id: &str,
+    user_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<ChatMessage>> {
+    let conn = self.conn.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT m.id, m.role, m.content, m.created_at
+         FROM messages m
+         JOIN conversations c ON c.id = m.conversation_id
+         WHERE m.conversation_id = ?1 AND c.user_id = ?2
+         ORDER BY m.created_at ASC
+         LIMIT ?3 OFFSET ?4",
+    )?;
+    let rows = stmt
+        .query_map(params![conversation_id, user_id, limit, offset], |row| {
             Ok(ChatMessage {
                 id: row.get(0)?,
                 role: row.get(1)?,
@@ -856,5 +1034,191 @@ pub fn add_message(
         content: content.to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
     })
-}
+    }
+
+    // ─── System Prompts ───────────────────────────────────────────────────────
+
+    pub fn get_active_system_prompt(&self) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT content FROM system_prompts WHERE is_active = 1 LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .context("get_active_system_prompt")
+    }
+
+    pub fn list_system_prompts(&self) -> Result<Vec<SystemPrompt>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, content, is_active, created_at, updated_at
+             FROM system_prompts
+             ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(SystemPrompt {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    content: row.get(2)?,
+                    is_active: row.get::<_, i64>(3)? != 0,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn create_system_prompt(&self, name: &str, content: &str) -> Result<SystemPrompt> {
+        let conn = self.conn.lock().unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO system_prompts (id, name, content, is_active, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            params![id, name, content],
+        )?;
+        Ok(SystemPrompt {
+            id,
+            name: name.to_string(),
+            content: content.to_string(),
+            is_active: false,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        })
+    }
+
+    pub fn update_system_prompt(&self, id: &str, name: Option<&str>, content: Option<&str>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        if let Some(name) = name {
+            conn.execute(
+                "UPDATE system_prompts SET name = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                params![name, id],
+            )?;
+        }
+        if let Some(content) = content {
+            conn.execute(
+                "UPDATE system_prompts SET content = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                params![content, id],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn set_active_system_prompt(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE system_prompts SET is_active = 0",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE system_prompts SET is_active = 1 WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_system_prompt(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM system_prompts WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    // ─── Admin: View Any User's Conversations ───────────────────────────────
+
+    pub fn admin_list_user_conversations(&self, target_user_id: &str) -> Result<Vec<ChatConversation>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, COALESCE(title, 'New Chat'), system_prompt, COALESCE(color, '#2a7f7f'), created_at, last_message_at,
+                    (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) as msg_count
+             FROM conversations c
+             WHERE user_id = ?1
+             ORDER BY COALESCE(last_message_at, created_at) DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![target_user_id], |row| {
+                Ok(ChatConversation {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    system_prompt: row.get(2).ok(),
+                    color: row.get(3)?,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5).unwrap_or_default(),
+                    message_count: row.get(6)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn admin_get_conversation_messages(&self, conversation_id: &str) -> Result<Vec<ChatMessage>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, role, content, created_at
+             FROM messages
+             WHERE conversation_id = ?1
+             ORDER BY created_at ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![conversation_id], |row| {
+                Ok(ChatMessage {
+                    id: row.get(0)?,
+                    role: row.get(1)?,
+                    content: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    // ─── Per-User System Prompt ─────────────────────────────────────────────
+
+    pub fn set_user_system_prompt(&self, user_id: &str, prompt: Option<&str>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE users SET system_prompt = ?1 WHERE id = ?2",
+            params![prompt, user_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_user_system_prompt(&self, user_id: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT system_prompt FROM users WHERE id = ?1",
+            params![user_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .context("get_user_system_prompt")
+        .map(|opt| opt.flatten())
+    }
+
+    // ─── Per-Conversation System Prompt ───────────────────────────────────
+
+    pub fn get_conversation_system_prompt(&self, conversation_id: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT system_prompt FROM conversations WHERE id = ?1",
+            params![conversation_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .context("get_conversation_system_prompt")
+        .map(|opt| opt.flatten())
+    }
+
+    pub fn set_conversation_system_prompt(&self, conversation_id: &str, prompt: Option<&str>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE conversations SET system_prompt = ?1 WHERE id = ?2",
+            params![prompt, conversation_id],
+        )?;
+        Ok(())
+    }
 }

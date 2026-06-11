@@ -765,6 +765,7 @@ pub async fn admin_pending_users(
             "role": u.role.as_str(),
             "approval_status": u.approval_status.as_str(),
             "created_at": u.created_at,
+            "system_prompt": u.system_prompt,
         })
     }).collect();
 
@@ -803,6 +804,7 @@ pub async fn admin_list_users(
             "role": u.role.as_str(),
             "approval_status": u.approval_status.as_str(),
             "created_at": u.created_at,
+            "system_prompt": u.system_prompt,
         })
     }).collect();
 
@@ -873,6 +875,225 @@ pub async fn me(
         display_name: user.display_name,
         role: user.role.as_str().to_string(),
     }))
+}
+
+/// === System Prompts API ===
+
+#[derive(Debug, Deserialize)]
+pub struct CreateSystemPromptRequest {
+    pub name: String,
+    pub content: String,
+}
+
+/// GET /api/admin/system-prompts
+pub async fn admin_list_system_prompts(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or(AuthError::InvalidToken)?;
+    let auth = state.auth.read().await;
+    let claims = auth.validate_token(token)?;
+    let caller_role = claims.role.as_deref().unwrap_or("admin");
+    if caller_role != "admin" && caller_role != "teacher" {
+        return Err(AuthError::InvalidCredentials);
+    }
+    drop(auth);
+
+    let prompts = state.chat_db.list_system_prompts()
+        .map_err(|_| AuthError::InvalidCredentials)?;
+    
+    Ok(Json(serde_json::json!({
+        "prompts": prompts,
+        "active_prompt": prompts.iter().find(|p| p.is_active).map(|p| p.content.clone()),
+    })))
+}
+
+/// POST /api/admin/system-prompts
+pub async fn admin_create_system_prompt(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<CreateSystemPromptRequest>,
+) -> Result<Json<crate::chat_db::SystemPrompt>, AuthError> {
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or(AuthError::InvalidToken)?;
+    let auth = state.auth.read().await;
+    let claims = auth.validate_token(token)?;
+    let caller_role = claims.role.as_deref().unwrap_or("admin");
+    if caller_role != "admin" && caller_role != "teacher" {
+        return Err(AuthError::InvalidCredentials);
+    }
+    drop(auth);
+
+    let prompt = state.chat_db.create_system_prompt(&req.name, &req.content)
+        .map_err(|_| AuthError::InvalidCredentials)?;
+    Ok(Json(prompt))
+}
+
+/// POST /api/admin/system-prompts/:id/activate
+pub async fn admin_activate_system_prompt(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or(AuthError::InvalidToken)?;
+    let auth = state.auth.read().await;
+    let claims = auth.validate_token(token)?;
+    let caller_role = claims.role.as_deref().unwrap_or("admin");
+    if caller_role != "admin" && caller_role != "teacher" {
+        return Err(AuthError::InvalidCredentials);
+    }
+    drop(auth);
+
+    state.chat_db.set_active_system_prompt(&id)
+        .map_err(|_| AuthError::InvalidCredentials)?;
+    Ok(Json(serde_json::json!({
+        "id": id,
+        "active": true,
+    })))
+}
+
+/// DELETE /api/admin/system-prompts/:id
+pub async fn admin_delete_system_prompt(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<StatusCode, AuthError> {
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or(AuthError::InvalidToken)?;
+    let auth = state.auth.read().await;
+    let claims = auth.validate_token(token)?;
+    let caller_role = claims.role.as_deref().unwrap_or("admin");
+    if caller_role != "admin" && caller_role != "teacher" {
+        return Err(AuthError::InvalidCredentials);
+    }
+    drop(auth);
+
+    state.chat_db.delete_system_prompt(&id)
+        .map_err(|_| AuthError::InvalidCredentials)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /api/admin/users/:id/conversations
+pub async fn admin_list_user_conversations(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or(AuthError::InvalidToken)?;
+    let auth = state.auth.read().await;
+    let claims = auth.validate_token(token)?;
+    let caller_role = claims.role.as_deref().unwrap_or("admin");
+    if caller_role != "admin" && caller_role != "teacher" {
+        return Err(AuthError::InvalidCredentials);
+    }
+    drop(auth);
+
+    let conversations = state.chat_db.admin_list_user_conversations(&user_id)
+        .map_err(|_| AuthError::InvalidCredentials)?;
+    Ok(Json(serde_json::json!({ "conversations": conversations })))
+}
+
+/// GET /api/admin/conversations/:id/messages
+pub async fn admin_get_conversation_messages(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(conv_id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or(AuthError::InvalidToken)?;
+    let auth = state.auth.read().await;
+    let claims = auth.validate_token(token)?;
+    let caller_role = claims.role.as_deref().unwrap_or("admin");
+    if caller_role != "admin" && caller_role != "teacher" {
+        return Err(AuthError::InvalidCredentials);
+    }
+    drop(auth);
+
+    let messages = state.chat_db.admin_get_conversation_messages(&conv_id)
+        .map_err(|_| AuthError::InvalidCredentials)?;
+    Ok(Json(serde_json::json!({ "messages": messages })))
+}
+
+/// POST /api/admin/users/:id/system-prompt
+#[derive(Debug, Deserialize)]
+pub struct SetUserSystemPromptRequest {
+    pub system_prompt: Option<String>,
+}
+
+pub async fn admin_set_user_system_prompt(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+    Json(req): Json<SetUserSystemPromptRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or(AuthError::InvalidToken)?;
+    let auth = state.auth.read().await;
+    let claims = auth.validate_token(token)?;
+    let caller_role = claims.role.as_deref().unwrap_or("admin");
+    if caller_role != "admin" && caller_role != "teacher" {
+        return Err(AuthError::InvalidCredentials);
+    }
+    drop(auth);
+
+    state.chat_db.set_user_system_prompt(&user_id, req.system_prompt.as_deref())
+        .map_err(|_| AuthError::InvalidCredentials)?;
+    Ok(Json(serde_json::json!({
+        "user_id": user_id,
+        "system_prompt": req.system_prompt,
+        "updated": true,
+    })))
+}
+
+/// GET /api/admin/users/:id/system-prompt
+pub async fn admin_get_user_system_prompt(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or(AuthError::InvalidToken)?;
+    let auth = state.auth.read().await;
+    let claims = auth.validate_token(token)?;
+    let caller_role = claims.role.as_deref().unwrap_or("admin");
+    if caller_role != "admin" && caller_role != "teacher" {
+        return Err(AuthError::InvalidCredentials);
+    }
+    drop(auth);
+
+    let prompt = state.chat_db.get_user_system_prompt(&user_id)
+        .map_err(|_| AuthError::InvalidCredentials)?;
+    Ok(Json(serde_json::json!({
+        "user_id": user_id,
+        "system_prompt": prompt,
+    })))
 }
 
 // === Middleware ===

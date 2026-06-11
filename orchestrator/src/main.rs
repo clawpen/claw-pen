@@ -5,12 +5,15 @@ mod api;
 mod auth;
 mod chat_db;
 mod config;
+mod roadmap;
+mod roadmap_api;
 mod teams;
 
 use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode};
 use axum::{
-    routing::{get, post, delete},
+    routing::{get, post, delete, patch},
     Router,
+    extract::Path,
 };
 use tokio::sync::RwLock;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -78,6 +81,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(api::health))
         .route("/api/me", get(auth::me))
+        .route("/auth/me", get(auth::me))
         .route("/auth/login", post(api::login))
         .route("/auth/user/login", post(auth::user_login))
         .route("/auth/register", post(api::register))
@@ -88,6 +92,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/conversations", get(api::list_conversations).post(api::create_conversation))
         .route("/api/conversations/:id", get(api::get_conversation).delete(api::delete_conversation))
         .route("/api/conversations/:id/messages", get(api::get_messages).post(api::send_message))
+        .route("/api/conversations/:id/compact", post(api::compact_conversation))
+        .route("/api/conversations/:id", patch(api::update_conversation))
+        .route("/api/conversations/:id/system-prompt", post(api::set_conversation_system_prompt))
+        .route("/api/system-prompts/templates", get(api::list_system_prompt_templates))
         .route("/api/chat/stream", post(api::chat_stream))
         .route("/api/teams", get(api::list_teams))
         .route("/api/teams/:id/roles", get(api::list_team_roles))
@@ -95,6 +103,21 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/admin/users/pending", get(auth::admin_pending_users))
         .route("/api/admin/approve-user", post(auth::admin_approve_user))
         .route("/api/admin/create-user", post(auth::admin_create_user))
+        .route("/api/admin/users/:id/conversations", get(auth::admin_list_user_conversations))
+        .route("/api/admin/users/:id/system-prompt", get(auth::admin_get_user_system_prompt).post(auth::admin_set_user_system_prompt))
+        .route("/api/admin/conversations/:id/messages", get(auth::admin_get_conversation_messages))
+        .route("/api/admin/system-prompts", get(auth::admin_list_system_prompts).post(auth::admin_create_system_prompt))
+        .route("/api/admin/system-prompts/:id/activate", post(auth::admin_activate_system_prompt))
+        .route("/api/admin/system-prompts/:id", delete(auth::admin_delete_system_prompt))
+        .route("/api/roadmaps", get(roadmap_api::list_roadmaps).post(roadmap_api::create_roadmap))
+        .route("/api/roadmaps/:id", get(roadmap_api::get_roadmap).delete(roadmap_api::delete_roadmap))
+        .route("/api/roadmaps/:id/activate", post(roadmap_api::set_active_roadmap))
+        .route("/api/roadmaps/:id/topics", post(roadmap_api::create_topic))
+        .route("/api/topics/:id/lessons", post(roadmap_api::create_lesson))
+        .route("/api/progress/:user_id", get(roadmap_api::get_student_progress))
+        .route("/api/progress/:user_id/:lesson_id", post(roadmap_api::update_lesson_progress))
+        .route("/api/metrics", get(roadmap_api::get_user_metrics))
+        .route("/api/active-roadmap", get(roadmap_api::get_active_roadmap))
         .route("/ws/chat", get(api::chat_websocket))
         .fallback_service(ServeDir::new("./static-site"))
         .layer(
