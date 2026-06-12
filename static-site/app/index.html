@@ -471,6 +471,33 @@ function previewHTML(previewId) {
     outputEl.appendChild(iframe);
 }
 
+// ─── Event Delegation for dynamic code blocks ───
+document.addEventListener('click', function(e) {
+    // Tab buttons (Code / Preview / Full screen)
+    const tabBtn = e.target.closest('[data-tab-id]');
+    if (tabBtn) {
+        const tabId = tabBtn.dataset.tabId;
+        const tabMode = tabBtn.dataset.tabMode;
+        const tabAction = tabBtn.dataset.tabAction;
+        if (tabMode) {
+            switchTab(tabId, tabMode);
+            return;
+        }
+        if (tabAction === 'fullscreen') {
+            fullScreenHTML(tabId);
+            return;
+        }
+    }
+    
+    // Python run button
+    const runBtn = e.target.closest('[data-python-run]');
+    if (runBtn) {
+        const code = decodeURIComponent(runBtn.dataset.pythonCode);
+        const outputId = runBtn.dataset.outputId;
+        runPython(code, outputId);
+    }
+});
+
 // ─── Auth ───
 if (!token) { document.getElementById('loginModal').classList.remove('hidden'); }
 else { fetchUser(); loadConversations(); }
@@ -849,23 +876,7 @@ function formatContent(text) {
     // Extract code blocks BEFORE escaping HTML
     const codeBlocks = [];
     
-    // Extract python blocks first
-    text = text.replace(/```python\n([\s\S]*?)```/g, (match, code) => {
-        const id = 'py-' + Math.random().toString(36).substr(2, 9);
-        const placeholder = `\x00CODEBLOCK_${codeBlocks.length}_\x00`;
-        codeBlocks.push({
-            type: 'python',
-            placeholder,
-            html: `<div class="code-block">
-                <button class="run-btn" onclick="window.runPython(window.decodeURIComponent('${encodeURIComponent(code)}'), '${id}')">▶ Run</button>
-                <pre><code>${escapeHtml(code)}</code></pre>
-                <div class="code-output" id="${id}"></div>
-            </div>`
-        });
-        return placeholder;
-    });
-    
-    // Extract HTML blocks
+    // Extract HTML blocks first (before generic catch-all)
     text = text.replace(/```html\n([\s\S]*?)```/g, (match, code) => {
         const previewId = 'html-preview-' + (++htmlPreviewCounter);
         htmlPreviewStore[previewId] = code;
@@ -875,9 +886,9 @@ function formatContent(text) {
             placeholder,
             html: `<div class="code-block">
                 <div class="code-tabs">
-                    <button class="tab-btn active" onclick="window.switchTab('${previewId}', 'code')">Code</button>
-                    <button class="tab-btn" onclick="window.switchTab('${previewId}', 'preview')">Preview</button>
-                    <button class="tab-btn" onclick="window.fullScreenHTML('${previewId}')" style="margin-left:auto;">⛶</button>
+                    <button class="tab-btn active" data-tab-id="${previewId}" data-tab-mode="code">Code</button>
+                    <button class="tab-btn" data-tab-id="${previewId}" data-tab-mode="preview">Preview</button>
+                    <button class="tab-btn" data-tab-id="${previewId}" data-tab-action="fullscreen" style="margin-left:auto;">⛶</button>
                 </div>
                 <div class="tab-panel" id="code-${previewId}">
                     <pre><code>${escapeHtml(code)}</code></pre>
@@ -887,6 +898,24 @@ function formatContent(text) {
         });
         return placeholder;
     });
+    
+    // Extract python blocks
+    text = text.replace(/```python\n([\s\S]*?)```/g, (match, code) => {
+        const id = 'py-' + Math.random().toString(36).substr(2, 9);
+        const placeholder = `\x00CODEBLOCK_${codeBlocks.length}_\x00`;
+        codeBlocks.push({
+            type: 'python',
+            placeholder,
+            html: `<div class="code-block">
+                <button class="run-btn" data-python-run data-python-code="${encodeURIComponent(code)}" data-output-id="${id}">▶ Run</button>
+                <pre><code>${escapeHtml(code)}</code></pre>
+                <div class="code-output" id="${id}"></div>
+            </div>`
+        });
+        return placeholder;
+    });
+    
+    // Generic code blocks (catch-all, after specific ones)
     text = text.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
         const placeholder = `\x00CODEBLOCK_${codeBlocks.length}_\x00`;
         codeBlocks.push({
