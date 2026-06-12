@@ -960,6 +960,7 @@ async function saveUserPrompt(userId, prompt) {
         loadUserPromptPreview(userId);
     } catch (e) { alert('Failed to save user prompt'); }
 }
+async function loadAdminSystemPrompts() {
     const container = document.getElementById('adminPrompts');
     try {
         const res = await fetch(`${API_BASE}/api/admin/system-prompts`, { headers: { 'Authorization': `Bearer ${token}` } });
