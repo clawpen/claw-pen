@@ -382,6 +382,7 @@ const htmlPreviewStore = {};
 let htmlPreviewCounter = 0;
 
 function previewHTML(previewId) {
+    console.log('previewHTML called', previewId, htmlPreviewStore[previewId] ? 'code found' : 'code NOT found');
     const outputEl = document.getElementById(previewId);
     const code = htmlPreviewStore[previewId];
     if (!outputEl || !code) return;
@@ -813,7 +814,7 @@ function formatContent(text) {
             type: 'python',
             placeholder,
             html: `<div class="code-block">
-                <button class="run-btn" onclick="runPython(decodeURIComponent('${encodeURIComponent(code)}'), '${id}')">▶ Run</button>
+                <button class="run-btn" onclick="window.runPython(window.decodeURIComponent('${encodeURIComponent(code)}'), '${id}')">▶ Run</button>
                 <pre><code>${escapeHtml(code)}</code></pre>
                 <div class="code-output" id="${id}"></div>
             </div>`
@@ -830,7 +831,7 @@ function formatContent(text) {
             type: 'html',
             placeholder,
             html: `<div class="code-block">
-                <button class="run-btn" onclick="previewHTML('${previewId}')" style="right: 6px;">👁 Preview</button>
+                <button class="run-btn" onclick="window.previewHTML('${previewId}')" style="right: 6px;">👁 Preview</button>
                 <pre><code>${escapeHtml(code)}</code></pre>
                 <div class="code-output" id="${previewId}" style="display:none;"></div>
             </div>`
