@@ -101,6 +101,7 @@
         .code-block .run-btn:hover { background: #1f6b6b; box-shadow: 0 3px 6px rgba(0,0,0,0.4); }
         .code-block .run-btn:disabled { background: var(--text-tertiary); cursor: not-allowed; }
         .code-output { margin-top: 4px; padding: 8px 12px; background: #f0f0f0; border: 1px solid var(--border); border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 13px; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
+        .code-output .pyodide-note { font-size: 11px; color: #999; margin-top: 6px; padding-top: 6px; border-top: 1px solid #ddd; }
         .code-output.error { color: var(--accent-rust); border-color: var(--accent-rust); background: #fff5f0; }
         .code-output img { max-width: 100%; border-radius: 4px; }
 
@@ -910,6 +911,7 @@ function formatContent(text) {
                 <button class="run-btn" data-python-run data-python-code="${encodeURIComponent(code)}" data-output-id="${id}">▶ Run</button>
                 <pre><code>${escapeHtml(code)}</code></pre>
                 <div class="code-output" id="${id}"></div>
+                <div class="pyodide-note">Available: numpy, pandas, scipy, matplotlib, scikit-learn, sympy, Pillow. No PyTorch or TensorFlow.</div>
             </div>`
         });
         return placeholder;
