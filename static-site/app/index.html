@@ -92,9 +92,8 @@
         /* Code Execution */
         .code-block { position: relative; margin: 8px 0; }
         .code-block pre { background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; overflow-x: auto; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 13px; line-height: 1.4; border: 1px solid #333; }
-        .code-block .run-btn { position: absolute; top: 6px; right: 6px; padding: 4px 10px; font-size: 12px; background: var(--accent-teal); color: white; border: none; border-radius: 4px; cursor: pointer; opacity: 0; transition: opacity 0.2s; }
-        .code-block:hover .run-btn { opacity: 1; }
-        .code-block .run-btn:hover { background: #1f6b6b; }
+        .code-block .run-btn { position: absolute; top: 6px; right: 6px; padding: 4px 10px; font-size: 12px; background: var(--accent-teal); color: white; border: none; border-radius: 4px; cursor: pointer; opacity: 1; z-index: 2; box-shadow: 0 2px 4px rgba(0,0,0,0.3); }
+        .code-block .run-btn:hover { background: #1f6b6b; box-shadow: 0 3px 6px rgba(0,0,0,0.4); }
         .code-block .run-btn:disabled { background: var(--text-tertiary); cursor: not-allowed; }
         .code-output { margin-top: 4px; padding: 8px 12px; background: #f0f0f0; border: 1px solid var(--border); border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 13px; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
         .code-output.error { color: var(--accent-rust); border-color: var(--accent-rust); background: #fff5f0; }
@@ -874,13 +873,23 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function extractStreamDelta(json) {
+    if (json.choices && json.choices[0] && json.choices[0].delta && json.choices[0].delta.content) {
+        return json.choices[0].delta.content;
+    }
+    if (json.delta && json.delta.text) {
+        return json.delta.text;
+    }
+    return '';
+}
+
 async function sendMessage() {
     if (isSending || !currentConversation) return;
     const input = document.getElementById('messageInput');
     const content = input.value.trim();
     if (!content) return;
 
-    // Handle /compact command
+    // Handle /compact command — non-streaming
     if (content.toLowerCase() === '/compact') {
         input.value = ''; input.rows = 1;
         isSending = true;
@@ -910,12 +919,78 @@ async function sendMessage() {
     showReplying();
 
     try {
-        const res = await fetch(`${API_BASE}/api/conversations/${currentConversation}/messages`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content, model: 'kimi-k2.6', provider: 'kimi' }) });
-        if (!res.ok) throw new Error('Failed');
-        const data = await res.json();
+        const response = await fetch(`${API_BASE}/api/conversations/${currentConversation}/stream`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content, model: 'kimi-k2.6', provider: 'kimi' })
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Failed: ${response.status} ${errorText}`);
+        }
+        
         hideReplying();
-        const replyContent = data.message && data.message.content ? data.message.content : (data.content || 'No response');
-        appendMessage('assistant', replyContent);
+        
+        // Create streaming assistant message
+        const assistantId = 'streaming-' + Date.now();
+        const msgDiv = appendMessage('assistant', '', assistantId);
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let fullText = '';
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            
+            // Parse SSE events
+            const events = buffer.split('\n\n');
+            buffer = events.pop() || '';
+            
+            for (const event of events) {
+                const lines = event.split('\n');
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const data = line.slice(6);
+                        if (data === '[DONE]') continue;
+                        
+                        try {
+                            const json = JSON.parse(data);
+                            const delta = extractStreamDelta(json);
+                            if (delta) {
+                                fullText += delta;
+                                // Update message with plain text during streaming
+                                const bubble = msgDiv.querySelector('.message-bubble');
+                                if (bubble) {
+                                    bubble.textContent = fullText;
+                                }
+                                // Scroll to bottom
+                                const container = document.getElementById('messagesContainer');
+                                container.scrollTop = container.scrollHeight;
+                            }
+                        } catch (e) {
+                            // Skip invalid JSON
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Apply formatting after stream is complete
+        const bubble = msgDiv.querySelector('.message-bubble');
+        if (bubble) {
+            bubble.innerHTML = formatContent(fullText);
+            if (localStorage.getItem('fontMode') === 'bionic') {
+                applyBionicToSingleMessage(msgDiv);
+            }
+        }
+        
+        // Remove the streaming ID to match normal messages
+        msgDiv.removeAttribute('id');
     } catch (e) {
         hideReplying();
         appendMessage('assistant', 'Error: Could not get response. Please check your API key configuration.');

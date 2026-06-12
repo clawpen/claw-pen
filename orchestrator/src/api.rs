@@ -692,6 +692,139 @@ pub async fn send_message(
     Ok(Json(assistant_msg))
 }
 
+// === Streaming Conversation ===
+
+pub async fn stream_conversation(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<SendMessageRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, axum::Error>>>, (StatusCode, String)> {
+    // Auth
+    let token = extract_token(&headers)?;
+    let auth = state.auth.read().await;
+    let claims = auth.validate_token(&token).map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    drop(auth);
+
+    let role = claims.role.as_deref().unwrap_or("admin");
+    let user_role = crate::chat_db::UserRole::parse(role);
+    state.chat_db.get_or_create_user_from_claims(&claims.sub, None, user_role)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Save user message
+    let _user_msg = state.chat_db.add_message(&id, &claims.sub, "user", &req.content)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Build context
+    let history = state.chat_db.get_messages(&id, &claims.sub)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let history = truncate_to_budget(history, 8000);
+
+    let mut llm_messages: Vec<serde_json::Value> = vec![];
+
+    let conv_prompt = state.chat_db.get_conversation_system_prompt(&id).ok().flatten();
+    let user_prompt = state.chat_db.get_user_system_prompt(&claims.sub).ok().flatten();
+    let global_prompt = state.chat_db.get_active_system_prompt().ok().flatten();
+    if let Some(prompt) = conv_prompt.or(user_prompt).or(global_prompt) {
+        llm_messages.push(serde_json::json!({ "role": "system", "content": prompt }));
+    }
+
+    llm_messages.extend(history.iter().map(|m| {
+        serde_json::json!({ "role": m.role, "content": m.content })
+    }));
+
+    let provider = req.provider.unwrap_or_else(|| "kimi".to_string());
+    let model = req.model.unwrap_or_else(|| "kimi-k2.6".to_string());
+
+    let keys = state.api_keys.read().await;
+    let api_key = keys.get(&provider).cloned()
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("No API key for provider: {}", provider)))?;
+    drop(keys);
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<Event, axum::Error>>();
+
+    tokio::spawn(async move {
+        let client = reqwest::Client::new();
+        let response = client.post("https://api.kimi.com/coding/v1/messages")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "model": model,
+                "messages": llm_messages,
+                "stream": true,
+                "max_tokens": 4096,
+            }))
+            .send()
+            .await;
+
+        let mut response = match response {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = tx.send(Ok(Event::default().data(format!("{{\"error\": \"{}\"}}", e))));
+                let _ = state.chat_db.add_message(&id, &claims.sub, "assistant", &format!("Error: {}", e));
+                return;
+            }
+        };
+
+        let mut full_text = String::new();
+        let mut buffer = String::new();
+
+        while let Ok(Some(chunk)) = response.chunk().await {
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            // Process complete lines
+            while let Some(pos) = buffer.find('\n') {
+                let line = buffer[..pos].trim_end_matches('\r').to_string();
+                buffer = buffer[pos + 1..].to_string();
+
+                if line.starts_with("data: ") {
+                    let data = &line[6..];
+                    if data == "[DONE]" {
+                        continue;
+                    }
+
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                        if let Some(content) = extract_stream_delta(&json) {
+                            full_text.push_str(&content);
+                        }
+                    }
+
+                    // Forward the SSE event
+                    let _ = tx.send(Ok(Event::default().data(data)));
+                }
+            }
+        }
+
+        // Save the full assistant message
+        if !full_text.is_empty() {
+            let _ = state.chat_db.add_message(&id, &claims.sub, "assistant", &full_text);
+        }
+    });
+
+    Ok(Sse::new(tokio_stream::wrappers::UnboundedReceiverStream::new(rx)))
+}
+
+fn extract_stream_delta(json: &serde_json::Value) -> Option<String> {
+    // OpenAI format: choices[0].delta.content
+    if let Some(content) = json.get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|c| c.first())
+        .and_then(|c| c.get("delta"))
+        .and_then(|d| d.get("content"))
+        .and_then(|c| c.as_str()) {
+        return Some(content.to_string());
+    }
+
+    // Anthropic format: delta.text
+    if let Some(text) = json.get("delta")
+        .and_then(|d| d.get("text"))
+        .and_then(|t| t.as_str()) {
+        return Some(text.to_string());
+    }
+
+    None
+}
+
 // === Streaming Chat ===
 
 #[derive(Deserialize)]

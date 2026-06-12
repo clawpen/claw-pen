@@ -92,6 +92,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/conversations", get(api::list_conversations).post(api::create_conversation))
         .route("/api/conversations/:id", get(api::get_conversation).delete(api::delete_conversation))
         .route("/api/conversations/:id/messages", get(api::get_messages).post(api::send_message))
+        .route("/api/conversations/:id/stream", post(api::stream_conversation))
         .route("/api/conversations/:id/compact", post(api::compact_conversation))
         .route("/api/conversations/:id", patch(api::update_conversation))
         .route("/api/conversations/:id/system-prompt", post(api::set_conversation_system_prompt))
