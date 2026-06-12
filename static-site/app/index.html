@@ -1016,19 +1016,48 @@ async function loadUserPromptPreview(userId) {
         const el = document.getElementById(`userPrompt-${userId}`);
         if (el) {
             const prompt = data.system_prompt;
-            el.textContent = prompt ? `Current: ${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}` : 'No user prompt set (using global system prompt only)';
+            el.dataset.fullPrompt = prompt || '';
+            el.innerHTML = prompt ? `Current: ${escapeHtml(prompt.slice(0, 100))}${prompt.length > 100 ? '...' : ''}` : 'No user prompt set (using global system prompt only)';
             el.style.color = prompt ? 'var(--text-secondary)' : 'var(--text-tertiary)';
+            el.style.fontStyle = prompt ? 'normal' : 'italic';
         }
     } catch (e) {
         const el = document.getElementById(`userPrompt-${userId}`);
-        if (el) el.textContent = 'Error loading prompt';
+        if (el) el.innerHTML = 'Error loading prompt';
     }
 }
 
 function editUserPrompt(userId, userName) {
-    const prompt = prompt(`Enter user prompt for ${userName}:\n\nThis will complement the system prompt. Leave blank to clear.`, '');
-    if (prompt === null) return; // Cancelled
-    saveUserPrompt(userId, prompt.trim() || null);
+    const el = document.getElementById(`userPrompt-${userId}`);
+    if (!el) return;
+    const currentPrompt = el.dataset.fullPrompt || '';
+    el.innerHTML = `
+        <div class="form-group" style="margin-top:8px;">
+            <textarea id="userPromptInput-${userId}" rows="3" placeholder="Enter user prompt for ${escapeHtml(userName)}..." 
+                style="width:100%;padding:8px 10px;border:var(--line-weight) solid var(--border);border-radius:var(--radius);font-size:14px;font-family:inherit;resize:vertical;"
+            >${escapeHtml(currentPrompt)}</textarea>
+            <div style="display:flex;gap:8px;margin-top:8px;">
+                <button class="btn-small" onclick="submitUserPrompt('${userId}')">Save</button>
+                <button class="btn-small secondary" onclick="cancelUserPromptEdit('${userId}')">Cancel</button>
+                ${currentPrompt ? `<button class="btn-small danger" onclick="clearUserPrompt('${userId}')">Clear</button>` : ''}
+            </div>
+        </div>
+    `;
+}
+
+function submitUserPrompt(userId) {
+    const input = document.getElementById(`userPromptInput-${userId}`);
+    if (!input) return;
+    saveUserPrompt(userId, input.value.trim() || null);
+}
+
+function cancelUserPromptEdit(userId) {
+    loadUserPromptPreview(userId);
+}
+
+function clearUserPrompt(userId) {
+    if (!confirm('Clear this user prompt?')) return;
+    saveUserPrompt(userId, null);
 }
 
 async function saveUserPrompt(userId, prompt) {
