@@ -579,6 +579,13 @@ async function savePrompt() {
     const prompt = document.getElementById('promptInput').value.trim();
     document.getElementById('promptModal').classList.add('hidden');
     updatePromptBadge(prompt || 'Default');
+    try {
+        await fetch(`${API_BASE}/api/conversations/${currentConversation}/system-prompt`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: prompt || null })
+        });
+    } catch (e) {}
 }
 
 // ─── Messages ───
@@ -817,10 +824,10 @@ async function loadUserChats(userId) {
         const data = await res.json();
         const container = document.getElementById('adminUserChats');
         if (!data.conversations || data.conversations.length === 0) {
-            container.innerHTML = '<p style="color:var(--text-tertiary)">No conversations found for this user.</p>';
+            container.innerHTML = '<button class="action-btn" onclick="backToAdminUsers()">← Back to Users</button><p style="color:var(--text-tertiary);margin-top:12px;">No conversations found for this user.</p>';
             return;
         }
-        container.innerHTML = '<h3 style="margin-bottom:12px;font-size:16px;">Conversations</h3>' + data.conversations.map(conv => `
+        container.innerHTML = '<button class="action-btn" onclick="backToAdminUsers()" style="margin-bottom:12px;">← Back to Users</button><h3 style="margin-bottom:12px;font-size:16px;">Conversations</h3>' + data.conversations.map(conv => `
             <div class="user-card" onclick="viewAdminConversation('${conv.id}', '${escapeHtml(conv.title || 'Untitled')}')" style="cursor:pointer;">
                 <div style="display:flex;align-items:center;gap:12px;">
                     <div style="width:36px;height:36px;border-radius:50%;background:${conv.color || '#2a7f7f'};display:flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:14px;">${(conv.title || 'C')[0]}</div>
@@ -833,6 +840,8 @@ async function loadUserChats(userId) {
         `).join('');
     } catch (e) { document.getElementById('adminUserChats').innerHTML = '<p class="error">Failed to load conversations</p>'; }
 }
+
+function backToAdminUsers() { loadAdminUserChats(); }
 
 async function viewAdminConversation(convId, title) {
     try {
@@ -871,17 +880,67 @@ function backToUserChats() {
 
 async function loadAdminSystemPrompts() {
     const container = document.getElementById('adminPrompts');
-    container.innerHTML = `
-        <h3 style="margin-bottom:16px;font-size:16px;">System Prompts</h3>
-        <p style="color:var(--text-secondary);margin-bottom:20px;font-size:13px;">
-            The current system prompt is embedded in the backend configuration. 
-            To update it, edit <code>SYSTEM_PROMPT.md</code> or the server configuration and restart.
-        </p>
-        <div style="border:var(--line-weight) solid var(--border);border-radius:var(--radius);padding:16px;background:var(--bg-secondary);font-size:13px;">
-            <strong>Current prompt preview:</strong>
-            <pre style="margin-top:8px;white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--text-secondary);font-family:monospace;">Guardian-type, chuunibyou, worrywart, hot-blooded anime second lead. First-person "I". Catchphrase: "Don't worry. Even if the world forgets, I'll remember for you."</pre>
-        </div>
-    `;
+    try {
+        const res = await fetch(`${API_BASE}/api/admin/system-prompts`, { headers: { 'Authorization': `Bearer ${token}` } });
+        const data = await res.json();
+        const prompts = data.prompts || [];
+        let html = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <h3 style="font-size:16px;">System Prompts</h3>
+                <button class="btn-small" onclick="showCreateSystemPrompt()">+ New Prompt</button>
+            </div>
+            <div id="createSystemPromptForm" class="hidden" style="border:var(--line-weight) solid var(--border);padding:16px;border-radius:var(--radius);margin-bottom:16px;background:white;">
+                <div class="form-group"><label style="font-size:13px;font-weight:600;margin-bottom:6px;display:block;">Name</label><input id="systemPromptName" placeholder="e.g. Friendly Assistant" style="width:100%;padding:8px 10px;border:var(--line-weight) solid var(--border);border-radius:var(--radius);font-size:14px;"></div>
+                <div class="form-group"><label style="font-size:13px;font-weight:600;margin-bottom:6px;display:block;">Content</label><textarea id="systemPromptContent" placeholder="Enter system prompt..." rows="4" style="width:100%;padding:8px 10px;border:var(--line-weight) solid var(--border);border-radius:var(--radius);font-size:14px;font-family:inherit;"></textarea></div>
+                <div style="display:flex;gap:8px;">
+                    <button class="btn-small" onclick="createSystemPrompt()">Create</button>
+                    <button class="btn-small secondary" onclick="document.getElementById('createSystemPromptForm').classList.add('hidden')">Cancel</button>
+                </div>
+            </div>
+        `;
+        if (prompts.length === 0) {
+            html += '<p style="color:var(--text-tertiary)">No system prompts yet. Create one to set a global personality.</p>';
+        } else {
+            html += prompts.map(p => `
+                <div class="roadmap-card" style="position:relative;">
+                    <div style="display:flex;justify-content:space-between;align-items:start;">
+                        <div>
+                            <h3>${escapeHtml(p.name)} ${p.is_active ? '<span class="badge active">Active</span>' : ''}</h3>
+                            <p style="font-size:13px;color:var(--text-secondary);margin-top:4px;white-space:pre-wrap;word-break:break-word;">${escapeHtml(p.content).slice(0, 200)}${p.content.length > 200 ? '...' : ''}</p>
+                        </div>
+                        <div style="display:flex;gap:8px;">
+                            ${!p.is_active ? `<button class="btn-small" onclick="activateSystemPrompt('${p.id}')">Activate</button>` : ''}
+                            <button class="btn-small danger" onclick="deleteSystemPrompt('${p.id}')">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+        container.innerHTML = html;
+    } catch (e) { container.innerHTML = '<p class="error">Failed to load system prompts</p>'; }
+}
+
+function showCreateSystemPrompt() { document.getElementById('createSystemPromptForm').classList.remove('hidden'); }
+
+async function createSystemPrompt() {
+    const name = document.getElementById('systemPromptName').value.trim();
+    const content = document.getElementById('systemPromptContent').value.trim();
+    if (!name || !content) return;
+    try {
+        await fetch(`${API_BASE}/api/admin/system-prompts`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, content }) });
+        document.getElementById('systemPromptName').value = '';
+        document.getElementById('systemPromptContent').value = '';
+        loadAdminSystemPrompts();
+    } catch (e) {}
+}
+
+async function activateSystemPrompt(id) {
+    try { await fetch(`${API_BASE}/api/admin/system-prompts/${id}/activate`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }); loadAdminSystemPrompts(); } catch (e) {}
+}
+
+async function deleteSystemPrompt(id) {
+    if (!confirm('Delete this system prompt?')) return;
+    try { await fetch(`${API_BASE}/api/admin/system-prompts/${id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } }); loadAdminSystemPrompts(); } catch (e) {}
 }
 
 async function loadRoadmaps() {

@@ -1028,16 +1028,37 @@ pub async fn delete_user(
 }
 
 pub async fn set_conversation_system_prompt(
-    State(_state): State<Arc<AppState>>,
-    _headers: axum::http::HeaderMap,
-    Path(_id): Path<String>,
-    Json(_req): Json<serde_json::Value>,
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    Ok(Json(serde_json::json!({"status": "not_implemented"})))
+    let token = extract_token(&headers)?;
+    let auth = state.auth.read().await;
+    let claims = auth.validate_token(&token).map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    drop(auth);
+
+    let prompt = req.get("prompt").and_then(|v| v.as_str());
+    state.chat_db.set_conversation_system_prompt(&id, prompt)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(serde_json::json!({"status": "ok"})))
 }
 
 pub async fn list_system_prompt_templates(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
-    Ok(Json(vec![]))
+    let prompts = state.chat_db.list_system_prompts()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let json_prompts = prompts.into_iter().map(|p| {
+        serde_json::json!({
+            "id": p.id,
+            "name": p.name,
+            "content": p.content,
+            "is_active": p.is_active,
+        })
+    }).collect();
+
+    Ok(Json(json_prompts))
 }
