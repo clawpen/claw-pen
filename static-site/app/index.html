@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Claw Pen — Chat</title>
     <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=OpenDyslexic&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg-primary: #f7f5f0; --bg-secondary: #efebe3; --bg-tertiary: #e8e2d8;
@@ -25,6 +26,11 @@
         .skeleton-avatar { width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0; }
         .skeleton-row { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 16px; }
         .skeleton-bubble { flex: 1; height: 60px; border-radius: 8px; }
+
+        /* Accessibility */
+        .font-dyslexic { font-family: 'OpenDyslexic', 'OpenDyslexic Alta', sans-serif; }
+        .bionic-reading b { font-weight: 700; color: inherit; }
+        .bionic-reading { font-weight: 400; }
 
         /* Sidebar */
         #sidebar { width: 300px; background: var(--bg-secondary); border-right: var(--line-weight) solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; height: 100vh; }
@@ -199,7 +205,14 @@
     <div id="main">
         <div class="chat-header" id="chatHeader">
             <h2 id="chatTitle">Select a chat</h2>
-            <span class="prompt-badge" id="promptBadge" onclick="showPromptModal()">Default</span>
+            <div style="display:flex;gap:8px;align-items:center;">
+                <span class="prompt-badge" id="promptBadge" onclick="showPromptModal()">Default</span>
+                <select id="fontToggle" onchange="setFontMode(this.value)" style="padding:4px 8px;font-size:12px;border:var(--line-weight) solid var(--border);border-radius:var(--radius);background:var(--bg-primary);cursor:pointer;outline:none;">
+                    <option value="default">Standard Font</option>
+                    <option value="dyslexic">Dyslexia Font</option>
+                    <option value="bionic">Bionic Reading</option>
+                </select>
+            </div>
         </div>
         <div class="empty-state" id="emptyState">
             <h3>Welcome to Claw Pen</h3>
@@ -330,6 +343,11 @@ async function runPython(code, outputId) {
 if (!token) { document.getElementById('loginModal').classList.remove('hidden'); }
 else { fetchUser(); loadConversations(); }
 
+// Restore font mode
+const savedFontMode = localStorage.getItem('fontMode') || 'default';
+document.getElementById('fontToggle').value = savedFontMode;
+setFontMode(savedFontMode);
+
 async function doLogin() {
     const u = document.getElementById('loginUsername').value.trim();
     const p = document.getElementById('loginPassword').value;
@@ -393,6 +411,31 @@ async function fetchUser() {
             roleBadge.className = 'role-badge ' + (data.role || 'user');
         }
     } catch (e) {}
+}
+
+function setFontMode(mode) {
+    localStorage.setItem('fontMode', mode);
+    const messagesContainer = document.getElementById('messagesContainer');
+    const inputArea = document.getElementById('inputArea');
+    const emptyState = document.getElementById('emptyState');
+    const els = [messagesContainer, inputArea, emptyState, document.getElementById('chatTitle')];
+    els.forEach(el => { if (el) { el.classList.remove('font-dyslexic', 'bionic-reading'); if (mode === 'dyslexic') el.classList.add('font-dyslexic'); if (mode === 'bionic') el.classList.add('bionic-reading'); } });
+    if (mode === 'bionic') applyBionicToMessages();
+    else removeBionicFromMessages();
+}
+
+function applyBionicToMessages() {
+    document.querySelectorAll('.message').forEach(msg => applyBionicToSingleMessage(msg));
+}
+
+function removeBionicFromMessages() {
+    document.querySelectorAll('.message span').forEach(span => {
+        if (span.querySelector('b') && !span.id) {
+            const text = span.textContent;
+            const textNode = document.createTextNode(text);
+            span.parentNode.replaceChild(textNode, span);
+        }
+    });
 }
 
 // ─── Conversations ───
@@ -541,6 +584,9 @@ async function loadConversation(id, append = false) {
         }
         if (!append) { container.scrollTop = container.scrollHeight; }
         loadConversations();
+        if (localStorage.getItem('fontMode') === 'bionic') {
+            document.querySelectorAll('.message').forEach(msg => applyBionicToSingleMessage(msg));
+        }
     } catch (e) {}
 }
 
@@ -612,7 +658,29 @@ function appendMessage(role, content, id) {
     div.innerHTML = formatMessageHTML(role, content);
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
+    if (localStorage.getItem('fontMode') === 'bionic') applyBionicToSingleMessage(div);
     return div;
+}
+
+function applyBionicToSingleMessage(msg) {
+    const textNodes = [];
+    const walker = document.createTreeWalker(msg, NodeFilter.SHOW_TEXT);
+    let node;
+    while (node = walker.nextNode()) {
+        if (node.parentElement.tagName !== 'B' && node.parentElement.tagName !== 'CODE' && node.parentElement.tagName !== 'A') {
+            textNodes.push(node);
+        }
+    }
+    textNodes.forEach(node => {
+        const text = node.textContent;
+        if (!text.trim()) return;
+        const span = document.createElement('span');
+        span.innerHTML = text.replace(/\b([a-zA-Z0-9_\-]+)\b/g, (match) => {
+            const len = Math.ceil(match.length / 2);
+            return `<b>${match.slice(0, len)}</b>${match.slice(len)}`;
+        });
+        node.parentNode.replaceChild(span, node);
+    });
 }
 
 function updateMessage(id, content) {
