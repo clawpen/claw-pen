@@ -131,7 +131,9 @@
         .admin-tab { padding: 10px 16px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-tertiary); border-bottom: 2px solid transparent; white-space: nowrap; }
         .admin-tab:hover { color: var(--text-primary); }
         .admin-tab.active { color: var(--accent-teal); border-bottom-color: var(--accent-teal); }
-        .admin-content { flex: 1; overflow-y: auto; padding: 24px; }
+        .admin-content { flex: 1; overflow-y: auto; padding: 24px; display: none; }
+        .admin-content:not(.hidden) { display: block; }
+        .admin-content:not(.hidden)#adminChatView { display: flex; }
         .user-card { border: var(--line-weight) solid var(--border); padding: 16px; margin-bottom: 12px; border-radius: var(--radius); }
         .user-card h4 { font-size: 15px; margin-bottom: 4px; }
         .user-card p { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; }
@@ -252,6 +254,7 @@
             <span class="admin-tab" id="adminTabAll" onclick="switchAdminTab('all')">All Users</span>
             <span class="admin-tab" id="adminTabGrid" onclick="switchAdminTab('grid')">Grid</span>
             <span class="admin-tab" id="adminTabChats" onclick="switchAdminTab('chats')">User Chats</span>
+            <span class="admin-tab" id="adminTabUserPrompts" onclick="switchAdminTab('userPrompts')">User Prompts</span>
             <span class="admin-tab" id="adminTabPrompts" onclick="switchAdminTab('prompts')">System Prompts</span>
             <span class="admin-tab" id="adminTabRoadmaps" onclick="switchAdminTab('roadmaps')">Roadmaps</span>
             <span class="admin-tab" id="adminTabMetrics" onclick="switchAdminTab('metrics')">Metrics</span>
@@ -260,14 +263,15 @@
         <div class="admin-content hidden" id="adminAllUsers"></div>
         <div class="admin-content hidden" id="adminGrid"></div>
         <div class="admin-content hidden" id="adminUserChats"></div>
-        <div class="admin-content hidden" id="adminChatView" style="display:flex;flex-direction:column;max-height:70vh;">
+        <div class="admin-content hidden" id="adminChatView" style="flex-direction:column;max-height:70vh;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:var(--line-weight) solid var(--border);">
-                <button class="action-btn" onclick="backToUserChats()">← Back to Users</button>
+                <button class="action-btn" onclick="backToUserChats()">← Back to Conversations</button>
                 <h3 id="adminChatViewTitle" style="font-size:16px;font-weight:600;">Conversation</h3>
                 <span id="adminChatViewMeta" style="font-size:13px;color:var(--text-tertiary);"></span>
             </div>
             <div id="adminMessagesContainer" style="border:var(--line-weight) solid var(--border);border-radius:var(--radius);padding:16px;flex:1;overflow-y:auto;background:var(--bg-primary);display:flex;flex-direction:column;gap:16px;"></div>
         </div>
+        <div class="admin-content hidden" id="adminUserPrompts"></div>
         <div class="admin-content hidden" id="adminPrompts"></div>
         <div class="admin-content hidden" id="adminRoadmaps"></div>
         <div class="admin-content hidden" id="adminMetrics"></div>
@@ -727,8 +731,8 @@ function showAdminDashboard() { document.getElementById('adminDashboardModal').c
 function closeAdminDashboard() { document.getElementById('adminDashboardModal').classList.add('hidden'); }
 function switchAdminTab(tab) {
     currentAdminTab = tab;
-    const tabMap = { pending: 'adminPending', all: 'adminAllUsers', grid: 'adminGrid', chats: 'adminUserChats', prompts: 'adminPrompts', roadmaps: 'adminRoadmaps', metrics: 'adminMetrics' };
-    const tabIds = ['pending', 'all', 'grid', 'chats', 'prompts', 'roadmaps', 'metrics'];
+    const tabMap = { pending: 'adminPending', all: 'adminAllUsers', grid: 'adminGrid', chats: 'adminUserChats', userPrompts: 'adminUserPrompts', prompts: 'adminPrompts', roadmaps: 'adminRoadmaps', metrics: 'adminMetrics' };
+    const tabIds = ['pending', 'all', 'grid', 'chats', 'userPrompts', 'prompts', 'roadmaps', 'metrics'];
     tabIds.forEach(t => {
         const btn = document.getElementById('adminTab' + t.charAt(0).toUpperCase() + t.slice(1));
         const content = document.getElementById(tabMap[t]);
@@ -741,6 +745,7 @@ function switchAdminTab(tab) {
     if (tab === 'all') loadAdminUsers();
     if (tab === 'grid') loadAdminGrid();
     if (tab === 'chats') loadAdminUserChats();
+    if (tab === 'userPrompts') loadAdminUserPrompts();
     if (tab === 'prompts') loadAdminSystemPrompts();
     if (tab === 'roadmaps') loadRoadmaps();
     if (tab === 'metrics') loadMetrics();
@@ -821,6 +826,11 @@ async function loadAdminUserChats() {
 async function loadUserChats(userId) {
     try {
         const res = await fetch(`${API_BASE}/api/admin/users/${userId}/conversations`, { headers: { 'Authorization': `Bearer ${token}` } });
+        if (!res.ok) {
+            console.error('Failed to load user chats:', res.status, await res.text());
+            document.getElementById('adminUserChats').innerHTML = '<button class="action-btn" onclick="backToAdminUsers()">← Back to Users</button><p class="error" style="margin-top:12px;">Failed to load conversations (error ' + res.status + ')</p>';
+            return;
+        }
         const data = await res.json();
         const container = document.getElementById('adminUserChats');
         if (!data.conversations || data.conversations.length === 0) {
@@ -878,7 +888,78 @@ function backToUserChats() {
     document.getElementById('adminTabChats').classList.add('active');
 }
 
-async function loadAdminSystemPrompts() {
+function backToAdminUsers() {
+    loadAdminUserChats();
+}
+
+async function loadAdminUserPrompts() {
+    const container = document.getElementById('adminUserPrompts');
+    try {
+        const res = await fetch(`${API_BASE}/api/admin/users`, { headers: { 'Authorization': `Bearer ${token}` } });
+        const data = await res.json();
+        const users = data.users || [];
+        let html = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <h3 style="font-size:16px;">User Prompts</h3>
+                <p style="color:var(--text-secondary);font-size:13px;">Set per-user prompts that complement the system prompt</p>
+            </div>
+        `;
+        if (users.length === 0) {
+            html += '<p style="color:var(--text-tertiary)">No users found</p>';
+        } else {
+            html += users.map(u => `
+                <div class="user-card" style="position:relative;">
+                    <div style="display:flex;justify-content:space-between;align-items:start;">
+                        <div>
+                            <h4>${escapeHtml(u.display_name || u.username)}</h4>
+                            <p style="font-size:13px;color:var(--text-tertiary);">@${escapeHtml(u.username)} • ${u.role}</p>
+                        </div>
+                        <button class="btn-small" onclick="editUserPrompt('${u.id}', '${escapeHtml(u.display_name || u.username)}')">Edit Prompt</button>
+                    </div>
+                    <div id="userPrompt-${u.id}" style="margin-top:8px;font-size:13px;color:var(--text-secondary);font-style:italic;">
+                        Loading...
+                    </div>
+                </div>
+            `).join('');
+        }
+        container.innerHTML = html;
+        // Load prompts for each user
+        users.forEach(u => loadUserPromptPreview(u.id));
+    } catch (e) { container.innerHTML = '<p class="error">Failed to load users</p>'; }
+}
+
+async function loadUserPromptPreview(userId) {
+    try {
+        const res = await fetch(`${API_BASE}/api/admin/users/${userId}/system-prompt`, { headers: { 'Authorization': `Bearer ${token}` } });
+        const data = await res.json();
+        const el = document.getElementById(`userPrompt-${userId}`);
+        if (el) {
+            const prompt = data.system_prompt;
+            el.textContent = prompt ? `Current: ${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}` : 'No user prompt set (using global system prompt only)';
+            el.style.color = prompt ? 'var(--text-secondary)' : 'var(--text-tertiary)';
+        }
+    } catch (e) {
+        const el = document.getElementById(`userPrompt-${userId}`);
+        if (el) el.textContent = 'Error loading prompt';
+    }
+}
+
+function editUserPrompt(userId, userName) {
+    const prompt = prompt(`Enter user prompt for ${userName}:\n\nThis will complement the system prompt. Leave blank to clear.`, '');
+    if (prompt === null) return; // Cancelled
+    saveUserPrompt(userId, prompt.trim() || null);
+}
+
+async function saveUserPrompt(userId, prompt) {
+    try {
+        await fetch(`${API_BASE}/api/admin/users/${userId}/system-prompt`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ system_prompt: prompt })
+        });
+        loadUserPromptPreview(userId);
+    } catch (e) { alert('Failed to save user prompt'); }
+}
     const container = document.getElementById('adminPrompts');
     try {
         const res = await fetch(`${API_BASE}/api/admin/system-prompts`, { headers: { 'Authorization': `Bearer ${token}` } });
