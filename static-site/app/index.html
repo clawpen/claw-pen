@@ -842,8 +842,8 @@ async function loadAdminPending() {
             <div class="user-card">
                 <h4>${escapeHtml(u.display_name || u.username)}</h4>
                 <p>@${escapeHtml(u.username)} • ${u.role}</p>
-                <button class="action-btn approve" onclick="approveUser('${u.id}')">Approve</button>
-                <button class="action-btn reject" onclick="rejectUser('${u.id}')">Reject</button>
+                <button class="action-btn approve" onclick="approveUser('${u.user_id}')">Approve</button>
+                <button class="action-btn reject" onclick="rejectUser('${u.user_id}')">Reject</button>
             </div>
         `).join('');
     } catch (e) { document.getElementById('adminPending').innerHTML = '<p class="error">Failed to load</p>'; }
@@ -858,7 +858,7 @@ async function loadAdminUsers() {
         container.innerHTML = data.users.map(u => `
             <div class="user-card">
                 <h4>${escapeHtml(u.display_name || u.username)}</h4>
-                <p>@${escapeHtml(u.username)} • ${u.role} • ${u.status}</p>
+                <p>@${escapeHtml(u.username)} • ${u.role} • ${u.approval_status}</p>
             </div>
         `).join('');
     } catch (e) { document.getElementById('adminAllUsers').innerHTML = '<p class="error">Failed to load</p>'; }
@@ -871,11 +871,11 @@ async function loadAdminGrid() {
         const container = document.getElementById('adminGrid');
         if (!data.users || data.users.length === 0) { container.innerHTML = '<p style="color:var(--text-tertiary)">No users</p>'; return; }
         container.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;">' + data.users.map(u => `
-            <div class="user-card" style="border-left:4px solid ${u.status === 'active' ? 'var(--accent-teal)' : 'var(--accent-cadmium)'};">
+            <div class="user-card" style="border-left:4px solid ${u.approval_status === 'approved' ? 'var(--accent-teal)' : 'var(--accent-cadmium)'};">
                 <h4>${escapeHtml(u.display_name || u.username)}</h4>
                 <p>@${escapeHtml(u.username)}</p>
-                <p style="font-size:12px">${u.role} • ${u.status}</p>
-                ${u.status === 'pending' ? `<button class="action-btn approve" onclick="approveUser('${u.id}')">Approve</button>` : ''}
+                <p style="font-size:12px">${u.role} • ${u.approval_status}</p>
+                ${u.approval_status === 'pending' ? `<button class="action-btn approve" onclick="approveUser('${u.user_id}')">Approve</button>` : ''}
             </div>
         `).join('') + '</div>';
     } catch (e) { document.getElementById('adminGrid').innerHTML = '<p class="error">Failed to load</p>'; }
@@ -896,7 +896,7 @@ async function loadAdminUserChats() {
         const container = document.getElementById('adminUserChats');
         if (!data.users || data.users.length === 0) { container.innerHTML = '<p style="color:var(--text-tertiary)">No users</p>'; return; }
         container.innerHTML = data.users.map(u => `
-            <div class="user-card" onclick="loadUserChats('${u.id}')" style="cursor:pointer;">
+            <div class="user-card" onclick="loadUserChats('${u.user_id}')" style="cursor:pointer;">
                 <h4>${escapeHtml(u.display_name || u.username)}</h4>
                 <p>@${escapeHtml(u.username)} • Click to view chats</p>
             </div>
@@ -995,9 +995,9 @@ async function loadAdminUserPrompts() {
                             <h4>${escapeHtml(u.display_name || u.username)}</h4>
                             <p style="font-size:13px;color:var(--text-tertiary);">@${escapeHtml(u.username)} • ${u.role}</p>
                         </div>
-                        <button class="btn-small" onclick="editUserPrompt('${u.id}', '${escapeHtml(u.display_name || u.username)}')">Edit Prompt</button>
+                        <button class="btn-small" onclick="editUserPrompt('${u.user_id}', '${escapeHtml(u.display_name || u.username)}')">Edit Prompt</button>
                     </div>
-                    <div id="userPrompt-${u.id}" style="margin-top:8px;font-size:13px;color:var(--text-secondary);font-style:italic;">
+                    <div id="userPrompt-${u.user_id}" style="margin-top:8px;font-size:13px;color:var(--text-secondary);font-style:italic;">
                         Loading...
                     </div>
                 </div>
@@ -1005,7 +1005,7 @@ async function loadAdminUserPrompts() {
         }
         container.innerHTML = html;
         // Load prompts for each user
-        users.forEach(u => loadUserPromptPreview(u.id));
+        users.forEach(u => loadUserPromptPreview(u.user_id));
     } catch (e) { container.innerHTML = '<p class="error">Failed to load users</p>'; }
 }
 
@@ -1321,7 +1321,7 @@ async function loadMetrics() {
             html += '<p style="color:var(--text-tertiary)">No activity data yet. Students need to send messages for metrics to appear.</p>';
         } else {
             html += metrics.map(m => {
-                const user = users.find(u => u.id === m.user_id) || {};
+                const user = users.find(u => u.user_id === m.user_id) || {};
                 const pct = Math.round((m.total_messages || 0) / (totalMessages || 1) * 100);
                 return `
                     <div class="metric-card" style="display:block;">
