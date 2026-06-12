@@ -1031,33 +1031,58 @@ function editUserPrompt(userId, userName) {
     const el = document.getElementById(`userPrompt-${userId}`);
     if (!el) return;
     const currentPrompt = el.dataset.fullPrompt || '';
-    el.innerHTML = `
-        <div class="form-group" style="margin-top:8px;">
-            <textarea id="userPromptInput-${userId}" rows="3" placeholder="Enter user prompt for ${escapeHtml(userName)}..." 
-                style="width:100%;padding:8px 10px;border:var(--line-weight) solid var(--border);border-radius:var(--radius);font-size:14px;font-family:inherit;resize:vertical;"
-            >${escapeHtml(currentPrompt)}</textarea>
-            <div style="display:flex;gap:8px;margin-top:8px;">
-                <button class="btn-small" onclick="submitUserPrompt('${userId}')">Save</button>
-                <button class="btn-small secondary" onclick="cancelUserPromptEdit('${userId}')">Cancel</button>
-                ${currentPrompt ? `<button class="btn-small danger" onclick="clearUserPrompt('${userId}')">Clear</button>` : ''}
+
+    // Build a modal for editing
+    let modal = document.getElementById('userPromptModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'userPromptModal';
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+            <div class="modal" style="width:500px;max-width:90vw;">
+                <h3 style="font-size:18px;margin-bottom:16px;">Edit User Prompt — <span id="userPromptModalName"></span></h3>
+                <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">This prompt complements the global system prompt for this user only.</p>
+                <div class="form-group">
+                    <textarea id="userPromptModalInput" rows="6" placeholder="Enter user prompt..." style="width:100%;padding:10px 12px;border:var(--line-weight) solid var(--border);border-radius:var(--radius);font-size:14px;font-family:inherit;resize:vertical;"></textarea>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:16px;">
+                    <button class="btn-small" onclick="submitUserPromptFromModal()">Save</button>
+                    <button class="btn-small secondary" onclick="closeUserPromptModal()">Cancel</button>
+                    <button class="btn-small danger" id="userPromptModalClearBtn" onclick="clearUserPromptFromModal()">Clear</button>
+                </div>
             </div>
-        </div>
-    `;
+        `;
+        document.body.appendChild(modal);
+    }
+
+    document.getElementById('userPromptModalName').textContent = userName;
+    document.getElementById('userPromptModalInput').value = currentPrompt;
+    document.getElementById('userPromptModalClearBtn').style.display = currentPrompt ? 'inline-block' : 'none';
+    modal.dataset.userId = userId;
+    modal.classList.remove('hidden');
 }
 
-function submitUserPrompt(userId) {
-    const input = document.getElementById(`userPromptInput-${userId}`);
-    if (!input) return;
-    saveUserPrompt(userId, input.value.trim() || null);
+function closeUserPromptModal() {
+    const modal = document.getElementById('userPromptModal');
+    if (modal) modal.classList.add('hidden');
 }
 
-function cancelUserPromptEdit(userId) {
-    loadUserPromptPreview(userId);
+function submitUserPromptFromModal() {
+    const modal = document.getElementById('userPromptModal');
+    if (!modal) return;
+    const userId = modal.dataset.userId;
+    const prompt = document.getElementById('userPromptModalInput').value.trim() || null;
+    saveUserPrompt(userId, prompt);
+    closeUserPromptModal();
 }
 
-function clearUserPrompt(userId) {
+function clearUserPromptFromModal() {
+    const modal = document.getElementById('userPromptModal');
+    if (!modal) return;
+    const userId = modal.dataset.userId;
     if (!confirm('Clear this user prompt?')) return;
     saveUserPrompt(userId, null);
+    closeUserPromptModal();
 }
 
 async function saveUserPrompt(userId, prompt) {
