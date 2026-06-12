@@ -790,10 +790,16 @@ function formatContent(text) {
     text = text.replace(/```html\n([\s\S]*?)```/g, (match, code) => {
         const previewId = 'html-preview-' + (++htmlPreviewCounter);
         htmlPreviewStore[previewId] = code;
-        return `<div class="code-block">
-            <button class="run-btn" onclick="previewHTML('${previewId}')" style="right: 6px;">👁 Preview</button>
-            <pre><code>${escapeHtml(code)}</code></pre>
-        </div>`;
+        const placeholder = `\x00CODEBLOCK_${codeBlocks.length}_\x00`;
+        codeBlocks.push({
+            type: 'html',
+            placeholder,
+            html: `<div class="code-block">
+                <button class="run-btn" onclick="previewHTML('${previewId}')" style="right: 6px;">👁 Preview</button>
+                <pre><code>${escapeHtml(code)}</code></pre>
+            </div>`
+        });
+        return placeholder;
     });
     text = text.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
         const placeholder = `\x00CODEBLOCK_${codeBlocks.length}_\x00`;
