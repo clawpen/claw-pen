@@ -91,6 +91,11 @@
 
         /* Code Execution */
         .code-block { position: relative; margin: 8px 0; }
+        .code-tabs { display: flex; gap: 4px; margin-bottom: 4px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+        .tab-btn { background: none; border: none; color: #888; cursor: pointer; font-size: 12px; padding: 4px 8px; border-radius: 4px; }
+        .tab-btn.active { background: #333; color: #fff; }
+        .tab-btn:hover { color: #fff; }
+        .tab-panel iframe { width: 100%; height: 300px; border: 1px solid var(--border); border-radius: 4px; background: white; }
         .code-block pre { background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; overflow-x: auto; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 13px; line-height: 1.4; border: 1px solid #333; }
         .code-block .run-btn { position: absolute; top: 6px; right: 6px; padding: 4px 10px; font-size: 12px; background: var(--accent-teal); color: white; border: none; border-radius: 4px; cursor: pointer; opacity: 1; z-index: 2; box-shadow: 0 2px 4px rgba(0,0,0,0.3); }
         .code-block .run-btn:hover { background: #1f6b6b; box-shadow: 0 3px 6px rgba(0,0,0,0.4); }
@@ -380,6 +385,44 @@ plt.show = show
 
 const htmlPreviewStore = {};
 let htmlPreviewCounter = 0;
+
+function switchTab(previewId, mode) {
+    const codePanel = document.getElementById('code-' + previewId);
+    const previewPanel = document.getElementById('preview-' + previewId);
+    if (!codePanel || !previewPanel) return;
+    const tabs = codePanel.parentElement.querySelectorAll('.tab-btn');
+    if (mode === 'code') {
+        codePanel.style.display = 'block';
+        previewPanel.style.display = 'none';
+        if (tabs[0]) tabs[0].classList.add('active');
+        if (tabs[1]) tabs[1].classList.remove('active');
+    } else {
+        codePanel.style.display = 'none';
+        previewPanel.style.display = 'block';
+        if (tabs[0]) tabs[0].classList.remove('active');
+        if (tabs[1]) tabs[1].classList.add('active');
+        if (!previewPanel.querySelector('iframe')) {
+            const code = htmlPreviewStore[previewId];
+            if (code) {
+                const iframe = document.createElement('iframe');
+                iframe.style.cssText = 'width:100%;height:300px;border:none;';
+                iframe.sandbox = 'allow-scripts';
+                const blob = new Blob([code], { type: 'text/html' });
+                iframe.src = URL.createObjectURL(blob);
+                previewPanel.appendChild(iframe);
+            }
+        }
+    }
+}
+
+function fullScreenHTML(previewId) {
+    const code = htmlPreviewStore[previewId];
+    if (!code) return;
+    const blob = new Blob([code], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
 
 function previewHTML(previewId) {
     console.log('previewHTML called', previewId, htmlPreviewStore[previewId] ? 'code found' : 'code NOT found');
@@ -831,9 +874,15 @@ function formatContent(text) {
             type: 'html',
             placeholder,
             html: `<div class="code-block">
-                <button class="run-btn" onclick="window.previewHTML('${previewId}')" style="right: 6px;">👁 Preview</button>
-                <pre><code>${escapeHtml(code)}</code></pre>
-                <div class="code-output" id="${previewId}" style="display:none;"></div>
+                <div class="code-tabs">
+                    <button class="tab-btn active" onclick="window.switchTab('${previewId}', 'code')">Code</button>
+                    <button class="tab-btn" onclick="window.switchTab('${previewId}', 'preview')">Preview</button>
+                    <button class="tab-btn" onclick="window.fullScreenHTML('${previewId}')" style="margin-left:auto;">⛶</button>
+                </div>
+                <div class="tab-panel" id="code-${previewId}">
+                    <pre><code>${escapeHtml(code)}</code></pre>
+                </div>
+                <div class="tab-panel" id="preview-${previewId}" style="display:none;"></div>
             </div>`
         });
         return placeholder;
