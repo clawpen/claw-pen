@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Claw Pen — Chat</title>
     <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=OpenDyslexic&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg-primary: #f7f5f0; --bg-secondary: #efebe3; --bg-tertiary: #e8e2d8;
@@ -28,7 +27,21 @@
         .skeleton-bubble { flex: 1; height: 60px; border-radius: 8px; }
 
         /* Accessibility */
-        .font-dyslexic { font-family: 'OpenDyslexic', 'OpenDyslexic Alta', sans-serif; }
+        @font-face {
+            font-family: 'OpenDyslexic';
+            src: url('/fonts/OpenDyslexic-Regular.woff2') format('woff2');
+            font-weight: 400;
+            font-style: normal;
+            font-display: swap;
+        }
+        @font-face {
+            font-family: 'OpenDyslexic';
+            src: url('/fonts/OpenDyslexic-Bold.woff2') format('woff2');
+            font-weight: 700;
+            font-style: normal;
+            font-display: swap;
+        }
+        .font-dyslexic { font-family: 'OpenDyslexic', sans-serif; }
         .bionic-reading b { font-weight: 700; color: inherit; }
         .bionic-reading { font-weight: 400; }
 
