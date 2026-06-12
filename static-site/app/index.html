@@ -338,7 +338,7 @@ async function doLogin() {
         let res;
         if (u) {
             // Multi-user login
-            res = await fetch(`${API_BASE}/auth/token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) });
+            res = await fetch(`${API_BASE}/auth/user/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) });
         } else {
             // Admin login (password only)
             res = await fetch(`${API_BASE}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p }) });

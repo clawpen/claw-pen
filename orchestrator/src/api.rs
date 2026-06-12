@@ -45,11 +45,11 @@ pub struct LoginResponse {
 pub async fn login(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LoginRequest>,
-) -> Result<Json<LoginResponse>, (StatusCode, String)> {
+) -> Result<Json<LoginResponse>, (StatusCode, Json<serde_json::Value>)> {
     let auth = state.auth.read().await;
     let token_response = auth
         .login(&req.password)
-        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+        .map_err(|e| (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": e.to_string() }))))?;
     let username = auth
         .validate_token(&token_response.access_token)
         .map(|c| c.sub.clone())
