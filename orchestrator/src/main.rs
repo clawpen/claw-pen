@@ -21,7 +21,7 @@ mod types;
 mod validation;
 mod volume_attachment;
 mod workflow;
-mod executor;
+mod executor;`nmod briefing_engine;`nmod orchestration_engine;`nmod session_manager;`nmod briefing_engine;`nmod orchestration_engine;`nmod session_manager;
 // mod code_index;  // TODO: fix dependencies
 
 use axum::http::{header, HeaderValue, Method};
@@ -693,3 +693,5 @@ async fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+
